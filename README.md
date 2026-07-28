@@ -1,5 +1,7 @@
 # 個人向けリアルタイム米国株チャートシステム
 
+**リポジトリ:** <https://github.com/makechair/us-stock-realtime-chart>
+
 保有する米国株の1分足を常時収集し、本人だけがアクセスできるWebチャートで表示するシステム。
 
 - **市場データ:** Tiingo（WebSocket + REST）／障害時の予備に Alpaca IEX
@@ -22,6 +24,8 @@
 ## クイックスタート（ローカル、認証なし・偽データ）
 
 ```bash
+git clone git@github.com:makechair/us-stock-realtime-chart.git
+cd us-stock-realtime-chart
 make install
 make dev
 # http://127.0.0.1:8000

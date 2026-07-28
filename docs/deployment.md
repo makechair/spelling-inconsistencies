@@ -1,4 +1,12 @@
-# デプロイ手順
+# デプロイ手順（手動）
+
+リポジトリ: <https://github.com/makechair/us-stock-realtime-chart>
+
+> **Terraform を使う場合はこの文書ではなく [aws-deployment.md](aws-deployment.md) を参照。**
+> インスタンス作成・ポート設定・S3・IAM は Terraform が行い、アプリの配置は
+> pull 型エージェントが行う。本文書は、IaC を使わず手で構築する場合、および
+> Terraform 適用後にインスタンス内部で何が起きているかを確認する場合の手順である。
+
 
 仕様書13章のフェーズ2に対応する。Lightsail 1GB を前提とするが、Docker が動く
 任意のLinuxで同じ手順が使える。
@@ -69,7 +77,11 @@ Route 53 でドメインを購入したまま権威DNSだけCloudflareにする�
 
 ```bash
 sudo mkdir -p /opt/usstocks && sudo chown "$USER" /opt/usstocks
-git clone <repo> /opt/usstocks && cd /opt/usstocks
+
+# /opt/usstocks/app が配置先。Terraform 経由のデプロイエージェント
+# （deploy/agent/）も同じパスを使うので、後から自動デプロイへ移行しても
+# クローンが二重にならない。
+git clone git@github.com:makechair/us-stock-realtime-chart.git /opt/usstocks/app && cd /opt/usstocks/app
 cp .env.example .env
 chmod 600 .env
 ```
@@ -127,7 +139,7 @@ sudo useradd --system --home /var/lib/usstocks --create-home usstocks
 sudo mkdir -p /etc/usstocks && sudo cp .env /etc/usstocks/usstocks.env
 sudo chown root:usstocks /etc/usstocks/usstocks.env && sudo chmod 640 /etc/usstocks/usstocks.env
 
-cd /opt/usstocks
+cd /opt/usstocks/app
 python3 -m venv .venv && .venv/bin/pip install .
 sudo chown -R usstocks:usstocks /opt/usstocks /var/lib/usstocks
 
@@ -159,7 +171,7 @@ systemd タイマーが日次で `deploy/backup/backup.sh` を実行する。Doc
 構成では、ホスト側の cron から同じスクリプトを叩く:
 
 ```cron
-10 7 * * * cd /opt/usstocks && ./deploy/backup/backup.sh >> /var/log/usstocks-backup.log 2>&1
+10 7 * * * cd /opt/usstocks/app && ./deploy/backup/backup.sh >> /var/log/usstocks-backup.log 2>&1
 ```
 
 S3バケット側にライフサイクルルールを設定する（仕様書10.4）:
@@ -180,7 +192,7 @@ Lightsail のメトリクスアラーム（CPU、バーストキャパシティ�
 
 ```bash
 # 収集が止まっていたら通知する例
-*/15 * * * * docker compose -f /opt/usstocks/deploy/docker-compose.yml exec -T api \
+*/15 * * * * docker compose -f /opt/usstocks/app/deploy/docker-compose.yml exec -T api \
   python -c "
 import json,sys,urllib.request
 h=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/livez'))
@@ -192,7 +204,7 @@ h=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/livez'))
 ## 8. 更新
 
 ```bash
-cd /opt/usstocks && git pull
+cd /opt/usstocks/app && git pull
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 

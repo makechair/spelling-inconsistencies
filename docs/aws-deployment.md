@@ -23,7 +23,7 @@ Terraform の AWS プロバイダには `aws_lightsail_instance` 等が揃って
 
 - AWS CLI プロファイル **`dev01`** が設定済みであること
 - Terraform 1.6 以上（CI は 1.15.8 を使用）
-- リポジトリ: `makechair/us-stock-realtime-chart`
+- リポジトリ: <https://github.com/makechair/us-stock-realtime-chart>（private）
 
 ```bash
 aws sts get-caller-identity --profile dev01   # 疎通確認
