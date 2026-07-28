@@ -39,6 +39,40 @@ Terraform の AWS プロバイダには `aws_lightsail_instance` 等が揃って
   > OpenTofu（`tofu`）は概ね互換だが、`use_lockfile` は Terraform 1.10 で
   > 追加された設定のため、そのままでは backend 初期化に失敗しうる。
   > 併用する場合は backend の locking 設定を読み替えること。
+
+  Homebrew が使えない場合（Xcode Command Line Tools の更新待ちなど）は、
+  公式バイナリを直接置けばよい。ビルドツールは不要である。
+
+  ```bash
+  VER=1.15.8
+  A=$([ "$(uname -m)" = "arm64" ] && echo arm64 || echo amd64)
+  curl -fLO "https://releases.hashicorp.com/terraform/${VER}/terraform_${VER}_darwin_${A}.zip"
+  unzip -o "terraform_${VER}_darwin_${A}.zip"
+  # ダウンロードした実行ファイルは Gatekeeper の検疫属性が付くので外す
+  xattr -d com.apple.quarantine terraform 2>/dev/null || true
+  sudo mv terraform /usr/local/bin/
+  terraform version
+  ```
+
+### ローカルに入れずに済ませる方法
+
+Terraform をローカルへ入れるのは**必須ではない**。ただし**初回の apply だけは
+CI では実行できない**。CI は OIDC ロールを引き受けて認証するが、そのロール自体
+がこのスタックで作られるためである（鶏と卵）。したがって「AWS 認証情報を持つ
+どこか」で1度だけ動かす必要がある。それがローカルである必要はない。
+
+| 方法 | 向き不向き |
+|---|---|
+| ローカルに導入 | 差分を随時 `plan` で確認したいなら最も快適 |
+| **AWS CloudShell** | ブラウザだけで完結。既に認証済みで、Mac 側に何も入れなくてよい |
+| Docker | `docker run --rm -v "$PWD:/w" -w /w -v ~/.aws:/root/.aws hashicorp/terraform:1.15 plan` |
+
+**初回 apply さえ終われば、以降は `main` への push で GitHub Actions が
+`terraform apply` を実行する**ので、ローカルの Terraform は任意になる。
+
+CloudShell を使う場合は、リポジトリが private なのでクローンに認証が必要になる。
+`gh auth login` でトークンを作るか、`infra/terraform` 配下のファイルだけを
+コピーしてもよい（`terraform.tfvars` と `backend.hcl` はそこで作る）。
 - リポジトリ: <https://github.com/makechair/us-stock-realtime-chart>（private）
 
 ```bash
