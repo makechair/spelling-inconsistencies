@@ -22,7 +22,10 @@ Terraform の AWS プロバイダには `aws_lightsail_instance` 等が揃って
 ## 1. 前提
 
 - AWS CLI が設定済みであること（プロファイル名は既定で `default`）
-- Terraform 1.6 以上（CI は 1.15.8 を使用）
+- Terraform **1.10 以上**（`use_lockfile` に必要。CI は 1.15.8 を使用）
+  ```bash
+  terraform version   # v1.10 未満なら brew upgrade terraform
+  ```
 - リポジトリ: <https://github.com/makechair/us-stock-realtime-chart>（private）
 
 ```bash

@@ -6,7 +6,10 @@
 # the whole footprint stays in one tool and one state file.
 
 terraform {
-  required_version = ">= 1.6"
+  # 1.10 is the floor because backend.hcl uses use_lockfile (S3-native state
+  # locking). On an older Terraform that setting is silently unknown and the
+  # failure surfaces as a confusing backend error instead of a version one.
+  required_version = ">= 1.10"
 
   required_providers {
     aws = {
