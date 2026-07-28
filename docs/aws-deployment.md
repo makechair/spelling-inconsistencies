@@ -22,6 +22,22 @@ Terraform の AWS プロバイダには `aws_lightsail_instance` 等が揃って
 ## 1. 前提
 
 - AWS CLI が設定済みであること（プロファイル名は既定で `default`）
+- **実行する IAM ユーザーに Lightsail / Budgets / IAM の権限があること**
+
+  権限が足りないと apply が途中で止まる。18/21 まで作成されてから
+  `lightsail:CreateInstances` で失敗する、という形になる。必要な権限は
+  `infra/iam/terraform-operator-policy.json` にまとめてあるので、初回の
+  apply 前に自分のユーザーへ付与する。
+
+  ```bash
+  ME=$(aws sts get-caller-identity --query Arn --output text | sed 's|.*/||')
+  aws iam put-user-policy \
+    --user-name "$ME" \
+    --policy-name usstocks-terraform-operator \
+    --policy-document file://infra/iam/terraform-operator-policy.json
+  ```
+
+  詳細は [infra/iam/README.md](../infra/iam/README.md) を参照。
 - Terraform **1.10 以上**（`use_lockfile` に必要。CI は 1.15.8 を使用）
 
   macOS で未導入なら HashiCorp 公式 tap から入れる。Homebrew の
