@@ -109,6 +109,8 @@ docker compose -f deploy/docker-compose.yml up -d
 
 Lightsail のファイアウォールは **SSHのみ許可**でよい。Cloudflare Tunnel は外向き接続だけを使うため、80/443 を開ける必要がない。Terraform 側でも SSH 以外は明示的に閉じている。
 
+Cloudflare Tunnel / Access の設定は [docs/cloudflare-setup.md](docs/cloudflare-setup.md)。本システムはサブドメインしか使わないため、既に別用途で使っているドメインに相乗りできる（権威DNSの移行を伴うので、既存サイトを落とさない手順を同文書にまとめている）。
+
 ## 運用
 
 [docs/operations.md](docs/operations.md) に、日次バックアップ、リストア検証、フェーズ1の実測チェックリスト、監視項目をまとめている。

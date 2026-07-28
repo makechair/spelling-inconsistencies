@@ -46,6 +46,10 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 ## 2. Cloudflare Tunnel と Access
 
+> **既に別用途で使っているドメインに相乗りする場合は
+> [cloudflare-setup.md](cloudflare-setup.md) を参照。**
+> 権威DNSの移行を伴うため、既存サイトを落とさない手順が必要になる。
+
 ### 2.1 DNSの委任
 
 ドメインをCloudflareに追加し、レジストラ側のネームサーバーをCloudflareへ向ける。

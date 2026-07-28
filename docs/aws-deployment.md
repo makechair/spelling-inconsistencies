@@ -17,7 +17,7 @@ Terraform の AWS プロバイダには `aws_lightsail_instance` 等が揃って
 | IAM（バックアップ用ユーザー、CI用ロール） | Terraform | |
 | SNS、CloudWatch アラーム、Budgets | Terraform | |
 | アプリケーションコードの配置 | Pull型エージェント | 後述。Terraform の管轄外 |
-| Cloudflare Tunnel / Access | 手動（Cloudflare側） | AWS 外 |
+| Cloudflare Tunnel / Access | 手動（Cloudflare側） | AWS 外。[cloudflare-setup.md](cloudflare-setup.md) |
 
 ## 1. 前提
 
