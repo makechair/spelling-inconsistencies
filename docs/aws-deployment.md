@@ -21,12 +21,12 @@ Terraform の AWS プロバイダには `aws_lightsail_instance` 等が揃って
 
 ## 1. 前提
 
-- AWS CLI プロファイル **`dev01`** が設定済みであること
+- AWS CLI が設定済みであること（プロファイル名は既定で `default`）
 - Terraform 1.6 以上（CI は 1.15.8 を使用）
 - リポジトリ: <https://github.com/makechair/us-stock-realtime-chart>（private）
 
 ```bash
-aws sts get-caller-identity --profile dev01   # 疎通確認
+aws sts get-caller-identity   # 疎通確認。Arn に自分のIAMユーザー名が出る
 ```
 
 ## 2. 初回のみ: state 用バケットの作成
@@ -34,36 +34,58 @@ aws sts get-caller-identity --profile dev01   # 疎通確認
 Terraform は自分の state を置くバケットを自分では作れないので、1度だけ手で作る。
 
 ```bash
-scripts/bootstrap-tf-state.sh dev01 ap-northeast-1
+scripts/bootstrap-tf-state.sh default ap-northeast-1
 ```
 
 バージョニング・暗号化・パブリックアクセス遮断・古いバージョンの90日削除まで設定される。state はバックアップと違い**上書き更新**されるため、バージョニングは必須である（壊れた書き込みからの復旧経路がこれしかない）。
 
-## 3. 初回の apply（ローカル、profile=dev01）
+## 3. 初回の apply（ローカル）
 
 ```bash
 cd infra/terraform
 cp backend.hcl.example backend.hcl
-cp dev01.tfvars.example dev01.tfvars
+cp terraform.tfvars.example terraform.tfvars
 ```
 
-`dev01.tfvars` を編集する。最低限:
+`terraform.tfvars` を編集する。最低限:
 
 ```hcl
-alert_email       = "you@example.com"
-tf_state_bucket   = "usstocks-tfstate-dev01-<アカウントID>"
-ssh_allowed_cidrs = ["<自宅のグローバルIP>/32"]
+aws_profile     = "default"          # ~/.aws/config のプロファイル名
+alert_email     = "you@example.com"
+tf_state_bucket = "usstocks-tfstate-dev01-<アカウントID>"
 ```
 
-> `ssh_allowed_cidrs` に既定値は用意していない。未設定なら plan が失敗する。`0.0.0.0/0` を入れると SSH がインターネットに開放され、閉域設計（仕様書4.5）が崩れる。
+`terraform.tfvars` という名前は Terraform が自動で読むので、`-var-file` は不要である。`backend.hcl` ともども gitignore 済み。
+
+### SSH をどう通すか（グローバルIPは不要）
+
+インスタンスを管理するには port 22 へ到達する必要があるが、**そこを 0.0.0.0/0 に開けてはいけない**。開けた瞬間から総当たりログイン試行が始まる。かといって接続元を絞るには「自分の側のアドレス」が分かっていなければならず、家庭回線では変動する。
+
+既定では**この問題を回避する**設定にしてある。
+
+```hcl
+allow_lightsail_browser_ssh = true   # 既定
+ssh_allowed_cidrs           = []     # 自分のIPは指定しない
+```
+
+`allow_lightsail_browser_ssh` は、Lightsail コンソールの「SSH を使用して接続」ボタン（ブラウザ内ターミナル）だけを通す設定である。AWS が用意した `lightsail-connect` という CIDR エイリアスを許可するもので、**自分側のアドレスは一切関与しない**。回線のIPが変わっても何もしなくてよく、port 22 がインターネットに開くこともない。
+
+代償は、管理に AWS コンソールへのサインインが必要になることである。手元のターミナルから `ssh` したい場合は、次のいずれかを併用する。
+
+| 方法 | 向き不向き |
+|---|---|
+| ブラウザSSHのみ（既定） | 固定IPが無い場合の第一選択。追加作業ゼロ |
+| `scripts/allow-my-ip.sh --apply` | 現在のグローバルIPを検出して `/32` で許可する。**IPが変わるたび再実行**が必要 |
+| Cloudflare Tunnel 経由のSSH | 最終形。port 22 を完全に閉じられる。cloudflared 設定後に移行する |
+| `ssh_allowed_cidrs = ["0.0.0.0/0"]` | **やらないこと。**総当たりの標的になる |
+
+`ssh_allowed_cidrs = []` は「誰も通さない」の意味だが、そのまま Lightsail へ渡すと **API 側で 0.0.0.0/0 と解釈され全開放になる**。これを避けるため、内部では到達不能な `127.0.0.1/32` に読み替えている（`lightsail.tf` の `local.ssh_cidrs`）。
 
 ```bash
 terraform init -backend-config=backend.hcl
-terraform plan  -var-file=dev01.tfvars
-terraform apply -var-file=dev01.tfvars
+terraform plan
+terraform apply
 ```
-
-`dev01.tfvars` と `backend.hcl` は gitignore 済み。自宅IPをリポジトリに入れないための措置である。
 
 ### apply 後に出る output
 
@@ -85,8 +107,7 @@ terraform output
 
 ```bash
 aws iam create-access-key \
-  --user-name "$(terraform output -raw backup_uploader_user_name)" \
-  --profile dev01
+  --user-name "$(terraform output -raw backup_uploader_user_name)"
 ```
 
 出力された鍵をインスタンスの `/etc/usstocks/usstocks.env` に書く。権限は `daily/` への `s3:PutObject` のみで、読み取りも削除もできない。鍵が漏れても蓄積した履歴は読み出せない。
@@ -94,9 +115,9 @@ aws iam create-access-key \
 ローテーション（四半期ごと、仕様書4.5）:
 
 ```bash
-aws iam create-access-key --user-name <user> --profile dev01   # 新しい鍵を作る
+aws iam create-access-key --user-name <user>   # 新しい鍵を作る
 # インスタンスの env を更新し、バックアップを1回走らせて成功を確認してから
-aws iam delete-access-key --user-name <user> --access-key-id <古い鍵> --profile dev01
+aws iam delete-access-key --user-name <user> --access-key-id <古い鍵>
 ```
 
 ## 5. インスタンスの初期設定
@@ -106,6 +127,8 @@ aws iam delete-access-key --user-name <user> --access-key-id <古い鍵> --profi
 SSH で入って以下を行う。
 
 ```bash
+# 既定の構成では Lightsail コンソールの「SSH を使用して接続」から入る。
+# ターミナルから入りたい場合は先に scripts/allow-my-ip.sh --apply を実行する。
 ssh ubuntu@$(terraform output -raw instance_public_ip)
 
 # 1. 実際の値を書く
@@ -187,15 +210,18 @@ GitHub Actions のランナーは**送信元IPが固定されない**。SSH で�
 cd infra/terraform
 
 # 現状との差分確認
-terraform plan -var-file=dev01.tfvars
+terraform plan
 
 # インスタンスのプランを 2GB へ変更（仕様書12「1GBメモリ不足」への対応）
 #   注意: bundle_id の変更は Lightsail では再作成になる。事前にバックアップを
 #   取得し、リストア手順（docs/operations.md）を確認すること
-terraform plan -var-file=dev01.tfvars -var='lightsail_bundle_id=medium_3_0'
+terraform plan -var='lightsail_bundle_id=medium_3_0'
 
-# SSH 許可元の変更（引っ越し・回線変更時）
-terraform apply -var-file=dev01.tfvars -var='ssh_allowed_cidrs=["198.51.100.5/32"]'
+# 現在のグローバルIPからのSSHを一時的に許可する（IP変動のたびに再実行）
+../../scripts/allow-my-ip.sh --apply
+
+# ターミナルSSHをやめ、ブラウザSSHだけに戻す
+terraform apply -var='ssh_allowed_cidrs=[]'
 ```
 
 ### 保護してあるリソース
@@ -215,10 +241,11 @@ terraform apply -var-file=dev01.tfvars -var='ssh_allowed_cidrs=["198.51.100.5/32
 - `terraform init` — AWS プロバイダ 6.56.0 を取得
 - `terraform validate` — **実プロバイダのスキーマに対して検証済み**（リソース名・属性名・型の誤りは検出される）
 
-`terraform plan` はアカウントへの API 呼び出しを伴うため未実施である。したがって、実際に apply する前に必ず `terraform plan` の出力を目視すること。特に次の2点は plan でしか判明しない。
+`terraform plan` はアカウントへの API 呼び出しを伴うため未実施である。したがって、実際に apply する前に必ず `terraform plan` の出力を目視すること。特に次の3点は plan / apply でしか判明しない。
 
 - `lightsail_availability_zone` が `aws_region` 内に実在するか
 - `create_github_oidc_provider = true` が既存プロバイダと衝突しないか
+- `cidr_list_aliases = ["lightsail-connect"]` を AWS が受理するか（エイリアス名は apply 時に検証される）
 
 ## 10. コストへの影響
 

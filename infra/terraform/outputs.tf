@@ -18,6 +18,15 @@ output "open_ports" {
   value       = [for p in aws_lightsail_instance_public_ports.app.port_info : "${p.protocol}/${p.from_port}-${p.to_port} from ${join(",", p.cidrs)}"]
 }
 
+output "ssh_access_summary" {
+  description = "How the instance can be administered, and from where."
+  value = {
+    from_named_addresses = length(var.ssh_allowed_cidrs) > 0 ? var.ssh_allowed_cidrs : []
+    from_aws_console     = var.allow_lightsail_browser_ssh
+    open_to_internet     = contains(var.ssh_allowed_cidrs, "0.0.0.0/0")
+  }
+}
+
 output "backup_bucket_name" {
   description = "Backup bucket."
   value       = aws_s3_bucket.backup.id

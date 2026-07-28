@@ -8,6 +8,13 @@
 locals {
   instance_name = "${var.project_name}-${var.environment}"
 
+  # An empty ssh_allowed_cidrs means "closed to the internet". It cannot be
+  # passed through as an empty set: the Lightsail API reads absent CIDRs as
+  # 0.0.0.0/0, so the safest-looking value would open the port to everyone.
+  # A loopback CIDR satisfies the schema's min_items=1 while matching no
+  # packet that can arrive from outside.
+  ssh_cidrs = length(var.ssh_allowed_cidrs) > 0 ? var.ssh_allowed_cidrs : ["127.0.0.1/32"]
+
   # Bootstraps the host only. Application deployment is pull-based and lives in
   # deploy/ -- baking it into user_data would mean rebuilding the instance to
   # ship a code change.
@@ -63,7 +70,11 @@ resource "aws_lightsail_instance_public_ports" "app" {
     protocol  = "tcp"
     from_port = 22
     to_port   = 22
-    cidrs     = var.ssh_allowed_cidrs
+    cidrs     = local.ssh_cidrs
+
+    # Lets the Lightsail console's browser SSH through without naming an
+    # address of your own. AWS validates this alias at apply time.
+    cidr_list_aliases = var.allow_lightsail_browser_ssh ? ["lightsail-connect"] : []
   }
 }
 

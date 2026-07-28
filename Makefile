@@ -40,9 +40,10 @@ clean:
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ data/*.db*
 
 # --------------------------------------------------------------- infrastructure
-# All of these use the dev01 profile via infra/terraform/dev01.tfvars.
+# Settings come from infra/terraform/terraform.tfvars, which Terraform loads
+# automatically. The AWS profile is set there (aws_profile).
 TF := terraform -chdir=infra/terraform
-TFVARS := -var-file=dev01.tfvars
+TFVARS :=
 
 tf-init: ## Initialise Terraform against the remote state backend
 	$(TF) init -backend-config=backend.hcl

@@ -1,0 +1,42 @@
+# Copy to terraform.tfvars and fill in. Terraform loads that name
+# automatically, so no -var-file flag is needed.
+# terraform.tfvars is gitignored.
+
+aws_region = "ap-northeast-1"
+
+# The AWS CLI *profile* in ~/.aws/config -- not the IAM user name.
+# "default" is correct unless a profile was explicitly named otherwise.
+aws_profile = "default"
+
+# Label used in resource names. Independent of the profile and the IAM user.
+environment = "dev01"
+
+alert_email     = "you@example.com"
+tf_state_bucket = "usstocks-tfstate-dev01-<アカウントID>"
+
+# --------------------------------------------------------------- SSH access
+# Administer through the Lightsail console's browser SSH. Requires no address
+# of your own, so a dynamic home line needs no maintenance. Port 22 is still
+# not open to the internet.
+allow_lightsail_browser_ssh = true
+
+# Additional addresses admitted to port 22, for terminal SSH. Leave empty on a
+# dynamic connection; scripts/allow-my-ip.sh sets it to your current address
+# when you do need it.
+ssh_allowed_cidrs = []
+
+# Existing Lightsail key pair, or null for the region default.
+ssh_key_pair_name = null
+
+lightsail_bundle_id         = "small_3_0"
+lightsail_availability_zone = "ap-northeast-1a"
+
+github_owner = "makechair"
+github_repo  = "us-stock-realtime-chart"
+
+# Set false if token.actions.githubusercontent.com already exists in the
+# account; an account holds only one provider per URL.
+create_github_oidc_provider = true
+
+monthly_budget_usd    = 12
+backup_retention_days = 30

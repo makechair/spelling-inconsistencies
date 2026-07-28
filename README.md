@@ -88,11 +88,14 @@ Tiingo WebSocket / REST
 AWS 側は **Terraform** で管理する（[docs/aws-deployment.md](docs/aws-deployment.md)）。SAM/CloudFormation は Lightsail リソースを持たないため使えない。
 
 ```bash
-scripts/bootstrap-tf-state.sh dev01          # 初回のみ: state バケット作成
+scripts/bootstrap-tf-state.sh                # 初回のみ: state バケット作成
 cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars # 編集する
 terraform init -backend-config=backend.hcl
-terraform apply -var-file=dev01.tfvars       # profile=dev01
+terraform apply
 ```
+
+SSH は既定で Lightsail コンソールのブラウザSSHのみを許可する。**自宅のグローバルIPは不要**で、回線のIPが変わっても設定変更はいらない。ターミナルSSHが必要なときは `scripts/allow-my-ip.sh --apply` を使う。
 
 Terraform の管理対象は Lightsail（インスタンス、公開ポート、静的IP、自動スナップショット）、S3バックアップ、IAM、SNS、CloudWatch、Budgets。
 

@@ -4,13 +4,15 @@
 #
 # This is the one thing Terraform cannot do for itself: the backend must exist
 # before `terraform init` can read or write state. Run it once per account,
-# with the dev01 profile, then never again.
+# then never again.
 #
 # Usage:
 #   scripts/bootstrap-tf-state.sh [profile] [region]
+#
+# The profile is the name in ~/.aws/config, not the IAM user name.
 set -Eeuo pipefail
 
-PROFILE="${1:-dev01}"
+PROFILE="${1:-default}"
 REGION="${2:-ap-northeast-1}"
 PROJECT="${PROJECT:-usstocks}"
 ENVIRONMENT="${ENVIRONMENT:-dev01}"
@@ -71,10 +73,10 @@ Done. Next:
 
   cd infra/terraform
   cp backend.hcl.example backend.hcl
-  cp dev01.tfvars.example dev01.tfvars
-  # set bucket=${BUCKET} in backend.hcl, and tf_state_bucket in dev01.tfvars
+  cp terraform.tfvars.example terraform.tfvars
+  # set bucket=${BUCKET} in backend.hcl, and tf_state_bucket in terraform.tfvars
 
   terraform init -backend-config=backend.hcl
-  terraform plan  -var-file=dev01.tfvars
-  terraform apply -var-file=dev01.tfvars
+  terraform plan
+  terraform apply
 EOF

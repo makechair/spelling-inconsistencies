@@ -6,12 +6,15 @@ variable "aws_region" {
 
 variable "aws_profile" {
   description = <<-EOT
-    Local AWS CLI profile. Defaults to dev01.
-    CI passes null: a GitHub Actions runner authenticates through the OIDC
-    role and has no profile to read.
+    Local AWS CLI profile name, as it appears in ~/.aws/config.
+    Note this is the *profile*, not the IAM user: an IAM user called dev01 is
+    normally reached through the "default" profile unless one was named after
+    it explicitly.
+    CI passes an empty string: a GitHub Actions runner authenticates through
+    the OIDC role and has no profile to read.
   EOT
   type        = string
-  default     = "dev01"
+  default     = "default"
 }
 
 variable "project_name" {
@@ -26,7 +29,12 @@ variable "project_name" {
 }
 
 variable "environment" {
-  description = "Environment name, matching the AWS profile in use."
+  description = <<-EOT
+    Label appended to resource names. Purely a naming choice -- it does not
+    have to match the AWS profile or the IAM user.
+    Changing it after the first apply renames resources, which for the backup
+    bucket means creating a new empty one, so pick it once and leave it.
+  EOT
   type        = string
   default     = "dev01"
 }
@@ -74,21 +82,46 @@ variable "ssh_allowed_cidrs" {
     reached only through the Cloudflare tunnel, which dials outbound, so ports
     80 and 443 are never opened (spec 3.5, 4.5).
 
-    There is no default, so the value has to be a conscious decision. Set it
-    to your own address ("203.0.113.10/32"); "0.0.0.0/0" opens SSH to the
-    internet and contradicts the closed-ingress design.
+    There is no default, so the value has to be a conscious decision.
+
+      ["203.0.113.10/32"]  a specific address. On a dynamic home line this
+                           breaks whenever the ISP reassigns; refresh it with
+                           scripts/allow-my-ip.sh.
+      []                   closed to the internet entirely. Use once SSH is
+                           reachable through the Cloudflare tunnel, since
+                           locking yourself out otherwise means rebuilding.
+      ["0.0.0.0/0"]        opens SSH to the world. Contradicts the
+                           closed-ingress design (spec 4.5).
+
+    An empty list is NOT passed through to Lightsail as "no sources": the API
+    treats absent CIDRs as 0.0.0.0/0, which is the opposite of the intent. It
+    is translated to an unroutable sentinel instead -- see lightsail.tf.
   EOT
   type        = list(string)
-
-  validation {
-    condition     = length(var.ssh_allowed_cidrs) > 0
-    error_message = "ssh_allowed_cidrs must list at least one CIDR, e.g. [\"203.0.113.10/32\"]."
-  }
 
   validation {
     condition     = alltrue([for c in var.ssh_allowed_cidrs : can(cidrnetmask(c))])
     error_message = "Every entry must be a valid IPv4 CIDR, e.g. \"203.0.113.10/32\"."
   }
+}
+
+variable "allow_lightsail_browser_ssh" {
+  description = <<-EOT
+    Allow AWS's own browser-based SSH client (the "Connect using SSH" button in
+    the Lightsail console) to reach port 22, via the "lightsail-connect" CIDR
+    alias.
+
+    This is what makes ssh_allowed_cidrs optional. Administering the instance
+    normally requires knowing the address you connect FROM, so the firewall can
+    admit it -- which is a problem on a home line with a dynamic address. The
+    alias admits AWS's console service instead, so there is no address of yours
+    to track, and port 22 still is not open to the internet.
+
+    The trade-off is that access then depends on being signed in to the AWS
+    console. Keep an IP entry as well if you want a terminal-based fallback.
+  EOT
+  type        = bool
+  default     = true
 }
 
 variable "ssh_key_pair_name" {
