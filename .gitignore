@@ -30,3 +30,16 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+backend.hcl
+!backend.hcl.example
+tfplan
+plan.txt
+crash.log

@@ -81,13 +81,26 @@ Tiingo WebSocket / REST
 
 ## デプロイ
 
-[docs/deployment.md](docs/deployment.md) を参照。Docker Compose と systemd の両方の構成を同梱している。
+AWS 側は **Terraform** で管理する（[docs/aws-deployment.md](docs/aws-deployment.md)）。SAM/CloudFormation は Lightsail リソースを持たないため使えない。
+
+```bash
+scripts/bootstrap-tf-state.sh dev01          # 初回のみ: state バケット作成
+cd infra/terraform
+terraform init -backend-config=backend.hcl
+terraform apply -var-file=dev01.tfvars       # profile=dev01
+```
+
+Terraform の管理対象は Lightsail（インスタンス、公開ポート、静的IP、自動スナップショット）、S3バックアップ、IAM、SNS、CloudWatch、Budgets。
+
+`main` へ push すると GitHub Actions が **テスト → `terraform apply`** を実行し、AWS 側の設定値を反映する。アプリのコード自体はインスタンス側の pull 型エージェント（`deploy/agent/`）が2分間隔で取得する。ランナーの送信元IPが固定されないため、SSH 配布にすると22番をインターネットに開ける必要があり、閉域設計と矛盾するためである。
+
+手動で起動する場合、または Terraform を使わない場合は [docs/deployment.md](docs/deployment.md) を参照。
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-Lightsail のファイアウォールは **SSHのみ許可**でよい。Cloudflare Tunnel は外向き接続だけを使うため、80/443 を開ける必要がない。
+Lightsail のファイアウォールは **SSHのみ許可**でよい。Cloudflare Tunnel は外向き接続だけを使うため、80/443 を開ける必要がない。Terraform 側でも SSH 以外は明示的に閉じている。
 
 ## 運用
 

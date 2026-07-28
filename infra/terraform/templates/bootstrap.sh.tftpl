@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+#
+# Lightsail user_data. Runs once, at first boot, as root.
+#
+# Prepares the host only. Application code is not fetched here: pulling a
+# private repository would need a credential baked into user_data, which is
+# readable from the instance metadata service. Deployment is a separate,
+# pull-based step (deploy/agent/) that uses a deploy key placed out of band.
+set -Eeuo pipefail
+
+exec > >(tee -a /var/log/usstocks-bootstrap.log) 2>&1
+echo "bootstrap starting $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y --no-install-recommends \
+  ca-certificates curl git sqlite3 unattended-upgrades awscli \
+  docker.io docker-compose-v2
+
+systemctl enable --now docker
+
+# Unattended security updates (spec 4.5).
+cat > /etc/apt/apt.conf.d/20auto-upgrades <<'CONF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+CONF
+
+# Swap. Three containers on a 1 GB plan is tight, and the specification lists
+# OOM as a live risk (section 12). Swap turns "collector killed" into
+# "collector slower", which is the better failure for a data collector.
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+sysctl -w vm.swappiness=10
+echo 'vm.swappiness=10' > /etc/sysctl.d/99-usstocks.conf
+
+# Service account and layout.
+id -u ${project_name} >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/${project_name} ${project_name}
+usermod -aG docker ${project_name}
+install -d -o ${project_name} -g ${project_name} -m 0750 /opt/${project_name}
+install -d -o ${project_name} -g ${project_name} -m 0750 /var/lib/${project_name}
+install -d -o ${project_name} -g ${project_name} -m 0750 /var/backups/${project_name}
+install -d -o root -g ${project_name} -m 0750 /etc/${project_name}
+
+# Placeholder env file. Real secrets are written out of band; user_data is
+# visible via the metadata service and must never carry them (spec 4.5).
+if [ ! -f /etc/${project_name}/${project_name}.env ]; then
+  cat > /etc/${project_name}/${project_name}.env <<'ENVEOF'
+# Populate with real values before starting the services.
+# See .env.example in the repository for the full list.
+USSTOCKS_PRIMARY_SOURCE=tiingo
+USSTOCKS_TIINGO_API_KEY=
+USSTOCKS_AUTH_MODE=cloudflare_access
+USSTOCKS_CF_ACCESS_TEAM_DOMAIN=
+USSTOCKS_CF_ACCESS_AUD=
+USSTOCKS_ALLOWED_EMAILS=
+CLOUDFLARE_TUNNEL_TOKEN=
+USSTOCKS_BACKUP_S3_URI=
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_DEFAULT_REGION=
+ENVEOF
+  chown root:${project_name} /etc/${project_name}/${project_name}.env
+  chmod 0640 /etc/${project_name}/${project_name}.env
+fi
+
+# Repository target for the deploy agent. Cloning happens on first deploy,
+# once a deploy key exists.
+#
+# SSH form, not HTTPS: the repository is private and the agent authenticates
+# with a read-only deploy key (GIT_SSH_COMMAND in the systemd unit). An HTTPS
+# URL would ignore that key and prompt for a password that never comes.
+echo "git@github.com:${github_owner}/${github_repo}.git" > /etc/${project_name}/repo-url
+
+echo "bootstrap finished $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo
+echo "Next, out of band (see docs/aws-deployment.md):"
+echo "  1. write real values into /etc/${project_name}/${project_name}.env"
+echo "  2. install a read-only deploy key at /var/lib/${project_name}/.ssh/id_ed25519"
+echo "  3. enable the deploy agent: systemctl enable --now ${project_name}-deploy.timer"

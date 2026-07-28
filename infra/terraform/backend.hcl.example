@@ -1,0 +1,13 @@
+# Backend settings, kept out of versions.tf so the same code can target another
+# account without edits:
+#   terraform init -backend-config=backend.hcl
+#
+# Create the bucket once with scripts/bootstrap-tf-state.sh before the first
+# init -- Terraform cannot create the bucket that holds its own state.
+
+bucket = "usstocks-tfstate-dev01-123456789012"
+region = "ap-northeast-1"
+
+# S3-native locking (Terraform >= 1.10). No DynamoDB table needed, and no
+# per-table cost.
+use_lockfile = true

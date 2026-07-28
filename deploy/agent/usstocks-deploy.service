@@ -1,0 +1,24 @@
+[Unit]
+Description=Pull and deploy the latest application revision
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=usstocks
+Group=usstocks
+Environment=PROJECT=usstocks
+Environment=DEPLOY_BRANCH=main
+# Deploy key for the private repository, installed out of band.
+Environment=GIT_SSH_COMMAND=ssh -i /var/lib/usstocks/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+ExecStart=/opt/usstocks/app/deploy/agent/deploy-agent.sh
+TimeoutStartSec=900
+
+# A failed deploy must not leave the previous version stopped; compose only
+# swaps containers once a build succeeds, so failure here means "still running
+# the old revision", which is the correct outcome.
+Restart=no
+
+NoNewPrivileges=true
+PrivateTmp=true

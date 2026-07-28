@@ -1,0 +1,31 @@
+# Copy to dev01.tfvars and fill in. dev01.tfvars is gitignored: ssh_allowed_cidrs
+# is your home address and does not belong in a repository.
+#
+#   terraform plan  -var-file=dev01.tfvars
+#   terraform apply -var-file=dev01.tfvars
+
+aws_region  = "ap-northeast-1"
+aws_profile = "dev01"
+environment = "dev01"
+
+alert_email     = "you@example.com"
+tf_state_bucket = "usstocks-tfstate-dev01-123456789012"
+
+# Your administrative address. "0.0.0.0/0" would expose SSH to the internet.
+ssh_allowed_cidrs = ["203.0.113.10/32"]
+
+# Existing Lightsail key pair, or null for the region default.
+ssh_key_pair_name = null
+
+lightsail_bundle_id         = "small_3_0"
+lightsail_availability_zone = "ap-northeast-1a"
+
+github_owner = "makechair"
+github_repo  = "us-stock-realtime-chart"
+
+# Set false if token.actions.githubusercontent.com already exists in the
+# account; an account holds only one provider per URL.
+create_github_oidc_provider = true
+
+monthly_budget_usd    = 12
+backup_retention_days = 30

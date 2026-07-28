@@ -1,0 +1,15 @@
+[Unit]
+Description=Check for new application revisions
+
+[Timer]
+# Polling, because the runner has no fixed address to push from and opening
+# SSH to the internet would defeat the closed-ingress design (spec 4.5).
+# Two minutes is well inside a personal project's tolerance for deploy latency
+# and costs one lightweight git fetch each time.
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=30s
+RandomizedDelaySec=20s
+
+[Install]
+WantedBy=timers.target
