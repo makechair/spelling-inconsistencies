@@ -23,9 +23,22 @@ Terraform の AWS プロバイダには `aws_lightsail_instance` 等が揃って
 
 - AWS CLI が設定済みであること（プロファイル名は既定で `default`）
 - Terraform **1.10 以上**（`use_lockfile` に必要。CI は 1.15.8 を使用）
+
+  macOS で未導入なら HashiCorp 公式 tap から入れる。Homebrew の
+  `brew install terraform` は配布元が変わることがあるため、公式 tap を使う。
+
   ```bash
-  terraform version   # v1.10 未満なら brew upgrade terraform
+  brew tap hashicorp/tap
+  brew install hashicorp/tap/terraform
+  terraform version          # v1.10 以上であること
+
+  # 既に入っていて古い場合
+  brew upgrade hashicorp/tap/terraform
   ```
+
+  > OpenTofu（`tofu`）は概ね互換だが、`use_lockfile` は Terraform 1.10 で
+  > 追加された設定のため、そのままでは backend 初期化に失敗しうる。
+  > 併用する場合は backend の locking 設定を読み替えること。
 - リポジトリ: <https://github.com/makechair/us-stock-realtime-chart>（private）
 
 ```bash
