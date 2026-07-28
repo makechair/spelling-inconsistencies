@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Lightsail user_data. Runs once, at first boot, as root.
 #
@@ -6,9 +6,16 @@
 # private repository would need a credential baked into user_data, which is
 # readable from the instance metadata service. Deployment is a separate,
 # pull-based step (deploy/agent/) that uses a deploy key placed out of band.
-set -Eeuo pipefail
+#
+# The first four lines are deliberately POSIX-safe. An earlier version opened
+# with `set -Eeuo pipefail` and `exec > >(tee ...)`, both bash-only; run under
+# /bin/sh that dies on line one, before the log file exists, so the only
+# symptom is a missing log and no clue why. Whatever interprets this now gets
+# far enough to record what happened.
+set -eu
+(set -o pipefail) 2>/dev/null && set -o pipefail
 
-exec > >(tee -a /var/log/usstocks-bootstrap.log) 2>&1
+exec >>/var/log/usstocks-bootstrap.log 2>&1
 echo "bootstrap starting $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 export DEBIAN_FRONTEND=noninteractive

@@ -59,3 +59,22 @@ output "github_deploy_role_arn" {
   EOT
   value       = aws_iam_role.github_deploy.arn
 }
+
+output "bootstrap_script" {
+  description = <<-EOT
+    The rendered user_data, for running by hand on an instance where it did not
+    take effect.
+
+    Needed because aws_lightsail_instance carries ignore_changes = [user_data]:
+    editing the template must not recreate an instance that holds the
+    accumulated database, so a fix to the script never reaches an existing
+    host. Recover with:
+
+      terraform output -raw bootstrap_script > /tmp/bootstrap.sh
+      # copy to the instance, then: sudo bash /tmp/bootstrap.sh
+
+    Contains no secrets -- user_data is readable from the metadata service, so
+    nothing sensitive is put in it in the first place.
+  EOT
+  value       = local.user_data
+}
