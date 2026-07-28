@@ -54,6 +54,14 @@ aws iam create-policy-version \
 A policy keeps at most five versions; delete an old one with
 `aws iam delete-policy-version` if that limit is reached.
 
+### If a further AccessDenied appears
+
+Permissions were added in two rounds, both found by applying: first Lightsail
+and Budgets were missing entirely, then `budgets:TagResource` specifically,
+because `default_tags` tags the budget and Budgets treats tagging as a separate
+action from `ModifyBudget`. Update the policy and push a new default version
+rather than editing in place.
+
 ## Scope
 
 Actions are limited to this project's own names (`usstocks-*`) wherever the

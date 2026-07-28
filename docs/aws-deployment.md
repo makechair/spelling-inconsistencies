@@ -45,6 +45,15 @@ Terraform の AWS プロバイダには `aws_lightsail_instance` 等が揃って
     --policy-arn "arn:aws:iam::${ACCOUNT}:policy/usstocks-terraform-operator"
   ```
 
+  すでに作成済みで内容を更新する場合は、新しいバージョンを既定にする:
+
+  ```bash
+  aws iam create-policy-version \
+    --policy-arn "arn:aws:iam::${ACCOUNT}:policy/usstocks-terraform-operator" \
+    --policy-document file://infra/iam/terraform-operator-policy.json \
+    --set-as-default
+  ```
+
   詳細は [infra/iam/README.md](../infra/iam/README.md) を参照。
 - Terraform **1.10 以上**（`use_lockfile` に必要。CI は 1.15.8 を使用）
 

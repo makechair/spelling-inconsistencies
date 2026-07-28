@@ -146,6 +146,11 @@ data "aws_iam_policy_document" "github_deploy" {
       "budgets:CreateBudget*",
       "budgets:UpdateBudget*",
       "budgets:DeleteBudget*",
+      # default_tags tags the budget too, and Budgets treats tagging as its own
+      # action rather than folding it into ModifyBudget.
+      "budgets:TagResource",
+      "budgets:UntagResource",
+      "budgets:ListTagsForResource",
     ]
     resources = ["*"]
   }

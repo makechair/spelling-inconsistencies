@@ -80,7 +80,10 @@
         "budgets:DeleteNotification",
         "budgets:CreateSubscriber",
         "budgets:UpdateSubscriber",
-        "budgets:DeleteSubscriber"
+        "budgets:DeleteSubscriber",
+        "budgets:TagResource",
+        "budgets:UntagResource",
+        "budgets:ListTagsForResource"
       ],
       "Resource": "*"
     },
