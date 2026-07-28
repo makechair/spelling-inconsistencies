@@ -2,7 +2,8 @@
 PY := .venv/bin/python
 PIP := .venv/bin/pip
 
-.PHONY: help venv install migrate test lint dev-collector dev-api dev seed clean
+.PHONY: help venv install migrate test lint dev-collector dev-api dev seed clean \
+        tf-init tf-plan tf-apply tf-fmt tf-output
 
 help:
 	@grep -E '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -37,3 +38,23 @@ dev: ## Run collector + API together with fake data
 
 clean:
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ data/*.db*
+
+# --------------------------------------------------------------- infrastructure
+# All of these use the dev01 profile via infra/terraform/dev01.tfvars.
+TF := terraform -chdir=infra/terraform
+TFVARS := -var-file=dev01.tfvars
+
+tf-init: ## Initialise Terraform against the remote state backend
+	$(TF) init -backend-config=backend.hcl
+
+tf-fmt: ## Format the Terraform sources
+	$(TF) fmt -recursive
+
+tf-plan: ## Show what would change on AWS (read-only)
+	$(TF) plan $(TFVARS)
+
+tf-apply: ## Apply the AWS configuration
+	$(TF) apply $(TFVARS)
+
+tf-output: ## Print stack outputs (bucket, role ARN, instance IP)
+	$(TF) output

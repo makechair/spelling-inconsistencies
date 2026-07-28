@@ -1,7 +1,7 @@
 name: deploy
 
-# Push to main runs the checks, then applies the Terraform configuration so
-# the AWS-side settings on the account match what is in the repository.
+# Push to main runs the checks, then applies the Terraform configuration so the
+# AWS-side settings on the account match what is in the repository.
 #
 # The application itself is not shipped from here: the instance pulls it
 # (deploy/agent/). A runner has no fixed egress address, so pushing over SSH
@@ -38,9 +38,9 @@ jobs:
     name: tests and lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
@@ -54,39 +54,66 @@ jobs:
       - name: Test
         run: pytest -q
 
-  terraform:
-    name: terraform ${{ github.event_name == 'push' && 'apply' || 'plan' }}
-    needs: test
+  # Syntax and schema checks that need no AWS credentials, so they can run on
+  # a pull request. The apply job below cannot: see its comment.
+  terraform-check:
+    name: terraform validate
     runs-on: ubuntu-latest
-    # A pull request from a fork must never reach the AWS account. The deploy
-    # role's trust policy also pins refs/heads/main, so this is the second of
-    # two independent gates.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    environment: ${{ github.event_name == 'push' && 'dev01' || '' }}
-    permissions:
-      contents: read
-      id-token: write        # required to mint the OIDC token
-      pull-requests: write   # to post the plan on a PR
     defaults:
       run:
         working-directory: ${{ env.TF_WORKING_DIR }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Format check
+        run: terraform fmt -check -recursive
+
+      - name: Init without a backend
+        # -backend=false skips state access, which is what makes this runnable
+        # without credentials. It still downloads the provider, so validate
+        # checks resource and attribute names against the real schema.
+        run: terraform init -backend=false -input=false
+
+      - name: Validate
+        run: terraform validate
+
+  apply:
+    name: terraform apply
+    needs: [test, terraform-check]
+    # Only a push to main, or a manual run with apply checked.
+    #
+    # Deliberately not run on pull requests: the deploy role's trust policy
+    # pins sub=repo:OWNER/REPO:ref:refs/heads/main, and a pull request presents
+    # sub=repo:OWNER/REPO:pull_request, so AssumeRole would fail every time.
+    # Widening the trust to accept pull_request would hand plan-capable
+    # credentials to any PR, so the narrow trust is kept and PRs stop at
+    # terraform-check. Plan-on-PR would need a separate read-only role.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required to mint the OIDC token
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Assume the deploy role
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           # No stored access keys: short-lived credentials from OIDC.
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-${{ github.run_id }}
-
-      - name: Format check
-        run: terraform fmt -check -recursive
 
       - name: Init
         run: |
@@ -95,11 +122,7 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="use_lockfile=true"
 
-      - name: Validate
-        run: terraform validate
-
       - name: Plan
-        id: plan
         # aws_profile is emptied: a runner has no ~/.aws/config, so leaving the
         # dev01 default would fail with a missing-profile error.
         run: |
@@ -124,11 +147,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Apply
-        if: github.event_name == 'push' || inputs.apply
         run: terraform apply -input=false -lock-timeout=5m -auto-approve tfplan
 
       - name: Publish outputs
-        if: github.event_name == 'push' || inputs.apply
         run: |
           {
             echo '### Applied outputs'

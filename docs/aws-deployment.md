@@ -142,10 +142,11 @@ sudo systemctl enable --now usstocks-deploy.timer
 ```
 main へ push
     │
-    ├─ GitHub Actions: test（ruff + pytest 103件）
-    │        │ 失敗したらここで停止し、AWS へは一切触れない
+    ├─ GitHub Actions: test            （ruff + pytest 103件）
+    ├─ GitHub Actions: terraform-check （fmt + validate。認証情報不要）
+    │        │ どちらか失敗したらここで停止し、AWS へは一切触れない
     │        v
-    └─ GitHub Actions: terraform apply
+    └─ GitHub Actions: apply
              │ OIDC でロールを引き受ける（保存された鍵はゼロ）
              │ AWS 側の設定値（Lightsail、S3、IAM、SNS、Budgets）を反映
              v
@@ -156,7 +157,11 @@ main へ push
        collector / api が新リビジョンで稼働
 ```
 
-Pull Request では `terraform plan` までを実行し、apply はしない。plan の結果は Actions のサマリに出る。
+Pull Request で実行されるのは **テストと `terraform validate` まで**で、`plan` は走らない。
+
+これは制限ではなく、信頼ポリシーとの整合である。デプロイロールは `sub=repo:OWNER/REPO:ref:refs/heads/main` に固定しており、PR の OIDC トークンは `sub=repo:OWNER/REPO:pull_request` を提示するため、**PR からは AssumeRole できない**。`pull_request` を信頼対象に加えれば plan は動くが、PR を出せる立場の誰もが AWS の読み取り資格情報を得ることになる。個人利用では割に合わないため、狭い信頼を維持した。
+
+PR で plan を見たい場合は、読み取り専用の別ロール（`pull_request` を信頼し、権限は `Describe*` / `Get*` / `List*` のみ）を追加するのが正しい拡張である。
 
 ### なぜアプリのデプロイを push 型（SSH）にしないのか
 
