@@ -162,7 +162,11 @@ sudo systemctl restart usstocks-collector
 ## 5. バックアップ
 
 ```bash
-sudo apt install -y awscli
+# AWS CLI は apt では入らない。Ubuntu 24.04 は awscli(v1) をアーカイブから
+# 削除しており、v2 はそもそもパッケージ化されていない
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+sudo apt install -y unzip && unzip -q -o /tmp/awscliv2.zip -d /tmp && sudo /tmp/aws/install --update
+aws --version
 aws configure    # バケットへの s3:PutObject 権限だけを持つIAMユーザーが望ましい
 sudo mkdir -p /var/backups/usstocks && sudo chown usstocks /var/backups/usstocks
 ```
