@@ -105,6 +105,18 @@ variable "ssh_allowed_cidrs" {
   }
 }
 
+variable "ssh_allowed_ipv6_cidrs" {
+  description = <<-EOT
+    IPv6 sources allowed to reach SSH. Separate from ssh_allowed_cidrs because
+    the instance is dual-stack and the two families are configured
+    independently -- constraining only IPv4 would silently leave IPv6 open.
+    Empty means none, expressed as an unroutable ::1/128 sentinel for the same
+    reason as the IPv4 case.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "allow_lightsail_browser_ssh" {
   description = <<-EOT
     Allow AWS's own browser-based SSH client (the "Connect using SSH" button in

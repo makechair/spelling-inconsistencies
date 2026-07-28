@@ -131,6 +131,14 @@ ssh_allowed_cidrs           = []     # 自分のIPは指定しない
 
 `ssh_allowed_cidrs = []` は「誰も通さない」の意味だが、そのまま Lightsail へ渡すと **API 側で 0.0.0.0/0 と解釈され全開放になる**。これを避けるため、内部では到達不能な `127.0.0.1/32` に読み替えている（`lightsail.tf` の `local.ssh_cidrs`）。
 
+#### IPv6 側も明示する必要がある
+
+Lightsail インスタンスは既定で dualstack（IPv4 + IPv6）である。ポート規則の IPv4 と IPv6 は**独立に設定される**ため、`cidrs` だけを絞って `ipv6_cidrs` を未指定にすると、**IPv4 は施錠されているのに IPv6 経由では素通し**という状態になりうる。`plan` で `ipv6_cidrs = (known after apply)` と出ていたのがその兆候だった。
+
+そのため両方を明示している。IPv6 を許可したい場合は `ssh_allowed_ipv6_cidrs` を使う（既定は空＝`::1/128` に読み替え）。
+
+`terraform output open_ports` と `ssh_access_summary` で、apply 後に実際の状態を確認すること。
+
 ```bash
 terraform init -backend-config=backend.hcl
 terraform plan

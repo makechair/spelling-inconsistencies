@@ -15,6 +15,14 @@ locals {
   # packet that can arrive from outside.
   ssh_cidrs = length(var.ssh_allowed_cidrs) > 0 ? var.ssh_allowed_cidrs : ["127.0.0.1/32"]
 
+  # The instance is dual-stack, so a rule that only constrains IPv4 leaves the
+  # IPv6 side to whatever Lightsail defaults to. Left unset the plan shows
+  # ipv6_cidrs as "known after apply", meaning the port could end up reachable
+  # from the whole IPv6 internet while the IPv4 rule looks locked down. Both
+  # families are therefore stated explicitly, with the same loopback sentinel
+  # standing in for "nothing".
+  ssh_ipv6_cidrs = length(var.ssh_allowed_ipv6_cidrs) > 0 ? var.ssh_allowed_ipv6_cidrs : ["::1/128"]
+
   # Bootstraps the host only. Application deployment is pull-based and lives in
   # deploy/ -- baking it into user_data would mean rebuilding the instance to
   # ship a code change.
@@ -67,10 +75,11 @@ resource "aws_lightsail_instance_public_ports" "app" {
   instance_name = aws_lightsail_instance.app.name
 
   port_info {
-    protocol  = "tcp"
-    from_port = 22
-    to_port   = 22
-    cidrs     = local.ssh_cidrs
+    protocol   = "tcp"
+    from_port  = 22
+    to_port    = 22
+    cidrs      = local.ssh_cidrs
+    ipv6_cidrs = local.ssh_ipv6_cidrs
 
     # Lets the Lightsail console's browser SSH through without naming an
     # address of your own. AWS validates this alias at apply time.
