@@ -14,7 +14,7 @@ echo "bootstrap starting $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y --no-install-recommends \
-  ca-certificates curl git sqlite3 unattended-upgrades awscli \
+  ca-certificates curl jq git sqlite3 unattended-upgrades awscli \
   docker.io docker-compose-v2
 
 systemctl enable --now docker

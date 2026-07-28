@@ -112,10 +112,20 @@ ssh ubuntu@$(terraform output -raw instance_public_ip)
 sudo vi /etc/usstocks/usstocks.env
 
 # 2. リポジトリ読み取り専用のデプロイキーを置く
+sudo -u usstocks install -d -m 0700 /var/lib/usstocks/.ssh
 sudo -u usstocks ssh-keygen -t ed25519 -N '' -f /var/lib/usstocks/.ssh/id_ed25519
 sudo cat /var/lib/usstocks/.ssh/id_ed25519.pub
 #    → GitHub の Settings > Deploy keys に「Read only」で登録
-sudo -u usstocks ssh-keyscan github.com >> /var/lib/usstocks/.ssh/known_hosts
+# GitHub のホスト鍵を「検証してから」登録する。
+# ssh-keyscan の出力をそのまま known_hosts へ流し込むのは、経路上の相手を
+# 無検証で信頼することと同じで、中間者攻撃を検出できない。
+# api.github.com は TLS で認証された経路なので、そこから取得した鍵を使う。
+curl -sS https://api.github.com/meta \
+  | jq -r '.ssh_keys[] | "github.com \(.)"' \
+  | sudo -u usstocks tee -a /var/lib/usstocks/.ssh/known_hosts
+
+# 登録された内容を目視確認する
+sudo -u usstocks ssh-keygen -lf /var/lib/usstocks/.ssh/known_hosts
 
 # 3. デプロイエージェントを有効化
 sudo cp /opt/usstocks/app/deploy/agent/usstocks-deploy.{service,timer} /etc/systemd/system/
