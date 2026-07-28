@@ -1,0 +1,92 @@
+# Lightsail 1 GB deployment (spec 6.1, 9, 11.1).
+#
+# Three processes, restarted independently (spec 3.6):
+#   collector   - owns the WebSocket and every time-series write
+#   api         - reads, serves the frontend and the SSE stream
+#   cloudflared - the only path in, outbound-only (spec 4.5)
+#
+# No port is published to the host. Cloudflare Tunnel reaches the API over the
+# compose network, so the instance never listens on 80/443 (spec 3.5, 7.2).
+
+name: usstocks
+
+x-common: &common
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  image: usstocks:local
+  restart: unless-stopped
+  env_file:
+    - ../.env
+  volumes:
+    - market-data:/data
+    # Live snapshots go to shared memory: they are rebuilt from the next trade,
+    # so writing them to SSD only costs endurance.
+    - live-state:/dev/shm
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  collector:
+    <<: *common
+    container_name: usstocks-collector
+    command: ["python", "-m", "usstocks.collector"]
+    # Bounded so a leak in one process cannot take the whole 1 GB instance
+    # down with it (spec 12, "1 GB memory pressure").
+    mem_limit: 320m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3,sys,json,datetime;\
+        c=sqlite3.connect('/dev/shm/live.db');\
+        r=c.execute('SELECT updated_at FROM collector_status WHERE id=1').fetchone();\
+        sys.exit(0 if r and (datetime.datetime.now(datetime.UTC)-\
+        datetime.datetime.fromisoformat(r[0])).total_seconds() < 120 else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  api:
+    <<: *common
+    container_name: usstocks-api
+    command: ["python", "-m", "usstocks.api"]
+    environment:
+      # Reachable from cloudflared over the compose network only.
+      USSTOCKS_API_HOST: "0.0.0.0"
+    mem_limit: 320m
+    depends_on:
+      - collector
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/livez')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: usstocks-tunnel
+    restart: unless-stopped
+    # Outbound only: no ports, no inbound firewall rule (spec 4.5).
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN}"]
+    env_file:
+      - ../.env
+    depends_on:
+      - api
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
+
+volumes:
+  market-data:
+  live-state:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=32m

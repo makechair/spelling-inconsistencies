@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily SQLite backup (spec 4.4, RPO 24h)
+
+[Timer]
+# 07:10 UTC = 03:10 ET, after after-hours trading has ended.
+OnCalendar=*-*-* 07:10:00 UTC
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

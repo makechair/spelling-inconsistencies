@@ -1,0 +1,224 @@
+:root {
+  --bg: #0e1116;
+  --panel: #161b22;
+  --panel-2: #1c232c;
+  --border: #2a313a;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --up: #26a69a;
+  --down: #ef5350;
+  --accent: #58a6ff;
+  --warn: #d29922;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f8fa;
+    --panel: #ffffff;
+    --panel-2: #f0f3f6;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --muted: #656d76;
+    --accent: #0969da;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+        "Noto Sans JP", Meiryo, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------------------------------------------------------- topbar */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.brand { font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
+
+.search { position: relative; flex: 1; max-width: 420px; }
+
+.search input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.search input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.search-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 340px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+
+.search-results li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.search-results li:hover,
+.search-results li[aria-selected="true"] { background: var(--panel-2); }
+
+.search-results .ticker { font-weight: 600; }
+.search-results .co { color: var(--muted); font-size: 12px; overflow: hidden;
+                      text-overflow: ellipsis; white-space: nowrap; }
+.search-results .unsupported { color: var(--warn); font-size: 11px; }
+
+.conn { display: flex; align-items: center; gap: 6px; font-size: 12px;
+        color: var(--muted); margin-left: auto; white-space: nowrap; }
+
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.dot.live { background: var(--up); }
+.dot.stale { background: var(--warn); }
+.dot.down { background: var(--down); }
+
+/* ---------------------------------------------------------------- layout */
+.layout { display: flex; flex: 1; min-height: 0; }
+
+.sidebar {
+  width: 230px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+              color: var(--muted); margin: 4px 0 10px; }
+
+.watchlist { list-style: none; margin: 0; padding: 0; }
+
+/* Flex, not grid: the row has four children of varying width and the remove
+   button must never wrap onto a second line. */
+.watchlist li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.watchlist li:hover { background: var(--panel-2); }
+.watchlist li.active { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
+.watchlist .wl-symbol { font-weight: 600; flex: 1; min-width: 0; }
+.watchlist .wl-price { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.watchlist .wl-change { font-size: 12px; font-variant-numeric: tabular-nums;
+                        white-space: nowrap; }
+.watchlist .remove { background: none; border: 0; color: var(--muted); cursor: pointer;
+                     font-size: 15px; line-height: 1; padding: 0 2px; flex-shrink: 0;
+                     align-self: center; }
+.watchlist .remove:hover { color: var(--down); }
+
+.hint { color: var(--muted); font-size: 12px; }
+
+.content { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 12px 16px; }
+
+/* ----------------------------------------------------------------- quote */
+.quote { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px 24px; }
+.quote-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.symbol { font-size: 22px; font-weight: 700; }
+.name { color: var(--muted); font-size: 13px; overflow: hidden;
+        text-overflow: ellipsis; white-space: nowrap; }
+.quote-price { display: flex; align-items: baseline; gap: 10px; }
+.last { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.change { font-size: 14px; font-variant-numeric: tabular-nums; }
+.up { color: var(--up); }
+.down { color: var(--down); }
+
+.quote-meta { display: flex; gap: 20px; margin: 0; flex-wrap: wrap; }
+.quote-meta div { display: flex; flex-direction: column; gap: 1px; }
+.quote-meta dt { color: var(--muted); font-size: 11px; }
+.quote-meta dd { margin: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.quote-meta dd.stale { color: var(--warn); }
+
+/* ------------------------------------------------------------- range bar */
+.range-bar { display: flex; align-items: center; gap: 6px; margin: 12px 0 8px;
+             flex-wrap: wrap; }
+
+.range-bar button {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 5px 11px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.range-bar button.active { color: var(--text); border-color: var(--accent); }
+.toggle { display: flex; align-items: center; gap: 5px; color: var(--muted);
+          font-size: 12px; margin-left: 8px; cursor: pointer; }
+.export { margin-left: auto; color: var(--accent); font-size: 12px;
+          text-decoration: none; }
+.export:hover { text-decoration: underline; }
+
+/* ----------------------------------------------------------------- chart */
+.chart { flex: 1; min-height: 320px; border: 1px solid var(--border);
+         border-radius: 8px; overflow: hidden; background: var(--panel); }
+
+.chart-note { color: var(--muted); font-size: 11px; margin: 6px 2px 0; min-height: 1em; }
+
+/* ---------------------------------------------------------------- footer */
+.footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.footer a { color: var(--muted); }
+
+/* ------------------------------------------------------------ responsive */
+@media (max-width: 720px) {
+  .layout { flex-direction: column; }
+  .sidebar { width: auto; border-right: 0; border-bottom: 1px solid var(--border);
+             max-height: 30vh; }
+  .topbar { flex-wrap: wrap; }
+  .search { max-width: none; order: 3; flex-basis: 100%; }
+  .conn { margin-left: auto; }
+  .last { font-size: 22px; }
+  .content { padding: 10px 12px; }
+  .chart { min-height: 260px; }
+}

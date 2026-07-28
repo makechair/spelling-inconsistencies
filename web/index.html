@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>US Stocks</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">US&nbsp;Stocks</div>
+
+  <div class="search">
+    <input id="search-input" type="search" placeholder="ティッカー / 企業名で検索" autocomplete="off"
+           aria-label="銘柄検索">
+    <ul id="search-results" class="search-results" hidden></ul>
+  </div>
+
+  <div class="conn" id="conn-indicator" title="データ受信状態">
+    <span class="dot" id="conn-dot"></span>
+    <span id="conn-label">接続中…</span>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+    <h2>ウォッチリスト</h2>
+    <ul id="watchlist" class="watchlist"></ul>
+    <p class="hint" id="watchlist-hint">検索して銘柄を追加してください。</p>
+  </aside>
+
+  <section class="content">
+    <div class="quote" id="quote">
+      <div class="quote-main">
+        <span class="symbol" id="quote-symbol">—</span>
+        <span class="name" id="quote-name"></span>
+      </div>
+      <div class="quote-price">
+        <span class="last" id="quote-last">—</span>
+        <span class="change" id="quote-change"></span>
+      </div>
+      <dl class="quote-meta">
+        <div><dt>セッション</dt><dd id="quote-session">—</dd></div>
+        <div><dt>最終受信</dt><dd id="quote-updated">—</dd></div>
+        <div><dt>提供元</dt><dd id="quote-source">—</dd></div>
+      </dl>
+    </div>
+
+    <div class="range-bar" role="group" aria-label="表示期間">
+      <button type="button" data-days="1" class="active">1D</button>
+      <button type="button" data-days="5">5D</button>
+      <button type="button" data-days="30">1M</button>
+      <button type="button" data-days="90">3M</button>
+      <button type="button" data-days="365">1Y</button>
+      <label class="toggle">
+        <input type="checkbox" id="extended-toggle" checked>
+        時間外を含む
+      </label>
+      <a id="export-link" class="export" href="#" download>CSV</a>
+    </div>
+
+    <div id="chart" class="chart"></div>
+    <p class="chart-note" id="chart-note"></p>
+  </section>
+</main>
+
+<footer class="footer">
+  <span id="footer-status"></span>
+  <span class="attribution">
+    Charts by
+    <a href="https://www.tradingview.com" target="_blank" rel="noopener">TradingView</a>
+    Lightweight Charts™
+  </span>
+</footer>
+
+<script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

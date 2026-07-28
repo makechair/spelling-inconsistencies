@@ -1,0 +1,32 @@
+[Unit]
+Description=US stocks chart API and frontend
+After=network-online.target usstocks-collector.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=usstocks
+Group=usstocks
+WorkingDirectory=/opt/usstocks
+EnvironmentFile=/etc/usstocks/usstocks.env
+ExecStart=/opt/usstocks/.venv/bin/python -m usstocks.api
+
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+MemoryMax=320M
+OOMPolicy=stop
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/usstocks /dev/shm
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

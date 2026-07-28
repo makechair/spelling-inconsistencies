@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usstocks"
+version = "0.1.0"
+description = "Personal real-time US stock chart system (Tiingo / FastAPI / SQLite / SSE)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "httpx>=0.26",
+    "websockets>=12.0",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "PyJWT[crypto]>=2.8",
+]
+
+[project.optional-dependencies]
+parquet = ["pyarrow>=15.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.3",
+]
+
+[project.scripts]
+usstocks-collector = "usstocks.collector.__main__:main"
+usstocks-api = "usstocks.api.__main__:main"
+usstocks-migrate = "usstocks.db.migrate:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+usstocks = ["db/migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:usstocks.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom is a call in an argument default by
+# design; B008 is a false positive for it.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body"]

@@ -1,0 +1,30 @@
+# Cloudflare Tunnel configuration (spec 7.2, 7.3).
+#
+# Copy to /etc/cloudflared/config.yml when running cloudflared under systemd.
+# With Docker Compose the token in .env carries this configuration already and
+# this file is only a reference for what the dashboard should contain.
+#
+# The tunnel dials out to Cloudflare. Lightsail publishes no web port, and its
+# firewall should allow inbound SSH only (spec 3.5, 4.5).
+
+tunnel: <TUNNEL-UUID>
+credentials-file: /etc/cloudflared/<TUNNEL-UUID>.json
+
+# Buffering an event stream would batch updates into multi-second bursts and
+# quietly break the 1-second requirement (docs/spec-review.md B-6).
+originRequest:
+  connectTimeout: 10s
+  # Longer than the API's SSE stream lifetime so Cloudflare is never the side
+  # that cuts a healthy stream.
+  noTLSVerify: false
+  disableChunkedEncoding: false
+
+ingress:
+  - hostname: stocks.example.com
+    service: http://api:8000        # systemd: http://127.0.0.1:8000
+    originRequest:
+      # SSE connections are long-lived by design.
+      connectTimeout: 10s
+      keepAliveTimeout: 90s
+      httpHostHeader: stocks.example.com
+  - service: http_status:404

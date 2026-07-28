@@ -1,0 +1,32 @@
+# Secrets (spec 4.5: never commit credentials)
+.env
+*.env
+!.env.example
+/etc/usstocks/
+
+# Data
+data/
+*.db
+*.db-wal
+*.db-shm
+*.csv
+*.parquet
+backups/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
