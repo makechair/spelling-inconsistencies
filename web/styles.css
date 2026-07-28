@@ -137,6 +137,9 @@ body {
 
 .watchlist li:hover { background: var(--panel-2); }
 .watchlist li.active { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
+/* Watched but not subscribed: over the collector's symbol cap. */
+.watchlist li.unsubscribed .wl-symbol,
+.watchlist li.unsubscribed .wl-price { opacity: .5; }
 .watchlist .wl-symbol { font-weight: 600; flex: 1; min-width: 0; }
 .watchlist .wl-price { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .watchlist .wl-change { font-size: 12px; font-variant-numeric: tabular-nums;

@@ -65,7 +65,10 @@ class Settings(BaseSettings):
     bandwidth_warn_ratio: float = 0.8
 
     # -------------------------------------------------------------- collector
-    max_symbols: int = 30
+    # Capped at 10 rather than the spec's 30: at 30 symbols the free tier's
+    # 1 GB/month ingress is exceeded on any realistic assumption
+    # (docs/spec-review.md A-1). 10 keeps the workload inside the budget.
+    max_symbols: int = 10
     symbol_refresh_seconds: float = 5.0
     reconnect_initial_seconds: float = 1.0
     reconnect_max_seconds: float = 60.0

@@ -1,17 +1,18 @@
 """Persistent REST budget and bandwidth meter.
 
 The spec lists the free-tier limits (50 calls/hour, 1000/day, 1 GB/month) as
-provider *constraints* but never treats them as a design requirement. With 30
-symbols, a single reconnect storm exhausts the hourly allowance, after which
-backfill and history both stop (docs/spec-review.md A-2).
+provider *constraints* but never treats them as a design requirement. Even at
+the reduced 10-symbol cap, a single reconnect storm exhausts the hourly
+allowance, after which backfill and history both stop
+(docs/spec-review.md A-2).
 
 Consumption is stored in the database rather than in memory precisely because
 the failure mode we care about is a crash loop: an in-memory counter would
 reset on every restart and happily blow through the quota.
 
-The bandwidth meter exists because the 1 GB/month cap is very likely the
-binding constraint at 30 symbols and the spec never checks it (A-1). Measuring
-it is the only way to answer the question.
+The bandwidth meter exists because the 1 GB/month cap is the constraint that
+drove the symbol cap down from the spec's 30 to 10, and the spec never checks
+it (A-1). Measuring it is the only way to confirm 10 actually fits.
 """
 
 from __future__ import annotations

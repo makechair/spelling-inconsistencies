@@ -23,6 +23,10 @@ const state = {
   live: new Map(),      // ticker -> latest LiveOut
   names: new Map(),
   eventSource: null,
+  // Which symbols the collector actually subscribed to. With the cap at 10
+  // it is realistic to watch more than that, and a silently unsubscribed
+  // symbol would just look like a stuck price.
+  subscribed: null,
   retryDelay: 1000,
   lastEventAt: 0,
 };
@@ -127,6 +131,10 @@ function renderWatchlist() {
       if (entry.supported === false) {
         symbol.title = entry.note || 'この銘柄はデータ提供元で未サポートです';
         symbol.textContent += ' ⚠';
+      } else if (state.subscribed && !state.subscribed.has(entry.symbol)) {
+        item.classList.add('unsubscribed');
+        symbol.title = '購読上限を超えているため、この銘柄はリアルタイム更新されません';
+        symbol.textContent += ' ⏸';
       }
 
       const price = document.createElement('span');
@@ -344,13 +352,26 @@ function applyUpdates(payload) {
 }
 
 function applyStatus(status) {
+  if (Array.isArray(status.subscribed_symbols)) {
+    const next = new Set(status.subscribed_symbols);
+    const changed =
+      !state.subscribed ||
+      state.subscribed.size !== next.size ||
+      [...next].some((symbol) => !state.subscribed.has(symbol));
+    state.subscribed = next;
+    if (changed) renderWatchlist();
+  }
   if (!status.connected) {
     setConnection('down', status.last_error ? '収集停止' : '未接続');
   } else {
     setConnection('live', `接続中 · ${status.source ?? ''}`);
   }
   const parts = [];
-  if (status.subscribed_symbols) parts.push(`購読 ${status.subscribed_symbols.length} 銘柄`);
+  if (status.subscribed_symbols) {
+    const watched = state.symbols.length;
+    const live = status.subscribed_symbols.length;
+    parts.push(live < watched ? `購読 ${live}/${watched} 銘柄（上限）` : `購読 ${live} 銘柄`);
+  }
   if (status.bytes_received_month != null) {
     parts.push(`月間受信 ${(status.bytes_received_month / 1e6).toFixed(1)} MB`);
   }
