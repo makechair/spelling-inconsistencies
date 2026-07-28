@@ -29,12 +29,20 @@ Terraform の AWS プロバイダには `aws_lightsail_instance` 等が揃って
   `infra/iam/terraform-operator-policy.json` にまとめてあるので、初回の
   apply 前に自分のユーザーへ付与する。
 
+  **管理ポリシーとして**作成する。インラインユーザーポリシーは 2048 バイト
+  上限で、この文書は約 2700 バイトあるため入らない（管理ポリシーは 6144）。
+
   ```bash
+  ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
   ME=$(aws sts get-caller-identity --query Arn --output text | sed 's|.*/||')
-  aws iam put-user-policy \
-    --user-name "$ME" \
+
+  aws iam create-policy \
     --policy-name usstocks-terraform-operator \
     --policy-document file://infra/iam/terraform-operator-policy.json
+
+  aws iam attach-user-policy \
+    --user-name "$ME" \
+    --policy-arn "arn:aws:iam::${ACCOUNT}:policy/usstocks-terraform-operator"
   ```
 
   詳細は [infra/iam/README.md](../infra/iam/README.md) を参照。
