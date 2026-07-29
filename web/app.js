@@ -15,12 +15,15 @@
 
 import { PriceChart } from './chart.js';
 import { formatTime, onChange, selected, setZone, zoneLabel } from './timezone.js';
+import { save as saveView, view } from './viewstate.js';
 
 const state = {
   symbols: [],          // watchlist entries
   selected: null,       // active ticker
-  days: 1,
-  extended: true,
+  // Period and the extended-hours toggle are restored, not defaulted: they are
+  // part of "how I look at this", the same as the zoom.
+  days: view().days,
+  extended: view().extended,
   live: new Map(),      // ticker -> latest LiveOut
   names: new Map(),
   eventSource: null,
@@ -289,6 +292,7 @@ document.querySelectorAll('.range-bar button[data-days]').forEach((button) => {
     document.querySelectorAll('.range-bar button[data-days]')
       .forEach((other) => other.classList.toggle('active', other === button));
     state.days = Number(button.dataset.days);
+    saveView({ days: state.days });
     updateExportLink();
     await loadBars();
   });
@@ -296,8 +300,16 @@ document.querySelectorAll('.range-bar button[data-days]').forEach((button) => {
 
 el.extendedToggle.addEventListener('change', async () => {
   state.extended = el.extendedToggle.checked;
+  saveView({ extended: state.extended });
   await loadBars();
 });
+
+// Reflect the restored view in the controls before the first load, so the
+// highlighted period button and the checkbox match what is drawn.
+document.querySelectorAll('.range-bar button[data-days]').forEach((button) => {
+  button.classList.toggle('active', Number(button.dataset.days) === state.days);
+});
+el.extendedToggle.checked = state.extended;
 
 function updateExportLink() {
   if (!state.selected) return;

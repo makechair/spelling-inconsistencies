@@ -11,6 +11,7 @@
  */
 
 import { formatDate, formatTime, onChange } from './timezone.js';
+import { save, view } from './viewstate.js';
 
 function row(label, value) {
   const item = document.createElement('span');
@@ -67,6 +68,17 @@ export class PriceChart {
     this.legend.className = 'chart-legend';
     container.appendChild(this.legend);
     this.chart.subscribeCrosshairMove((param) => this.#renderLegend(param));
+
+    // Debounced: a single pinch or wheel gesture fires this many times, and
+    // localStorage writes are synchronous.
+    this.zoomSaveTimer = null;
+    this.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      clearTimeout(this.zoomSaveTimer);
+      this.zoomSaveTimer = setTimeout(() => {
+        const options = this.chart.timeScale().options();
+        save({ barSpacing: options.barSpacing, rightOffset: options.rightOffset });
+      }, 400);
+    });
 
     this.lastTime = null;
     this.lastCandle = null;
@@ -182,7 +194,20 @@ export class PriceChart {
     this.lastVolume = volumes.length ? volumes[volumes.length - 1] : null;
     this.#renderLegend(null);
     this.lastTime = bars.length ? bars[bars.length - 1].time : null;
-    if (bars.length) this.chart.timeScale().fitContent();
+    if (!bars.length) return;
+
+    // fitContent() unconditionally was what discarded the zoom on every load,
+    // symbol switch and period change. Fit only when there is nothing
+    // remembered; otherwise put the bars back at the width they were left at.
+    const { barSpacing, rightOffset } = view();
+    if (barSpacing == null) {
+      this.chart.timeScale().fitContent();
+    } else {
+      this.chart.timeScale().applyOptions({
+        barSpacing,
+        ...(rightOffset == null ? {} : { rightOffset }),
+      });
+    }
   }
 
   /**
