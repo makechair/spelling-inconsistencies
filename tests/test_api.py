@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from usstocks.adapters.mock import MockAdapter
 from usstocks.api.app import create_app
 from usstocks.config import Settings
 from usstocks.db.live_store import LiveStore
@@ -123,6 +124,29 @@ def test_symbol_rejects_garbage_tickers(client: TestClient):
 def test_search_falls_back_to_the_provider(client: TestClient):
     results = client.get("/api/symbols/search", params={"q": "NVDA"}).json()
     assert any(entry["symbol"] == "NVDA" for entry in results)
+
+
+def test_search_deduplicates_provider_results(client: TestClient, monkeypatch):
+    """Tiingo returns one row per listing, so a cross-listed ticker repeats.
+
+    The mock adapter's universe is a dict and cannot produce duplicates, which
+    is why the picker showed MU twice in production while this suite stayed
+    green.
+    """
+    entry = {
+        "symbol": "MU",
+        "name": "Micron Technology Inc",
+        "exchange": "NASDAQ",
+        "asset_type": "Stock",
+    }
+
+    async def duplicated(self, query: str, limit: int = 20) -> list[dict[str, str]]:
+        return [dict(entry), dict(entry)]
+
+    monkeypatch.setattr(MockAdapter, "search_symbols", duplicated)
+
+    results = client.get("/api/symbols/search", params={"q": "MU"}).json()
+    assert [item["symbol"] for item in results].count("MU") == 1
 
 
 def test_export_csv_streams_header_and_rows(client: TestClient, settings: Settings):

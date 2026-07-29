@@ -54,10 +54,17 @@ async def search_symbols(
         except AdapterError as exc:
             log.warning("provider symbol search failed: %s", exc)
             results = []
+        # `seen` grows as results are accepted, not just from the local list.
+        # The provider's search returns one row per listing, so a symbol quoted
+        # on more than one venue arrives twice -- MU comes back as two identical
+        # "Micron Technology Inc" entries. Deduplicating only against local
+        # matches let those through whenever the symbol was not already tracked,
+        # which is exactly when the user is looking it up.
         seen = {info.symbol for info in local}
         for item in results:
             if item["symbol"] in seen:
                 continue
+            seen.add(item["symbol"])
             remote.append(
                 SymbolOut(
                     symbol=item["symbol"],
