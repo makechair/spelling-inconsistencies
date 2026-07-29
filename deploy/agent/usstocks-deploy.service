@@ -10,7 +10,19 @@ Environment=DEPLOY_BRANCH=main
 Environment=DEPLOY_RUNTIME=systemd
 Environment=DEPLOY_KEEP_RELEASES=3
 # Deploy key for the private repository, installed out of band.
-Environment="GIT_SSH_COMMAND=ssh -i /var/lib/usstocks/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+#
+# UserKnownHostsFile is not optional here. This unit runs as root, so ssh would
+# otherwise consult /root/.ssh/known_hosts -- while the operator installed
+# GitHub's host keys under the service account, following the setup in
+# docs/aws-deployment.md. The manual first clone runs as usstocks and succeeds;
+# the identical command from this unit fails with "No ED25519 host key is known
+# for github.com", which reads like a broken deploy key rather than a file
+# lookup in the wrong home directory.
+#
+# StrictHostKeyChecking stays yes. The failure above is that setting working
+# correctly on an empty known_hosts; relaxing it would trade a clear error for
+# an unauthenticated first connection.
+Environment="GIT_SSH_COMMAND=ssh -i /var/lib/usstocks/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/var/lib/usstocks/.ssh/known_hosts"
 ExecStart=/opt/usstocks/app/deploy/agent/deploy-agent.sh
 TimeoutStartSec=900
 
