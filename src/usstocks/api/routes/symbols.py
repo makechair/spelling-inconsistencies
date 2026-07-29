@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from collections import OrderedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -14,6 +16,51 @@ from ..schemas import SymbolOut, SymbolUpsert
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/symbols", tags=["symbols"])
+
+# Provider search results, keyed by the normalised query.
+#
+# Typing a ticker produces a request per debounced keystroke -- "M", "MU" -- and
+# the same prefixes recur every time the box is used. Against a 50 calls/hour
+# allowance shared with backfill, that is the difference between looking up a
+# few symbols and spending the hour's budget on autocomplete.
+#
+# Bounded and short-lived: the ticker universe barely moves, but a stale entry
+# should not outlive a session.
+_SEARCH_CACHE_TTL = 600.0
+_SEARCH_CACHE_MAX = 256
+_search_cache: OrderedDict[str, tuple[float, list[SymbolOut]]] = OrderedDict()
+
+
+def _cached_search(key: str) -> list[SymbolOut] | None:
+    entry = _search_cache.get(key)
+    if entry is None:
+        return None
+    stored_at, results = entry
+    if time.monotonic() - stored_at > _SEARCH_CACHE_TTL:
+        del _search_cache[key]
+        return None
+    _search_cache.move_to_end(key)
+    return results
+
+
+async def _spend_search_budget(state: AppState) -> bool:
+    """Take one token for a provider search, or report that none is available.
+
+    Search used to call the provider directly, off the bucket entirely. The
+    calls still counted against the plan, so the hourly allowance drained
+    invisibly and /api/health reported fewer calls than had actually been made
+    -- the meter that exists to answer exactly this question (spec-review A-2).
+    """
+    if state.rest_budget is None:
+        return True
+    return await state.rest_budget.acquire(1, timeout=0.0)
+
+
+def _store_search(key: str, results: list[SymbolOut]) -> None:
+    _search_cache[key] = (time.monotonic(), results)
+    _search_cache.move_to_end(key)
+    while len(_search_cache) > _SEARCH_CACHE_MAX:
+        _search_cache.popitem(last=False)
 
 
 @router.get("", response_model=list[SymbolOut])
@@ -49,11 +96,23 @@ async def search_symbols(
 
     remote: list[SymbolOut] = []
     if len(local) < limit and state.adapter is not None:
-        try:
-            results = await state.adapter.search_symbols(q, limit=limit)
-        except AdapterError as exc:
-            log.warning("provider symbol search failed: %s", exc)
+        cache_key = f"{needle}:{limit}"
+        cached = _cached_search(cache_key)
+        if cached is not None:
             results = []
+            remote = [entry for entry in cached if entry.symbol not in {i.symbol for i in local}]
+        elif not await _spend_search_budget(state):
+            # Degrade to local matches rather than failing. Backfill is the
+            # better use of a nearly-empty allowance: a search the user can
+            # retry costs them a moment, a gap never filled is lost history.
+            log.warning("symbol search skipped: REST budget exhausted")
+            results = []
+        else:
+            try:
+                results = await state.adapter.search_symbols(q, limit=limit)
+            except AdapterError as exc:
+                log.warning("provider symbol search failed: %s", exc)
+                results = []
         # `seen` grows as results are accepted, not just from the local list.
         # The provider's search returns one row per listing, so a symbol quoted
         # on more than one venue arrives twice -- MU comes back as two identical
@@ -73,6 +132,8 @@ async def search_symbols(
                     asset_type=item.get("asset_type") or None,
                 )
             )
+        if results:
+            _store_search(cache_key, remote)
 
     combined = [SymbolOut.from_info(info) for info in local] + remote
     return combined[:limit]

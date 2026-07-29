@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from fastapi import Request
 
 from ..adapters.base import MarketDataAdapter
+from ..collector.ratelimit import RestBudget
 from ..config import Settings
 from ..db.live_store import LiveStore
 from ..db.repository import Repository
@@ -25,6 +26,11 @@ class AppState:
     live_store: LiveStore
     verifier: AccessVerifier | None
     adapter: MarketDataAdapter | None = None
+    # Provider search spends the same hourly allowance as collector
+    # backfill. The bucket is SQLite-backed, so both processes count into
+    # one place; without this the API spends quota the collector cannot
+    # see, and /api/health under-reports what was actually used.
+    rest_budget: RestBudget | None = None
 
     def close(self) -> None:
         self.repository.close()

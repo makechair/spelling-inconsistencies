@@ -170,14 +170,21 @@ const changeClass = (value) => (value == null ? '' : value >= 0 ? 'up' : 'down')
 
 let searchTimer = null;
 
+/* Every uncached search spends one of 50 REST calls per hour, shared with the
+ * collector's backfill (docs/spec-review.md A-2). Two letters and a longer
+ * pause cut the number of distinct prefixes a lookup produces: a single letter
+ * matches most of the universe and is never the query the user meant. */
+const SEARCH_MIN_LENGTH = 2;
+const SEARCH_DEBOUNCE_MS = 400;
+
 el.search.addEventListener('input', () => {
   clearTimeout(searchTimer);
   const query = el.search.value.trim();
-  if (query.length < 1) {
+  if (query.length < SEARCH_MIN_LENGTH) {
     el.results.hidden = true;
     return;
   }
-  searchTimer = setTimeout(() => runSearch(query), 220);
+  searchTimer = setTimeout(() => runSearch(query), SEARCH_DEBOUNCE_MS);
 });
 
 el.search.addEventListener('blur', () => {

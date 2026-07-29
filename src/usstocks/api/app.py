@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..adapters.registry import build_adapter
+from ..collector.ratelimit import RestBudget
 from ..config import Settings, get_settings
 from ..db.live_store import LiveStore
 from ..db.migrate import migrate, migrate_live
@@ -65,6 +66,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
             adapter=adapter,
         )
+        if adapter is not None:
+            state.rest_budget = RestBudget(
+                state.repository,
+                adapter.name,
+                per_hour=settings.rest_calls_per_hour,
+                per_day=settings.rest_calls_per_day,
+                monthly_bandwidth_bytes=settings.monthly_bandwidth_bytes,
+            )
         app.state.app_state = state
         log.info(
             "api ready (auth=%s, db=%s)", settings.auth_mode, settings.db_path

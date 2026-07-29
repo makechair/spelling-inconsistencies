@@ -143,6 +143,10 @@ def test_search_deduplicates_provider_results(client: TestClient, monkeypatch):
     async def duplicated(self, query: str, limit: int = 20) -> list[dict[str, str]]:
         return [dict(entry), dict(entry)]
 
+    from usstocks.api.routes import symbols as symbols_route
+
+    symbols_route._search_cache.clear()
+
     monkeypatch.setattr(MockAdapter, "search_symbols", duplicated)
 
     results = client.get("/api/symbols/search", params={"q": "MU"}).json()
@@ -271,3 +275,64 @@ def test_index_is_served(client: TestClient):
     response = client.get("/")
     assert response.status_code == 200
     assert "Lightweight Charts" in response.text
+
+
+def test_repeated_search_does_not_hit_the_provider_twice(client: TestClient, monkeypatch):
+    """Autocomplete must not be what spends the hourly allowance.
+
+    A debounced box issues one request per prefix, and the same prefixes recur
+    every time it is used. Against 50 calls/hour shared with backfill, that is
+    the whole budget.
+    """
+    from usstocks.api.routes import symbols as symbols_route
+
+    symbols_route._search_cache.clear()
+    calls: list[str] = []
+
+    async def counting(self, query: str, limit: int = 20) -> list[dict[str, str]]:
+        calls.append(query)
+        return [{"symbol": "MU", "name": "Micron Technology Inc",
+                 "exchange": "NASDAQ", "asset_type": "Stock"}]
+
+    monkeypatch.setattr(MockAdapter, "search_symbols", counting)
+
+    first = client.get("/api/symbols/search", params={"q": "MU"}).json()
+    second = client.get("/api/symbols/search", params={"q": "MU"}).json()
+
+    assert calls == ["MU"]
+    assert [item["symbol"] for item in first] == ["MU"]
+    assert second == first
+
+
+def test_search_degrades_to_local_when_the_budget_is_gone(
+    client: TestClient, settings: Settings, monkeypatch
+):
+    """A search the user can retry is a better thing to lose than a gap that is
+    never backfilled, so an exhausted allowance returns local matches instead of
+    an error."""
+    from usstocks.api.routes import symbols as symbols_route
+
+    symbols_route._search_cache.clear()
+    with Repository(settings.db_path) as repo:
+        repo.upsert_symbol(SymbolInfo(symbol="AAPL", name="Apple Inc."))
+
+    called = False
+
+    async def should_not_run(self, query: str, limit: int = 20) -> list[dict[str, str]]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(MockAdapter, "search_symbols", should_not_run)
+
+    async def exhausted(self, tokens: int = 1, timeout: float | None = None) -> bool:
+        return False
+
+    from usstocks.collector.ratelimit import RestBudget
+
+    monkeypatch.setattr(RestBudget, "acquire", exhausted)
+
+    results = client.get("/api/symbols/search", params={"q": "AAPL"}).json()
+
+    assert called is False
+    assert [item["symbol"] for item in results] == ["AAPL"]
