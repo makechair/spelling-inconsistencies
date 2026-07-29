@@ -35,6 +35,9 @@ from datetime import UTC, datetime
 import websockets
 
 DEFAULT_URL = "wss://stream.data.alpaca.markets/v2/iex"
+# Streams synthetic data at all hours, and only on this host. Useful to prove
+# credentials and the socket path work before concluding anything about a plan.
+TEST_URL = "wss://stream.data.alpaca.markets/v2/test"
 
 
 def stamp() -> str:
@@ -119,8 +122,11 @@ async def probe(
         print("  rather than continuously.")
     elif frames:
         print("\n  Handshake only. Market closed, or this plan carries no live data")
-        print("  for these channels. Try --symbols FAKEPACA, which the provider")
-        print("  streams around the clock for exactly this check.")
+        print("  for these channels. To separate connectivity from entitlement,")
+        print("  use the provider's test stream, which runs around the clock:")
+        print("    --url wss://stream.data.alpaca.markets/v2/test --symbols FAKEPACA")
+        print("  FAKEPACA exists only there; asking for it on /v2/iex subscribes")
+        print("  cleanly and then stays silent, which looks like this same result.")
     else:
         print("\n  Nothing at all: check the credentials and the URL.")
     return 0 if (trades or bars) else 1

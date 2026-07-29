@@ -169,6 +169,27 @@ class AlpacaAdapter(MarketDataAdapter):
             if kind == "error":
                 log.warning("alpaca stream error: %s", message.get("msg"))
                 continue
+            if kind in {"c", "x"}:
+                # Subscribing to trades subscribes to two companion channels as
+                # well -- corrections and cancelErrors -- because an exchange can
+                # retract or restate a trade it already reported. Those arrive
+                # here, and this adapter has nothing to do with them: a bar
+                # already aggregated from the retracted trade keeps a price the
+                # exchange withdrew.
+                #
+                # The impact is one minute's extremes moving slightly, and the
+                # REST view of that minute is authoritative (spec-review B-5) --
+                # but backfill only visits minutes with gaps, so a minute filled
+                # live is never re-fetched and never corrected. Logged rather
+                # than silently dropped so the frequency is knowable before
+                # deciding whether it earns the re-backfill path.
+                log.warning(
+                    "alpaca %s for %s at %s: bar may retain a retracted trade",
+                    "correction" if kind == "c" else "cancel",
+                    message.get("S"),
+                    message.get("t"),
+                )
+                continue
             timestamp = _parse_timestamp(message.get("t"))
             symbol = str(message.get("S") or "").upper()
             if timestamp is None or not symbol:

@@ -225,3 +225,24 @@ def test_alpaca_feed_drives_both_rest_and_websocket():
 
     override = AlpacaAdapter("k", "s", feed="sip", ws_url="wss://example.test/v2/sip")
     assert override._ws_url == "wss://example.test/v2/sip"
+
+
+def test_alpaca_logs_trade_corrections_instead_of_dropping_them(caplog):
+    """Subscribing to trades also subscribes to corrections and cancelErrors.
+
+    The provider names both channels in its subscription acknowledgement, which
+    is easy to read as a fault; it is not. What is a real gap is that this
+    adapter has no use for those messages, so a bar aggregated from a trade the
+    exchange later retracted keeps the withdrawn price. Backfill will not repair
+    it either -- it visits only minutes with gaps. Logging makes the frequency
+    observable rather than invisible.
+    """
+    raw = (
+        '[{"T":"x","S":"AAPL","i":123,"p":211.55,"s":100,'
+        '"t":"2026-07-27T14:30:15.123456789Z","x":"V","z":"C","a":"CANC"}]'
+    )
+    with caplog.at_level("WARNING"):
+        events = AlpacaAdapter("k", "s")._parse_message(raw)
+
+    assert events == []
+    assert any("cancel" in record.getMessage() for record in caplog.records)
