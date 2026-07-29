@@ -384,7 +384,10 @@ function applyStatus(status) {
   if (!status.connected) {
     setConnection('down', status.last_error ? '収集停止' : '未接続');
   } else {
-    setConnection('live', `接続中 · ${status.source ?? ''}`);
+    // The provider name is not shown here for the same reason the chart note
+    // stopped printing it: on a single-source install it is the same word every
+    // time. A mixed range still says so under the chart, where it matters.
+    setConnection('live', '接続中');
   }
   const parts = [];
   if (status.subscribed_symbols) {
