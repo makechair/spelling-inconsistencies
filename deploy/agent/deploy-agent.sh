@@ -50,8 +50,27 @@ cleanup_temp() {
 }
 trap cleanup_temp EXIT
 
+# Every git command runs as the service account, never as root.
+#
+# The unit is root so it can swap the /opt symlink and restart units, but the
+# checkout belongs to usstocks. Fetching as root leaves root-owned objects and
+# a root-owned .git/FETCH_HEAD inside a tree the service account owns, and the
+# next manual command there dies with "cannot open '.git/FETCH_HEAD':
+# Permission denied" -- after the deploy that caused it has already finished.
+# Keeping one writer keeps the ownership uniform.
+#
+# GIT_SSH_COMMAND has to be passed explicitly: runuser builds a fresh
+# environment, and losing it would drop the deploy key and the known_hosts
+# path together.
+git_as_service_account() {
+  runuser -u "${PROJECT}" -- env \
+    HOME="/var/lib/${PROJECT}" \
+    GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-}" \
+    git "$@"
+}
+
 git_repo() {
-  git -c "safe.directory=${REPO_DIR}" -C "${REPO_DIR}" "$@"
+  git_as_service_account -c "safe.directory=${REPO_DIR}" -C "${REPO_DIR}" "$@"
 }
 
 atomic_current_link() {
@@ -276,7 +295,8 @@ if [[ ! -d "${REPO_DIR}/.git" ]]; then
   }
   REPO_URL="$(<"${REPO_URL_FILE}")"
   log "first run: cloning ${REPO_URL}"
-  git clone --branch "${BRANCH}" "${REPO_URL}" "${REPO_DIR}"
+  install -d -o "${PROJECT}" -g "${PROJECT}" -m 0750 "$(dirname "${REPO_DIR}")"
+  git_as_service_account clone --branch "${BRANCH}" "${REPO_URL}" "${REPO_DIR}"
 fi
 
 git_repo remote set-branches origin "${BRANCH}" >/dev/null 2>&1 || true
