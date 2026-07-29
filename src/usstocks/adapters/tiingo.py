@@ -106,6 +106,24 @@ class TiingoAdapter(MarketDataAdapter):
             # re-write a whole day, and hide the real size of what was missing.
             if timestamp < start or timestamp > end:
                 continue
+            # Minutes with no trades are dropped, not stored flat.
+            #
+            # The resampler emits a bar for every minute in the range regardless
+            # of activity, carrying the previous close as open/high/low/close
+            # with volume 0 -- `forceFill=false` does not suppress it:
+            #
+            #   {"date":"...T12:06:00.000Z","open":334.53,"high":334.53,
+            #    "low":334.53,"close":334.53,"volume":0.0}
+            #
+            # Keeping those draws a flat line across hours when nothing traded,
+            # which reads as a price holding steady rather than as an absence of
+            # trading. On a thin listing that is most of the extended session.
+            # The collector never invents such a bar from the live stream, and
+            # the spec forbids showing movement that did not happen, so history
+            # must not introduce them either. A gap is the honest rendering.
+            volume = _optional_int(item.get("volume"))
+            if not volume:
+                continue
             try:
                 bars.append(
                     Bar(
@@ -116,7 +134,7 @@ class TiingoAdapter(MarketDataAdapter):
                         high=float(item["high"]),
                         low=float(item["low"]),
                         close=float(item["close"]),
-                        volume=int(item.get("volume") or 0),
+                        volume=volume,
                         vwap=_optional_float(item.get("vwap")),
                         trade_count=_optional_int(item.get("tradesDone")),
                         source=self.name,

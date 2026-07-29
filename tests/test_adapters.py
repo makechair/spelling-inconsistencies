@@ -163,3 +163,45 @@ def test_tiingo_omits_threshold_level_unless_configured():
     closed, which looks like a network fault rather than a settings problem."""
     assert TiingoAdapter("k")._threshold_level is None
     assert TiingoAdapter("k", threshold_level=5)._threshold_level == 5
+
+
+def test_tiingo_drops_minutes_with_no_trades():
+    """The resampler fills every minute in the range whether or not it traded.
+
+    `forceFill=false` does not suppress it: a quiet minute comes back carrying
+    the previous close as open/high/low/close with volume 0. Stored, those draw
+    a flat line across hours of no trading, which reads as a price holding
+    steady rather than as an absence of trading -- and on a thin listing it is
+    most of the extended session.
+    """
+    import asyncio
+
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {"date": "2026-07-27T14:05:00.000Z", "open": 334.52, "high": 334.53,
+                 "low": 334.52, "close": 334.53, "volume": 25.0},
+                # Carried price, nothing traded.
+                {"date": "2026-07-27T14:06:00.000Z", "open": 334.53, "high": 334.53,
+                 "low": 334.53, "close": 334.53, "volume": 0.0},
+                {"date": "2026-07-27T14:07:00.000Z", "open": 334.53, "high": 335.10,
+                 "low": 334.53, "close": 335.00, "volume": 812.0},
+            ],
+        )
+
+    adapter = TiingoAdapter("test-key")
+    adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    bars = asyncio.run(
+        adapter.fetch_bars(
+            "AAPL",
+            datetime(2026, 7, 27, 14, 0, tzinfo=UTC),
+            datetime(2026, 7, 27, 15, 0, tzinfo=UTC),
+        )
+    )
+
+    assert [bar.timestamp.minute for bar in bars] == [5, 7]
+    assert [bar.volume for bar in bars] == [25, 812]
