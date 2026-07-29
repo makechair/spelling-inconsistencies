@@ -241,11 +241,35 @@ curl -sS https://api.github.com/meta \
 # 登録された内容を目視確認する
 sudo -u usstocks ssh-keygen -lf /var/lib/usstocks/.ssh/known_hosts
 
-# 3. デプロイエージェントを有効化
+# 3. 最初のクローンだけは手で行う
+#
+# エージェント自身もリポジトリが無ければ clone するが、それでは初回を賄えない。
+# systemd ユニットの ExecStart はリポジトリ内のスクリプトを指しているので、
+# リポジトリが無ければスクリプトも無く、エージェントは一度も起動できない。
+# 鶏と卵になるため、最初の1回だけ人間が断ち切る。
+sudo -u usstocks \
+  GIT_SSH_COMMAND='ssh -i /var/lib/usstocks/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes' \
+  git clone --branch main "$(sudo cat /etc/usstocks/repo-url)" /opt/usstocks/app
+
+# 4. デプロイエージェントを有効化
 sudo cp /opt/usstocks/app/deploy/agent/usstocks-deploy.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now usstocks-deploy.timer
+
+# 5. 初回起動を待たずに動かす（タイマーは2分間隔）
+sudo systemctl start usstocks-deploy.service
+journalctl -u usstocks-deploy -f
 ```
+
+`docker compose up` を手で叩く必要はない。エージェントが env のシンボリックリンク
+（`/etc/usstocks/usstocks.env` → `/opt/usstocks/app/.env`）を張り、ビルドと起動と
+`/api/livez` の確認までを行う。
+
+なお 3. でクローンした直後は `HEAD` が `origin/main` と一致するため、リビジョン
+だけを見るとエージェントは「更新なし」と判断しうる。**起動しているサービス数も
+見て**、3つ揃っていなければ差分が無くても起動する。「差分が無ければ再起動しない」
+という原則（WebSocket を切らないため）が、初回起動を巻き添えにしないようにして
+ある。
 
 ## 6. GitHub 側の設定
 
