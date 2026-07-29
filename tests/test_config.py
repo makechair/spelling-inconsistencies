@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from usstocks.config import Settings
 
 
@@ -37,3 +39,29 @@ def test_csv_env_values_are_split():
     assert settings.source_priority == ["tiingo", "alpaca"]
     # Emails are lowercased so the allow-list check is case-insensitive.
     assert settings.allowed_emails == ["a@example.com", "b@example.com"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("owner@example.com", ["owner@example.com"]),
+        ("A@Example.com, b@example.com", ["a@example.com", "b@example.com"]),
+        ('["owner@example.com"]', ["owner@example.com"]),
+    ],
+)
+def test_list_fields_parse_from_the_environment(monkeypatch, raw, expected):
+    """The path production actually uses.
+
+    test_csv_env_values_are_split constructs Settings directly, which skips the
+    settings source entirely. pydantic-settings JSON-decodes list-typed fields
+    inside that source, so for a long time the plain address documented in
+    .env.example raised SettingsError on the instance while the suite stayed
+    green.
+    """
+    monkeypatch.setenv("USSTOCKS_ALLOWED_EMAILS", raw)
+    assert Settings().allowed_emails == expected
+
+
+def test_source_priority_parses_from_the_environment(monkeypatch):
+    monkeypatch.setenv("USSTOCKS_SOURCE_PRIORITY", "alpaca, tiingo")
+    assert Settings().source_priority == ["alpaca", "tiingo"]

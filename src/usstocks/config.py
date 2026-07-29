@@ -6,12 +6,13 @@ See ``.env.example`` for the full list.
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -41,7 +42,9 @@ class Settings(BaseSettings):
     # Order in which sources win when the same (symbol, minute) exists twice.
     # Spec gap B-1: the spec makes `source` part of the unique key but never
     # says which row to draw.
-    source_priority: list[str] = Field(default_factory=lambda: ["tiingo", "alpaca"])
+    source_priority: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["tiingo", "alpaca"]
+    )
 
     tiingo_api_key: str | None = None
     tiingo_rest_base: str = "https://api.tiingo.com"
@@ -104,7 +107,7 @@ class Settings(BaseSettings):
     auth_mode: AuthMode = "cloudflare_access"
     cf_access_team_domain: str | None = None  # e.g. "myteam.cloudflareaccess.com"
     cf_access_aud: str | None = None
-    allowed_emails: list[str] = Field(default_factory=list)
+    allowed_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
     jwks_cache_seconds: int = 3_600
 
     # ----------------------------------------------------------------- misc
@@ -114,8 +117,26 @@ class Settings(BaseSettings):
     @field_validator("source_priority", "allowed_emails", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
+        """Accept ``a@b.com,c@d.com`` as well as a JSON array.
+
+        Both fields carry ``NoDecode`` for this to be reachable. pydantic-settings
+        treats a ``list`` field as complex and JSON-decodes it inside the
+        environment source, before any model validator runs -- so without
+        ``NoDecode`` the obvious value fails several frames deep:
+
+            json.decoder.JSONDecodeError: Expecting value: line 1 column 1
+            SettingsError: error parsing value for field "allowed_emails"
+
+        which names neither the variable's content nor the accepted format. This
+        validator existed and looked like it handled the plain form; it was only
+        ever exercised by constructing Settings directly in tests, where the
+        decoding step does not apply.
+        """
         if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
+            text = value.strip()
+            if text.startswith("["):
+                return json.loads(text)
+            return [item.strip() for item in text.split(",") if item.strip()]
         return value
 
     @field_validator("allowed_emails")
