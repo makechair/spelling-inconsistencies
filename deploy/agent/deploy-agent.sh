@@ -75,6 +75,14 @@ git_repo() {
 
 atomic_current_link() {
   local target="$1"
+  # A link to itself is unrecoverable without manual repair: every path through
+  # it, including the one the units use to find the interpreter, fails with
+  # ELOOP rather than ENOENT, and the message names symbolic links instead of
+  # the release that is missing.
+  if [[ -z "${target}" || "${target}" == "${CURRENT_LINK}" ]]; then
+    log "refusing to point ${CURRENT_LINK} at ${target:-<empty>}"
+    return 1
+  fi
   TEMP_LINK="${CURRENT_LINK}.tmp.$$"
   rm -f -- "${TEMP_LINK}"
   ln -s "${target}" "${TEMP_LINK}"
@@ -82,10 +90,19 @@ atomic_current_link() {
   TEMP_LINK=""
 }
 
+# The release `current` resolves to, or empty when there is none.
+#
+# readlink -e, not -f: -f prints the path even when the final component does
+# not exist, so on a first deployment it reports the link itself as though it
+# were a release directory.
+resolved_current() {
+  readlink -e "${CURRENT_LINK}" 2>/dev/null || true
+}
+
 systemd_release_is_current() {
   local sha="$1"
   local target=""
-  target="$(readlink -f "${CURRENT_LINK}" 2>/dev/null || true)"
+  target="$(resolved_current)"
   [[ "${target}" == "${RELEASES_DIR}/${sha}" ]] &&
     [[ -x "${target}/venv/bin/python" ]] &&
     [[ -d "${target}/web" ]]
@@ -170,7 +187,12 @@ rollback_systemd_release() {
   else
     log "no previous release exists; stopping failed first deployment"
     systemctl stop usstocks-api.service usstocks-collector.service || true
-    [[ -L "${CURRENT_LINK}" ]] && unlink "${CURRENT_LINK}"
+    # An if, not `[[ ... ]] && unlink`: under set -e the && form makes the
+    # whole function return non-zero whenever the link is already absent,
+    # which is the ordinary case here.
+    if [[ -L "${CURRENT_LINK}" ]]; then
+      unlink "${CURRENT_LINK}"
+    fi
   fi
 }
 
@@ -187,7 +209,7 @@ cleanup_old_releases() {
   }
   (( KEEP_RELEASES >= 2 )) || KEEP_RELEASES=2
 
-  current_target="$(readlink -f "${CURRENT_LINK}" 2>/dev/null || true)"
+  current_target="$(resolved_current)"
   while IFS= read -r entry; do
     entries+=("${entry}")
   done < <(
@@ -220,7 +242,7 @@ deploy_systemd() {
   install -d -o usstocks -g usstocks -m 0750 "${PIP_CACHE_DIR}"
   build_systemd_release "${sha}"
 
-  previous_target="$(readlink -f "${CURRENT_LINK}" 2>/dev/null || true)"
+  previous_target="$(resolved_current)"
   log "switching current -> ${sha:0:8}"
   atomic_current_link "${release_dir}"
 
