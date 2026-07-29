@@ -18,6 +18,16 @@
     <ul id="search-results" class="search-results" hidden></ul>
   </div>
 
+  <label class="tz" for="tz-select">
+    <span class="visually-hidden">表示時間帯</span>
+    <select id="tz-select" title="チャートと時刻の表示に使う時間帯">
+      <option value="America/New_York">市場時間 (ET)</option>
+      <option value="Asia/Tokyo">日本時間 (JST)</option>
+      <option value="local">ブラウザの時間帯</option>
+      <option value="UTC">UTC</option>
+    </select>
+  </label>
+
   <div class="conn" id="conn-indicator" title="データ受信状態">
     <span class="dot" id="conn-dot"></span>
     <span id="conn-label">接続中…</span>

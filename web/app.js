@@ -14,6 +14,7 @@
  */
 
 import { PriceChart } from './chart.js';
+import { formatTime, onChange, selected, setZone, zoneLabel } from './timezone.js';
 
 const state = {
   symbols: [],          // watchlist entries
@@ -45,6 +46,7 @@ const el = {
   quoteSource: document.getElementById('quote-source'),
   connDot: document.getElementById('conn-dot'),
   connLabel: document.getElementById('conn-label'),
+  tz: document.getElementById('tz-select'),
   chartNote: document.getElementById('chart-note'),
   footerStatus: document.getElementById('footer-status'),
   exportLink: document.getElementById('export-link'),
@@ -77,12 +79,9 @@ const fmtSigned = (value, digits = 2) =>
 
 function fmtClock(iso) {
   if (!iso) return '—';
-  const date = new Date(iso);
-  return date.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  // Same zone as the chart axis, and labelled. These two used to disagree
+  // silently: the axis rendered UTC while this used the browser's zone.
+  return `${formatTime(new Date(iso), { seconds: true })} ${zoneLabel()}`;
 }
 
 async function api(path, options = {}) {
@@ -418,6 +417,19 @@ function setConnection(kind, label) {
   el.connDot.className = `dot ${kind === 'idle' ? '' : kind}`;
   el.connLabel.textContent = label;
 }
+
+/* --------------------------------------------------------------- timezone */
+
+el.tz.value = selected();
+el.tz.addEventListener('change', () => setZone(el.tz.value));
+
+// The chart re-applies its own formatters; this repaints the panel fields that
+// carry a time, so the whole screen changes zone together rather than in two
+// steps.
+onChange(() => {
+  renderQuote();
+  renderWatchlist();
+});
 
 /* ------------------------------------------------------------------- boot */
 

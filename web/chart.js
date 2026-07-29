@@ -10,6 +10,8 @@
  *   gap, which is the honest rendering: the spec forbids inventing movement.
  */
 
+import { formatDate, formatTime, onChange } from './timezone.js';
+
 const UP = '#26a69a';
 const DOWN = '#ef5350';
 
@@ -43,6 +45,10 @@ export class PriceChart {
     this.themeQuery.addEventListener('change', () => {
       this.chart.applyOptions(this.#options());
     });
+
+    // Re-applying the options rebuilds both formatters, so the axis follows a
+    // zone change without reloading the series.
+    onChange(() => this.chart.applyOptions(this.#options()));
   }
 
   #options() {
@@ -62,13 +68,19 @@ export class PriceChart {
         borderColor: light ? '#d0d7de' : '#2a313a',
         timeVisible: true,
         secondsVisible: false,
+        // Without a formatter the axis is UTC. Lightweight Charts reads the
+        // UNIX seconds as UTC and renders them as-is; `locale` alone changes
+        // only the wording. The day is shown at each boundary because an
+        // intraday axis in market time crosses midnight in most zones.
+        tickMarkFormatter: (time, tickMarkType) =>
+          tickMarkType >= LightweightCharts.TickMarkType.DayOfMonth
+            ? formatDate(time)
+            : formatTime(time),
       },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       localization: {
-        // Bars are stored UTC; the axis shows the viewer's local clock, which
-        // for the intended user is JST and for the market is ET. The quote
-        // panel spells the timezone out to avoid ambiguity.
         locale: navigator.language || 'en-US',
+        timeFormatter: (time) => `${formatDate(time)} ${formatTime(time)}`,
       },
     };
   }

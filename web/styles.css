@@ -225,3 +225,38 @@ body {
   .content { padding: 10px 12px; }
   .chart { min-height: 260px; }
 }
+
+/* Timezone selector in the top bar. Sits between search and the connection
+   indicator; on narrow screens the label collapses to the select alone. */
+.topbar .tz {
+  display: flex;
+  align-items: center;
+}
+
+.topbar .tz select {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border, #2a313a);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.topbar .tz select:focus-visible {
+  outline: 2px solid #388bfd;
+  outline-offset: 1px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
