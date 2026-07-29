@@ -12,6 +12,22 @@
 
 import { formatDate, formatTime, onChange } from './timezone.js';
 
+function row(label, value) {
+  const item = document.createElement('span');
+  item.className = 'legend-item';
+  if (label) {
+    const key = document.createElement('span');
+    key.className = 'legend-key';
+    key.textContent = label;
+    item.appendChild(key);
+  }
+  const val = document.createElement('span');
+  val.className = 'legend-value';
+  val.textContent = value;
+  item.appendChild(val);
+  return item;
+}
+
 const UP = '#26a69a';
 const DOWN = '#ef5350';
 
@@ -31,12 +47,30 @@ export class PriceChart {
     this.volume = this.chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
+      // The overlay scale draws no axis, so its last-value badge is a number
+      // with nothing to read it against -- and it lands on top of the price
+      // badge. The legend below carries the figure instead.
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
     this.chart.priceScale('volume').applyOptions({
       scaleMargins: { top: 0.82, bottom: 0 },
     });
+    // Reserve the bottom quarter for volume. Without this the candles use the
+    // full height and a low price prints straight through the bars, leaving
+    // two unrelated series drawn over each other.
+    this.chart.priceScale('right').applyOptions({
+      scaleMargins: { top: 0.08, bottom: 0.24 },
+    });
+
+    this.legend = document.createElement('div');
+    this.legend.className = 'chart-legend';
+    container.appendChild(this.legend);
+    this.chart.subscribeCrosshairMove((param) => this.#renderLegend(param));
 
     this.lastTime = null;
+    this.lastCandle = null;
+    this.lastVolume = null;
     this.observer = new ResizeObserver(() => this.#resize());
     this.observer.observe(container);
     this.#resize();
@@ -85,6 +119,36 @@ export class PriceChart {
     };
   }
 
+  /**
+   * Values under the crosshair, falling back to the newest bar.
+   *
+   * The volume series has no axis of its own -- an overlay scale draws none --
+   * so without this its bars are a shape with no magnitude, and there is
+   * nothing on screen saying they are volume at all.
+   */
+  #renderLegend(param) {
+    const candle = param?.seriesData?.get(this.candles) ?? this.lastCandle;
+    const volume = param?.seriesData?.get(this.volume) ?? this.lastVolume;
+    if (!candle) {
+      this.legend.textContent = '';
+      return;
+    }
+    const price = (value) =>
+      value == null ? '—' : value.toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    const time = param?.time ?? candle.time;
+    this.legend.replaceChildren(
+      row('始', price(candle.open)),
+      row('高', price(candle.high)),
+      row('安', price(candle.low)),
+      row('終', price(candle.close)),
+      row('出来高', volume?.value == null ? '—' : volume.value.toLocaleString()),
+      row('', time ? `${formatDate(time)} ${formatTime(time)}` : ''),
+    );
+  }
+
   #resize() {
     const { clientWidth, clientHeight } = this.container;
     if (clientWidth > 0 && clientHeight > 0) {
@@ -108,6 +172,9 @@ export class PriceChart {
     }));
     this.candles.setData(candles);
     this.volume.setData(volumes);
+    this.lastCandle = candles.length ? candles[candles.length - 1] : null;
+    this.lastVolume = volumes.length ? volumes[volumes.length - 1] : null;
+    this.#renderLegend(null);
     this.lastTime = bars.length ? bars[bars.length - 1].time : null;
     if (bars.length) this.chart.timeScale().fitContent();
   }
@@ -132,12 +199,18 @@ export class PriceChart {
       value: bar.volume,
       color: bar.close >= bar.open ? 'rgba(38,166,154,.5)' : 'rgba(239,83,80,.5)',
     });
+    this.lastCandle = { time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close };
+    this.lastVolume = { time: bar.time, value: bar.volume };
+    this.#renderLegend(null);
     this.lastTime = bar.time;
   }
 
   clear() {
     this.candles.setData([]);
     this.volume.setData([]);
+    this.lastCandle = null;
+    this.lastVolume = null;
+    this.legend.textContent = '';
     this.lastTime = null;
   }
 }

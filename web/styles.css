@@ -194,7 +194,31 @@ body {
 
 /* ----------------------------------------------------------------- chart */
 .chart { flex: 1; min-height: 320px; border: 1px solid var(--border);
-         border-radius: 8px; overflow: hidden; background: var(--panel); }
+         border-radius: 8px; overflow: hidden; background: var(--panel);
+         /* anchors .chart-legend */
+         position: relative; }
+
+/* OHLC and volume for the bar under the crosshair, or the newest one.
+   The volume series is an overlay with no axis of its own, so this is the only
+   place its magnitude is legible -- and the only thing naming it. */
+.chart-legend {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  /* The crosshair must keep tracking the pointer underneath. */
+  pointer-events: none;
+}
+
+.chart-legend .legend-item { white-space: nowrap; }
+.chart-legend .legend-key { margin-right: 3px; opacity: .75; }
+.chart-legend .legend-value { color: var(--text, inherit); font-variant-numeric: tabular-nums; }
 
 .chart-note { color: var(--muted); font-size: 11px; margin: 6px 2px 0; min-height: 1em; }
 
