@@ -274,7 +274,10 @@ def test_security_headers_are_present(client: TestClient):
 def test_index_is_served(client: TestClient):
     response = client.get("/")
     assert response.status_code == 200
-    assert "Lightweight Charts" in response.text
+    # The chart module, not the attribution text: the visible credit is a
+    # presentation choice, while this is the page actually loading its chart.
+    assert "lightweight-charts.standalone.production.js" in response.text
+    assert 'id="chart"' in response.text
 
 
 def test_repeated_search_does_not_hit_the_provider_twice(client: TestClient, monkeypatch):

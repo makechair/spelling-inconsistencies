@@ -43,7 +43,6 @@ const el = {
   quoteChange: document.getElementById('quote-change'),
   quoteSession: document.getElementById('quote-session'),
   quoteUpdated: document.getElementById('quote-updated'),
-  quoteSource: document.getElementById('quote-source'),
   connDot: document.getElementById('conn-dot'),
   connLabel: document.getElementById('conn-label'),
   tz: document.getElementById('tz-select'),
@@ -266,13 +265,16 @@ async function loadBars() {
       : payload.bars.filter((bar) => bar.session === 'regular');
     chart.setBars(bars);
 
+    // The provider is named only when more than one appears in the range.
+    // Spec 5.2 forbids blending providers silently, and that is the case worth
+    // interrupting for -- IEX-only volume is not comparable with consolidated
+    // volume, so a mixed range has a step in it that needs explaining. Naming
+    // the single expected provider on every load says nothing and buries the
+    // one time it matters.
     const sources = [...new Set(bars.map((bar) => bar.source))];
     const notes = [`${bars.length.toLocaleString()} 本`];
     if (sources.length > 1) {
-      // Spec 5.2 forbids blending providers silently; say so on screen.
       notes.push(`提供元が混在: ${sources.join(' / ')}`);
-    } else if (sources.length === 1) {
-      notes.push(`提供元 ${sources[0]}`);
     }
     if (payload.truncated) notes.push('件数上限で切り詰めました');
     if (!bars.length) notes.push('この期間のデータがありません');
@@ -393,7 +395,6 @@ function renderQuote() {
     el.quoteChange.textContent = '';
     el.quoteSession.textContent = '—';
     el.quoteUpdated.textContent = '—';
-    el.quoteSource.textContent = '—';
     return;
   }
 
@@ -402,7 +403,6 @@ function renderQuote() {
   el.quoteChange.textContent =
     live.change == null ? '' : `${fmtSigned(live.change)} (${fmtSigned(live.change_pct)}%)`;
   el.quoteSession.textContent = SESSION_LABEL[live.session] || live.session;
-  el.quoteSource.textContent = live.source;
 
   // Staleness comes from the last trade, so an idle market reads as idle
   // rather than as a broken feed (spec 3.2).

@@ -136,5 +136,5 @@ make lint     # ruff
 ## ライセンスと利用条件
 
 - 本リポジトリのコード: LICENSE を参照。
-- 同梱の Lightweight Charts: Apache License 2.0（`web/vendor/LICENSE-lightweight-charts.txt`）。TradingView への帰属表示を画面下部に常設している。
+- 同梱の Lightweight Charts: Apache License 2.0（`web/vendor/LICENSE-lightweight-charts.txt`）。同ライセンスの義務は**再配布時**に著作権表示とライセンス本文を保持することであり、UI への帰属表示は要求していない。ライセンス本文を同梱することで条件を満たしている。本人しか見ない画面のため、画面上の帰属表示とライブラリ内蔵のロゴ（`layout.attributionLogo`）は無効にしてある。**第三者へ公開する構成に変える場合は、この判断を見直すこと。**
 - **市場データ**: Tiingo / Alpaca の利用条件（個人内部利用）に従うこと。認証を付けても再配信ライセンスが緩和されるわけではない。第三者への公開へ移行する場合は契約を再確認すること（仕様書 4.2）。

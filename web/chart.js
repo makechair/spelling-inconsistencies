@@ -92,6 +92,12 @@ export class PriceChart {
         background: { color: 'transparent' },
         textColor: light ? '#656d76' : '#8b949e',
         fontSize: 11,
+        // The library draws a TradingView logo in the pane by default. The
+        // bundled licence is plain Apache 2.0, whose obligations attach to
+        // distribution -- retaining the notices, which
+        // web/vendor/LICENSE-lightweight-charts.txt does -- and not to what a
+        // private single-user page renders. Turned off here, kept in the repo.
+        attributionLogo: false,
       },
       grid: {
         vertLines: { color: light ? '#eaeef2' : '#1f262e' },
