@@ -90,6 +90,112 @@ MX・SPF（TXT）・DKIM（CNAME/TXT）・DMARC（TXT）が生きているなら
 移行漏れはメール不達に直結する。1.1 の一覧に含まれているので、
 必ずチェックリストに入れる。
 
+## 1.5 `sig-games.com` の調査結果（2026-07-29 実測）
+
+上記の調査を実施した結果、ゾーンの全レコードは5行だった。
+
+```
+sig-games.com.                                    A      ALIAS -> d3job3mbxfy7bw.cloudfront.net.
+sig-games.com.                                    NS     ns-307.awsdns-38.com. 他3件
+sig-games.com.                                    SOA    ns-307.awsdns-38.com. ...
+_de2cfe4f1f83eacb4a39d3480f100a3a.sig-games.com.  CNAME  _4abb4944ca72b1ccf3d8e5fd2d33ece7.zfyfvmchrl.acm-validations.aws.
+_855ab008b7e63654e2a90d0948dcf9ae.www.sig-games.com. CNAME _210f7f32d989966f6e3218bcb4c0ff38.zfyfvmchrl.acm-validations.aws.
+```
+
+判定:
+
+- **DNSSEC は `NOT_SIGNING`。** 1.3 の対応は不要、待ち時間もゼロ。
+- **MX / TXT が存在しない。** このドメインでメールは運用していないので、
+  SPF・DKIM・DMARC の移行漏れリスクはない。
+- ALIAS は apex の1行のみ。
+- ブログの実体は CloudFront ディストリビューション `d3job3mbxfy7bw.cloudfront.net`。
+
+### Cloudflare 側で作成するレコード（これで全部）
+
+| # | Name（Cloudflare の入力欄） | Type | Content | Proxy |
+|---|---|---|---|---|
+| 1 | `sig-games.com` | **CNAME** | `d3job3mbxfy7bw.cloudfront.net` | **DNS only（灰）** |
+| 2 | `_de2cfe4f1f83eacb4a39d3480f100a3a` | CNAME | `_4abb4944ca72b1ccf3d8e5fd2d33ece7.zfyfvmchrl.acm-validations.aws` | DNS only |
+| 3 | `_855ab008b7e63654e2a90d0948dcf9ae.www` | CNAME | `_210f7f32d989966f6e3218bcb4c0ff38.zfyfvmchrl.acm-validations.aws` | DNS only |
+
+`NS` と `SOA` はコピーしない（Cloudflare が自ら管理する）。
+`stocks` は Tunnel が自動作成するので、ここでは作らない。
+
+**#1 は A ではなく CNAME である。** A + IP で作ると、CloudFront のアドレスが
+変わった日にブログが落ちる。1.2 で ALIAS を洗い出したのはこれを防ぐためである。
+
+**#2 と #3 は Cloudflare の自動スキャンでは発見されない。** ACM の検証用レコードは
+ランダムな16進を名前に持ち、スキャンは「よくあるレコード名」しか試さない。
+必ず手で作ること。
+
+### 実際のスキャン結果（2026-07-29）
+
+このゾーンで Add a site を実行した結果、Cloudflare が提示したのは以下だった。
+
+```
+A  sig-games.com  3.175.34.33   Proxied
+A  sig-games.com  3.175.34.56   Proxied
+A  sig-games.com  3.175.34.20   Proxied
+A  sig-games.com  3.175.34.102  Proxied
+```
+
+**4件すべて誤りである。**
+
+- ALIAS を DNS 越しに見た結果の A レコードで、その瞬間の CloudFront のアドレスを
+  焼き付けている。同じ時刻に別の場所から引くと `18.238.136.48` が返っており、
+  **同一名が場所と時刻で違うアドレスを返す**のが CloudFront の正常な挙動である。
+  固定すれば壊れるのは時間の問題にすぎない。
+- 既定で Proxied（オレンジ）になっている。ブログの経路に Cloudflare が割り込む。
+- ACM 検証用 CNAME 2件は、予告どおり1件も発見されていない。
+
+したがって手順は「スキャン結果を承認する」ではなく、**4件を削除し、上の表の3件を
+手で作る**である。
+
+画面に出る2つの案内も、どちらも従わない。
+
+- 「MX を追加せよ」 → このドメインでメールは運用していない（1.5 のとおり
+  Route 53 側にも MX がない）。
+- 「www の A/AAAA/CNAME が必要」 → `www` は移行前から解決しない。ここで作ると
+  移行前後で挙動が変わり、問題が出たときの切り分けができなくなる。
+
+完了時点でレコードは3件、**すべて灰色**。オレンジがゼロの状態が正しい
+（`stocks` は §4 で Tunnel が自動作成し、それだけがオレンジになる）。
+
+そして厄介なのは、**落としてもその場では何も壊れない**ことである。証明書は発行済み
+なのでブログは見え続ける。壊れるのは ACM が自動更新をかける時 — 最大13ヶ月後、
+移行の記憶が完全に消えた頃に、原因不明で HTTPS が切れる。
+
+### 既存の状態としてそのまま再現すること
+
+`www.sig-games.com` は**移行前から名前解決しない**（A/CNAME が存在しない）。
+ACM 証明書には含まれている（#3 の検証レコードがある）ので、CloudFront 側では
+代替ドメイン名として設定済みだが DNS を作っていない状態と見られる。
+
+移行時に「ついでに直す」ことはしない。移行後に問題が出たとき、それが移行由来か
+元からかを切り分けられなくなる。直すなら移行が落ち着いてから別作業として行う。
+
+### 切り替え前の照合（実データ版）
+
+```bash
+CF_NS=xxx.ns.cloudflare.com        # Cloudflare が割り当てたもの
+R53_NS=ns-307.awsdns-38.com
+
+# apex: Route 53 は A、Cloudflare は CNAME を返す。応答の型が違うのは想定どおり。
+# 最終的に解決される先が同じ CloudFront であることを見る。
+dig +short "@$R53_NS" sig-games.com A
+dig +short "@$CF_NS"  sig-games.com A
+
+# ACM 検証レコードは完全一致すること
+for n in _de2cfe4f1f83eacb4a39d3480f100a3a.sig-games.com \
+         _855ab008b7e63654e2a90d0948dcf9ae.www.sig-games.com; do
+  a=$(dig +short "@$R53_NS" "$n" CNAME)
+  b=$(dig +short "@$CF_NS"  "$n" CNAME)
+  [ "$a" = "$b" ] && echo "OK   $n" || echo "DIFF $n: r53=[$a] cf=[$b]"
+done
+```
+
+ACM の2行が `OK`、apex が両方とも CloudFront のアドレスを返せば合格。
+
 ## 2. Cloudflare 側の準備（NS はまだ変えない）
 
 1. 無料アカウントを作成する。
