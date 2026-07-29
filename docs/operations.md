@@ -201,6 +201,37 @@ Parquetを使う場合はrelease venvに`.[parquet]` extraを含めて構築す�
 1GB機ではpyarrowのメモリ消費に注意し、期間を区切って取得する
 （[spec-review D-1](spec-review.md)）。
 
+### 約定の無い足の掃除
+
+Tiingo の1分リサンプルは、**取引が無かった分にも直前終値を持つ足**（始=高=安=終、
+出来高0）を返す。`forceFill=false` を指定しても抑止されない。
+
+```json
+{"date":"...T12:06:00.000Z","open":334.53,"high":334.53,
+ "low":334.53,"close":334.53,"volume":0.0}
+```
+
+これを保存すると、閑散な時間帯が「その価格で推移した」ように描かれる。薄商いの
+銘柄では時間外のほとんどがこれになる。取り込み時に除外するよう修正済みだが、
+**修正前に取り込んだ行は残っている**。
+
+```bash
+# 影響範囲を確認する
+sudo -u usstocks sqlite3 /var/lib/usstocks/market.db \
+  "SELECT symbol, COUNT(*) FROM bars_1m WHERE volume = 0 GROUP BY symbol;"
+
+# 削除する
+sudo -u usstocks sqlite3 /var/lib/usstocks/market.db \
+  "DELETE FROM bars_1m WHERE volume = 0;"
+```
+
+**ライブ収集の足は影響を受けない。**collector は約定が無ければ足を作らないので、
+`volume = 0` の行はRESTから来たものだけである。
+
+削除後、次のバックフィルで取り直されることはない（同じ足は除外されるため）。
+チャートには約定の無い時間帯が**空白**として現れる。これが意図した表示である
+（仕様書3.3「無い動きを描かない」）。
+
 ### 銘柄カタログ（ローカル検索）
 
 ティッカー検索は、提供元の対応銘柄一覧をローカルに持って解決する。検索が
