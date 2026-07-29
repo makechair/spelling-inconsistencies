@@ -1,0 +1,32 @@
+[Unit]
+Description=Cloudflare Tunnel for US stocks chart
+After=network-online.target usstocks-api.service
+Wants=network-online.target usstocks-api.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=usstocks
+Group=usstocks
+EnvironmentFile=/etc/usstocks/usstocks.env
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+Restart=always
+RestartSec=5
+
+MemoryMax=128M
+OOMPolicy=stop
+LimitNOFILE=8192
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

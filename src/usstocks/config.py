@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     late_trade_grace_seconds: int = 90
     # Debounce for publishing live snapshots to the live database.
     live_publish_interval_seconds: float = 0.25
+    # Persist collector liveness even when the market is closed or a watched
+    # symbol produces no trades. This is deliberately much slower than live
+    # publishing so the heartbeat does not create avoidable SQLite churn.
+    collector_status_interval_seconds: float = Field(default=15.0, gt=0, le=30)
     # Spec 10.2 offers three options for second-level data with no decision.
     # Default: do not store (option 1). Set >0 to retain that many days.
     tick_retention_days: int = 0

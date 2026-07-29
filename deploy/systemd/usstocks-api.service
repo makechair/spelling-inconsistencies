@@ -2,21 +2,26 @@
 Description=US stocks chart API and frontend
 After=network-online.target usstocks-collector.service
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=usstocks
 Group=usstocks
-WorkingDirectory=/opt/usstocks
+WorkingDirectory=/var/lib/usstocks
 EnvironmentFile=/etc/usstocks/usstocks.env
-ExecStart=/opt/usstocks/.venv/bin/python -m usstocks.api
+Environment=PYTHONDONTWRITEBYTECODE=1
+# Force durable/live/web paths and loopback binding even if the shared env was
+# copied from a development checkout.
+ExecStart=/usr/bin/env USSTOCKS_DB_PATH=/var/lib/usstocks/market.db USSTOCKS_LIVE_DB_PATH=/dev/shm/usstocks-live.db USSTOCKS_WEB_DIR=/opt/usstocks/current/web USSTOCKS_API_HOST=127.0.0.1 /opt/usstocks/current/venv/bin/python -m usstocks.api
 
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=0
 
 MemoryMax=320M
 OOMPolicy=stop
+LimitNOFILE=8192
+UMask=0027
 
 NoNewPrivileges=true
 PrivateTmp=true
@@ -27,6 +32,7 @@ ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

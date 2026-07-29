@@ -1,0 +1,56 @@
+name: test
+
+# Runs on every push and pull request, with no paths filter.
+#
+# Separate from deploy.yml deliberately. That workflow is gated to infra/**
+# so an application-only change does not spend a Terraform run, but the same
+# filter would also skip the tests -- and application changes are exactly the
+# ones that need them. The instance's pull agent deploys whatever main points
+# at without waiting for a check, so a silent main is a revision that reaches
+# production having run nothing at all.
+#
+# Cheap by construction: one job, no artifacts, no AWS credentials.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests scripts
+
+      - name: Test
+        run: pytest -q
+
+      - name: Shell syntax
+        run: |
+          for script in deploy/agent/deploy-agent.sh \
+                        deploy/systemd/install.sh \
+                        deploy/backup/backup.sh \
+                        deploy/backup/restore.sh; do
+            [ -f "$script" ] || continue
+            bash -n "$script"
+          done

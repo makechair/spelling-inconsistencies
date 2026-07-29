@@ -1,27 +1,30 @@
-# Alternative to Docker Compose (spec 4.6). Use one or the other, not both.
+# Direct-host runtime. Do not run this alongside the Compose collector.
 [Unit]
 Description=US stocks market data collector
 After=network-online.target
 Wants=network-online.target
+# A provider outage can outlast any burst window. Keep retrying indefinitely.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=usstocks
 Group=usstocks
-WorkingDirectory=/opt/usstocks
+WorkingDirectory=/var/lib/usstocks
 EnvironmentFile=/etc/usstocks/usstocks.env
-ExecStart=/opt/usstocks/.venv/bin/python -m usstocks.collector
+Environment=PYTHONDONTWRITEBYTECODE=1
+# Command-level assignments intentionally override any development paths left
+# in the shared EnvironmentFile.
+ExecStart=/usr/bin/env USSTOCKS_DB_PATH=/var/lib/usstocks/market.db USSTOCKS_LIVE_DB_PATH=/dev/shm/usstocks-live.db /opt/usstocks/current/venv/bin/python -m usstocks.collector
 
 # Spec 4.4: restart automatically on abnormal exit.
 Restart=always
 RestartSec=5
-# Do not give up after repeated failures; a provider outage can exceed any
-# burst window and the collector must come back on its own.
-StartLimitIntervalSec=0
-
 # Spec 12: keep one process from taking down a 1 GB instance.
 MemoryMax=320M
 OOMPolicy=stop
+LimitNOFILE=8192
+UMask=0027
 
 NoNewPrivileges=true
 PrivateTmp=true
@@ -32,6 +35,7 @@ ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

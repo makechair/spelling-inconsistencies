@@ -26,7 +26,7 @@ router = APIRouter(tags=["ops"])
 _STARTED_AT = time.time()
 
 # How long without a collector status write before we call it stale. The
-# collector rewrites status at least once per publish cycle.
+# collector emits a low-frequency heartbeat even when no trade arrives.
 STATUS_STALE_SECONDS = 60.0
 
 

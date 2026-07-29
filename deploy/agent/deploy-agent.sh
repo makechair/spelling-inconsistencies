@@ -2,28 +2,264 @@
 #
 # Pull-based application deployment.
 #
-# Why pull and not push: a GitHub Actions runner has no fixed egress address,
-# so an SSH-based deploy would mean opening port 22 to 0.0.0.0/0. That
-# contradicts the closed-ingress design the specification asks for (3.5, 4.5)
-# and that infra/terraform/lightsail.tf enforces. Polling from the instance
-# keeps every connection outbound, exactly like the Cloudflare tunnel.
+# DEPLOY_RUNTIME=systemd (recommended on the 1 GB Lightsail plan):
+#   build an immutable venv release, atomically switch /opt/usstocks/current,
+#   restart only collector/API, health-check, and roll back on failure.
 #
-# Runs on a timer. Checks whether the tracked branch moved; if it did, fetches,
-# rebuilds and restarts. If it did not, exits without touching the services --
-# a restart drops the WebSocket and costs REST budget to backfill.
+# DEPLOY_RUNTIME=compose (compatibility path):
+#   retain the original local Docker image build workflow.
+#
+# The instance initiates every connection. This keeps SSH closed to arbitrary
+# GitHub-hosted runner addresses and consumes no GitHub Actions build minutes.
 set -Eeuo pipefail
 
 PROJECT="${PROJECT:-usstocks}"
 REPO_DIR="${REPO_DIR:-/opt/${PROJECT}/app}"
 BRANCH="${DEPLOY_BRANCH:-main}"
+RUNTIME="${DEPLOY_RUNTIME:-compose}"
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.yml}"
 ENV_FILE="${ENV_FILE:-/etc/${PROJECT}/${PROJECT}.env}"
-LOCK_FILE="/var/lock/${PROJECT}-deploy.lock"
+RELEASES_DIR="${RELEASES_DIR:-/opt/${PROJECT}/releases}"
+CURRENT_LINK="${CURRENT_LINK:-/opt/${PROJECT}/current}"
+PIP_CACHE_DIR="${PIP_CACHE_DIR:-/var/cache/${PROJECT}/pip}"
+KEEP_RELEASES="${DEPLOY_KEEP_RELEASES:-3}"
+if [[ -d "/run/${PROJECT}-deploy" ]]; then
+  DEFAULT_LOCK_FILE="/run/${PROJECT}-deploy/deploy.lock"
+else
+  # Compatibility with the previous non-root Compose unit.
+  DEFAULT_LOCK_FILE="/var/lock/${PROJECT}-deploy.lock"
+fi
+LOCK_FILE="${LOCK_FILE:-${DEFAULT_LOCK_FILE}}"
+COMPOSE_MARKER="${REPO_DIR}/.deployed-compose-sha"
+FAILED_SYSTEMD_MARKER="/opt/${PROJECT}/failed-systemd-sha"
+BUILD_DIR=""
+TEMP_LINK=""
 
 log() { printf '%s deploy-agent: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
-# One deploy at a time. Overlapping timer firings during a slow build would
-# otherwise run docker compose against a half-updated tree.
+cleanup_temp() {
+  if [[ -n "${TEMP_LINK}" && -L "${TEMP_LINK}" ]]; then
+    rm -f -- "${TEMP_LINK}"
+  fi
+  if [[ -n "${BUILD_DIR}" && -d "${BUILD_DIR}" ]]; then
+    case "${BUILD_DIR}" in
+      "${RELEASES_DIR}"/.build-*) rm -rf -- "${BUILD_DIR}" ;;
+      *) log "refusing to clean unexpected build path ${BUILD_DIR}" ;;
+    esac
+  fi
+}
+trap cleanup_temp EXIT
+
+git_repo() {
+  git -c "safe.directory=${REPO_DIR}" -C "${REPO_DIR}" "$@"
+}
+
+atomic_current_link() {
+  local target="$1"
+  TEMP_LINK="${CURRENT_LINK}.tmp.$$"
+  rm -f -- "${TEMP_LINK}"
+  ln -s "${target}" "${TEMP_LINK}"
+  mv -Tf -- "${TEMP_LINK}" "${CURRENT_LINK}"
+  TEMP_LINK=""
+}
+
+systemd_release_is_current() {
+  local sha="$1"
+  local target=""
+  target="$(readlink -f "${CURRENT_LINK}" 2>/dev/null || true)"
+  [[ "${target}" == "${RELEASES_DIR}/${sha}" ]] &&
+    [[ -x "${target}/venv/bin/python" ]] &&
+    [[ -d "${target}/web" ]]
+}
+
+compose_release_is_current() {
+  local sha="$1"
+  [[ -f "${COMPOSE_MARKER}" ]] && [[ "$(<"${COMPOSE_MARKER}")" == "${sha}" ]]
+}
+
+remove_release_dir() {
+  local path="$1"
+  case "${path}" in
+    "${RELEASES_DIR}"/[0-9a-f]*)
+      [[ "${path}" != "${RELEASES_DIR}" ]] && rm -rf -- "${path}"
+      ;;
+    *) log "refusing to remove unexpected release path ${path}"; return 1 ;;
+  esac
+}
+
+build_systemd_release() {
+  local sha="$1"
+  local release_dir="${RELEASES_DIR}/${sha}"
+
+  if [[ -x "${release_dir}/venv/bin/python" &&
+        -d "${release_dir}/web" &&
+        -x "${release_dir}/backup.sh" &&
+        -f "${release_dir}/REVISION" &&
+        "$(<"${release_dir}/REVISION")" == "${sha}" ]]; then
+    log "reusing previously built release ${sha:0:8}"
+    return
+  fi
+
+  if [[ -e "${release_dir}" ]]; then
+    log "discarding incomplete release ${release_dir}"
+    remove_release_dir "${release_dir}"
+  fi
+
+  BUILD_DIR="${RELEASES_DIR}/.build-${sha}-$$"
+  install -d -o usstocks -g usstocks -m 0755 "${BUILD_DIR}"
+
+  log "creating Python release ${sha:0:8} (cached wheels: ${PIP_CACHE_DIR})"
+  runuser -u usstocks -- env \
+    HOME=/var/lib/usstocks \
+    PIP_CACHE_DIR="${PIP_CACHE_DIR}" \
+    python3 -m venv "${BUILD_DIR}/venv"
+  runuser -u usstocks -- env \
+    HOME=/var/lib/usstocks \
+    PIP_CACHE_DIR="${PIP_CACHE_DIR}" \
+    "${BUILD_DIR}/venv/bin/python" -m pip install \
+      --disable-pip-version-check "${REPO_DIR}"
+
+  cp -a "${REPO_DIR}/web" "${BUILD_DIR}/web"
+  install -m 0755 "${REPO_DIR}/deploy/backup/backup.sh" "${BUILD_DIR}/backup.sh"
+  printf '%s\n' "${sha}" > "${BUILD_DIR}/REVISION"
+
+  # Runtime processes can read but cannot mutate their own release.
+  chown -R root:root "${BUILD_DIR}"
+  chmod -R go-w "${BUILD_DIR}"
+  mv -- "${BUILD_DIR}" "${release_dir}"
+  BUILD_DIR=""
+}
+
+systemd_stack_healthy() {
+  systemctl is-active --quiet usstocks-collector.service &&
+    systemctl is-active --quiet usstocks-api.service &&
+    curl -fsS --max-time 2 http://127.0.0.1:8000/api/livez >/dev/null
+}
+
+restart_systemd_stack() {
+  systemctl restart usstocks-collector.service
+  systemctl restart usstocks-api.service
+}
+
+rollback_systemd_release() {
+  local previous_target="$1"
+  if [[ -n "${previous_target}" && -d "${previous_target}" ]]; then
+    log "rolling back current -> $(basename "${previous_target}")"
+    atomic_current_link "${previous_target}"
+    systemctl restart usstocks-collector.service || true
+    systemctl restart usstocks-api.service || true
+  else
+    log "no previous release exists; stopping failed first deployment"
+    systemctl stop usstocks-api.service usstocks-collector.service || true
+    [[ -L "${CURRENT_LINK}" ]] && unlink "${CURRENT_LINK}"
+  fi
+}
+
+cleanup_old_releases() {
+  local current_target=""
+  local kept=0
+  local entry=""
+  local path=""
+  local -a entries=()
+
+  [[ "${KEEP_RELEASES}" =~ ^[0-9]+$ ]] || {
+    log "DEPLOY_KEEP_RELEASES must be an integer"
+    return 1
+  }
+  (( KEEP_RELEASES >= 2 )) || KEEP_RELEASES=2
+
+  current_target="$(readlink -f "${CURRENT_LINK}" 2>/dev/null || true)"
+  while IFS= read -r entry; do
+    entries+=("${entry}")
+  done < <(
+    find "${RELEASES_DIR}" -mindepth 1 -maxdepth 1 -type d \
+      -name '[0-9a-f]*' -printf '%T@ %p\n' | sort -rn
+  )
+
+  for entry in "${entries[@]}"; do
+    path="${entry#* }"
+    if [[ "${path}" == "${current_target}" ]]; then
+      ((kept += 1))
+      continue
+    fi
+    if (( kept < KEEP_RELEASES )); then
+      ((kept += 1))
+      continue
+    fi
+    log "removing old release $(basename "${path}")"
+    remove_release_dir "${path}"
+  done
+}
+
+deploy_systemd() {
+  local sha="$1"
+  local release_dir="${RELEASES_DIR}/${sha}"
+  local previous_target=""
+  local healthy=false
+
+  install -d -o root -g root -m 0755 "${RELEASES_DIR}"
+  install -d -o usstocks -g usstocks -m 0750 "${PIP_CACHE_DIR}"
+  build_systemd_release "${sha}"
+
+  previous_target="$(readlink -f "${CURRENT_LINK}" 2>/dev/null || true)"
+  log "switching current -> ${sha:0:8}"
+  atomic_current_link "${release_dir}"
+
+  if restart_systemd_stack; then
+    for _attempt in $(seq 1 30); do
+      if systemd_stack_healthy; then
+        healthy=true
+        break
+      fi
+      sleep 2
+    done
+  fi
+
+  if [[ "${healthy}" != true ]]; then
+    log "ERROR: release ${sha:0:8} did not become healthy"
+    printf '%s\n' "${sha}" > "${FAILED_SYSTEMD_MARKER}"
+    rollback_systemd_release "${previous_target}"
+    return 1
+  fi
+
+  rm -f -- "${FAILED_SYSTEMD_MARKER}"
+  cleanup_old_releases
+  log "deploy complete at ${sha:0:8} (systemd)"
+}
+
+deploy_compose() {
+  local sha="$1"
+
+  ln -sfn "${ENV_FILE}" "${REPO_DIR}/.env"
+  log "building and restarting Compose services"
+  docker compose -f "${COMPOSE_FILE}" up -d --build --remove-orphans
+
+  # Keep the previous tagged image as a quick manual rollback candidate.
+  docker image prune -f --filter "dangling=true" >/dev/null 2>&1 || true
+
+  for _attempt in $(seq 1 30); do
+    if docker compose -f "${COMPOSE_FILE}" exec -T api \
+      python -c \
+        "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/livez')" \
+      >/dev/null 2>&1; then
+      printf '%s\n' "${sha}" > "${COMPOSE_MARKER}"
+      log "deploy complete at ${sha:0:8} (compose)"
+      return
+    fi
+    sleep 2
+  done
+
+  log "ERROR: api did not become healthy after Compose deploy of ${sha:0:8}"
+  docker compose -f "${COMPOSE_FILE}" ps
+  return 1
+}
+
+case "${RUNTIME}" in
+  systemd | compose) ;;
+  *) log "DEPLOY_RUNTIME must be 'systemd' or 'compose', got ${RUNTIME}"; exit 2 ;;
+esac
+
+mkdir -p "$(dirname "${LOCK_FILE}")"
 exec 9>"${LOCK_FILE}"
 if ! flock -n 9; then
   log "another deploy is in progress; exiting"
@@ -32,82 +268,56 @@ fi
 
 [[ -f "${ENV_FILE}" ]] || { log "missing env file ${ENV_FILE}"; exit 1; }
 
-# Recovery path only. This cannot bootstrap a bare instance: the systemd unit
-# runs this script from inside ${REPO_DIR}, so if the checkout is missing then
-# so is this file. The first clone is a documented manual step (see
-# docs/aws-deployment.md). What this does cover is a checkout deleted while the
-# units stay installed.
 if [[ ! -d "${REPO_DIR}/.git" ]]; then
-  REPO_URL="$(cat "/etc/${PROJECT}/repo-url")"
-  log "no checkout at ${REPO_DIR}; cloning ${REPO_URL}"
+  REPO_URL_FILE="/etc/${PROJECT}/repo-url"
+  [[ -s "${REPO_URL_FILE}" ]] || {
+    log "repository is absent and ${REPO_URL_FILE} is missing"
+    exit 1
+  }
+  REPO_URL="$(<"${REPO_URL_FILE}")"
+  log "first run: cloning ${REPO_URL}"
   git clone --branch "${BRANCH}" "${REPO_URL}" "${REPO_DIR}"
 fi
 
-cd "${REPO_DIR}"
+git_repo remote set-branches origin "${BRANCH}" >/dev/null 2>&1 || true
+git_repo fetch --quiet origin "${BRANCH}"
 
-# Before any compose command: compose interpolates ${CLOUDFLARE_TUNNEL_TOKEN}
-# from a .env in the project directory, so even a read-only `ps` needs it.
-# Secrets live in the env file placed out of band, never in the repository
-# (spec 4.5).
-ln -sfn "${ENV_FILE}" "${REPO_DIR}/.env"
+local_sha="$(git_repo rev-parse HEAD)"
+remote_sha="$(git_repo rev-parse "origin/${BRANCH}")"
 
-git remote set-branches origin "${BRANCH}" >/dev/null 2>&1 || true
-git fetch --quiet origin "${BRANCH}"
-
-local_sha="$(git rev-parse HEAD)"
-remote_sha="$(git rev-parse "origin/${BRANCH}")"
-
-# How many of the three services are up. Used to tell "nothing to do" apart
-# from "nothing to do, and also nothing is running".
-running_services() {
-  docker compose -f "${COMPOSE_FILE}" ps --services --status running 2>/dev/null | grep -c . || true
-}
-
-if [[ "${local_sha}" == "${remote_sha}" ]]; then
-  # Being at the right revision is not the same as running it. After the first
-  # manual clone the branch is already current, so a pure revision check would
-  # report success on every timer firing while the services had never started
-  # once.
-  if [[ "$(running_services)" -ge 3 ]]; then
-    log "already at ${local_sha:0:8} and services are up; nothing to do"
-    exit 0
-  fi
-  log "already at ${local_sha:0:8} but services are not up; starting them"
-else
-  log "updating ${local_sha:0:8} -> ${remote_sha:0:8}"
-
-  # Refuse to deploy a tree that is not exactly what the branch says. A local
-  # edit made while debugging would otherwise be silently discarded, or worse,
-  # silently kept.
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    log "working tree has local modifications; refusing to deploy"
-    exit 1
-  fi
-
-  git checkout --quiet "${BRANCH}"
-  git reset --hard --quiet "origin/${BRANCH}"
+if [[ "${RUNTIME}" == systemd &&
+      -f "${FAILED_SYSTEMD_MARKER}" &&
+      "$(<"${FAILED_SYSTEMD_MARKER}")" == "${remote_sha}" ]]; then
+  log "revision ${remote_sha:0:8} previously failed; waiting for a new revision"
+  exit 0
 fi
 
-log "building and restarting services"
-docker compose -f "${COMPOSE_FILE}" up -d --build --remove-orphans
-
-# Prune only dangling images. A blanket prune would delete the previous image
-# and remove the fastest rollback path.
-docker image prune -f --filter "dangling=true" >/dev/null 2>&1 || true
-
-# Confirm the API answers before calling the deploy good. The collector is
-# checked separately by its own healthcheck; this catches the common failure
-# where a bad build leaves the API container restarting.
-for attempt in $(seq 1 30); do
-  if docker compose -f "${COMPOSE_FILE}" exec -T api \
-      python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/livez')" \
-      >/dev/null 2>&1; then
-    log "deploy complete at ${remote_sha:0:8}"
+if [[ "${local_sha}" == "${remote_sha}" ]]; then
+  if [[ "${RUNTIME}" == systemd ]] && systemd_release_is_current "${remote_sha}"; then
+    log "already at ${remote_sha:0:8}; nothing to do"
     exit 0
   fi
-  sleep 2
-done
+  if [[ "${RUNTIME}" == compose ]] && compose_release_is_current "${remote_sha}"; then
+    log "already at ${remote_sha:0:8}; nothing to do"
+    exit 0
+  fi
+else
+  log "updating ${local_sha:0:8} -> ${remote_sha:0:8}"
+fi
 
-log "ERROR: api did not become healthy after deploy of ${remote_sha:0:8}"
-docker compose -f "${COMPOSE_FILE}" ps
-exit 1
+# Tracked local debugging edits are never silently discarded or deployed.
+if ! git_repo diff --quiet || ! git_repo diff --cached --quiet; then
+  log "working tree has local modifications; refusing to deploy"
+  exit 1
+fi
+
+if [[ "${local_sha}" != "${remote_sha}" ]]; then
+  git_repo checkout --quiet "${BRANCH}"
+  git_repo reset --hard --quiet "origin/${BRANCH}"
+fi
+
+if [[ "${RUNTIME}" == systemd ]]; then
+  deploy_systemd "${remote_sha}"
+else
+  deploy_compose "${remote_sha}"
+fi

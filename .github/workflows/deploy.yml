@@ -1,7 +1,12 @@
 name: deploy
 
-# Push to main runs the checks, then applies the Terraform configuration so the
-# AWS-side settings on the account match what is in the repository.
+# Infrastructure changes on main run the checks, then apply Terraform. A normal
+# application-only push is deployed by the host pull agent and intentionally
+# does not consume a Terraform run here.
+#
+# The paths filter below must not be read as "application changes are
+# unchecked": test.yml runs the suite on every push and pull request with no
+# filter. Only the Terraform half is gated.
 #
 # The application itself is not shipped from here: the instance pulls it
 # (deploy/agent/). A runner has no fixed egress address, so pushing over SSH
@@ -10,6 +15,9 @@ name: deploy
 on:
   push:
     branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/deploy.yml"
   pull_request:
     branches: [main]
   workflow_dispatch:

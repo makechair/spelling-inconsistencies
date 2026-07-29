@@ -27,9 +27,10 @@ locals {
   # deploy/ -- baking it into user_data would mean rebuilding the instance to
   # ship a code change.
   user_data = templatefile("${path.module}/templates/bootstrap.sh.tftpl", {
-    project_name = var.project_name
-    github_owner = var.github_owner
-    github_repo  = var.github_repo
+    project_name        = var.project_name
+    github_owner        = var.github_owner
+    github_repo         = var.github_repo
+    application_runtime = var.application_runtime
   })
 }
 
