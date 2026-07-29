@@ -22,7 +22,12 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from ..adapters.base import AdapterError, MarketDataAdapter, SymbolNotSupported
+from ..adapters.base import (
+    AdapterError,
+    MarketDataAdapter,
+    RateLimited,
+    SymbolNotSupported,
+)
 from ..calendar_us import has_open_window
 from ..db.repository import Repository
 from .ratelimit import RestBudget
@@ -61,6 +66,7 @@ class BackfillCoordinator:
         min_gap_seconds: int = 120,
         max_lookback_days: int = 30,
         closed_overrides: frozenset = frozenset(),
+        rate_limit_cooldown_seconds: float = 300.0,
     ) -> None:
         self._adapter = adapter
         self._repo = repository
@@ -70,6 +76,8 @@ class BackfillCoordinator:
         self._closed_overrides = closed_overrides
         self._pending: dict[str, BackfillRequest] = {}
         self._lock = asyncio.Lock()
+        self._cooldown = timedelta(seconds=rate_limit_cooldown_seconds)
+        self._retry_after: datetime | None = None
 
     async def request(self, symbol: str, start: datetime, end: datetime) -> None:
         """Queue a gap. Duplicate symbols merge instead of stacking."""
@@ -96,6 +104,14 @@ class BackfillCoordinator:
 
     async def drain(self, *, budget_timeout: float | None = 300.0) -> list[BackfillResult]:
         """Process the queue, spending REST budget one symbol at a time."""
+        # Without this, a re-queued request would come straight back around on
+        # the next loop and spend another budget token on a call the provider
+        # is still refusing.
+        if self._retry_after is not None:
+            if datetime.now(tz=UTC) < self._retry_after:
+                return []
+            self._retry_after = None
+
         async with self._lock:
             pending = list(self._pending.values())
             self._pending.clear()
@@ -120,6 +136,22 @@ class BackfillCoordinator:
             log.warning("%s is not supported by %s: %s", request.symbol, self._adapter.name, exc)
             self._repo.set_supported(request.symbol, False, note=str(exc))
             return BackfillResult(request.symbol, 0, "unsupported")
+        except RateLimited as exc:
+            # Re-queue, exactly as an exhausted local budget does. The provider
+            # can refuse even when our own bucket has room -- failed calls still
+            # count on their side, and anything else using the key spends from
+            # the same allowance. Dropping the request here meant the gap stayed
+            # open until something unrelated queued the symbol again, so a
+            # transient 429 turned into permanently missing history.
+            await self.request(request.symbol, request.start, request.end)
+            self._retry_after = datetime.now(tz=UTC) + self._cooldown
+            log.warning(
+                "backfill for %s deferred until %s: %s",
+                request.symbol,
+                self._retry_after.isoformat(timespec="seconds"),
+                exc,
+            )
+            return BackfillResult(request.symbol, 0, "rate_limited")
         except AdapterError as exc:
             log.warning("backfill failed for %s: %s", request.symbol, exc)
             return BackfillResult(request.symbol, 0, "error")

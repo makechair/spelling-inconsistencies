@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from usstocks.adapters.base import MarketDataAdapter, SymbolNotSupported
+from usstocks.adapters.base import MarketDataAdapter, RateLimited, SymbolNotSupported
 from usstocks.collector.backfill import BackfillCoordinator
 from usstocks.collector.ratelimit import RestBudget
 from usstocks.db.repository import Repository
@@ -170,3 +170,42 @@ async def test_state_is_recorded_after_backfill(repo: Repository, bars: int):
     state = repo.get_state("AAPL", "tiingo")
     assert state is not None
     assert state["last_backfill_utc"] is not None
+
+
+async def test_provider_rate_limit_requeues_and_backs_off(repo: Repository):
+    """A 429 is not the same as a permanent failure.
+
+    The provider can refuse while our own bucket still has room: failed calls
+    count on their side too, and anything else using the key spends the same
+    allowance. Treating it like any other AdapterError dropped the request, so
+    the gap stayed open until something unrelated happened to queue that symbol
+    again -- on a fresh install, nothing ever did.
+    """
+    adapter = RecordingAdapter(fail_with=RateLimited("tiingo rate limit hit"))
+    coordinator = make_coordinator(repo, adapter, rate_limit_cooldown_seconds=300.0)
+
+    await coordinator.request("AAPL", NOW - timedelta(minutes=10), NOW)
+    results = await coordinator.drain()
+
+    assert results[0].skipped_reason == "rate_limited"
+    assert coordinator.pending_count == 1
+
+    # The cooldown holds the retry back rather than spending another token on a
+    # call the provider is still refusing.
+    assert await coordinator.drain() == []
+    assert len(adapter.calls) == 1
+    assert coordinator.pending_count == 1
+
+
+async def test_backfill_resumes_once_the_cooldown_expires(repo: Repository):
+    adapter = RecordingAdapter(fail_with=RateLimited("tiingo rate limit hit"))
+    coordinator = make_coordinator(repo, adapter, rate_limit_cooldown_seconds=0.0)
+
+    await coordinator.request("AAPL", NOW - timedelta(minutes=10), NOW)
+    await coordinator.drain()
+
+    adapter._fail_with = None
+    results = await coordinator.drain()
+
+    assert results[0].bars_written == 3
+    assert coordinator.pending_count == 0
