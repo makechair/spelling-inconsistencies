@@ -185,16 +185,31 @@ R53_NS=ns-307.awsdns-38.com
 dig +short "@$R53_NS" sig-games.com A
 dig +short "@$CF_NS"  sig-games.com A
 
-# ACM 検証レコードは完全一致すること
-for n in _de2cfe4f1f83eacb4a39d3480f100a3a.sig-games.com \
-         _855ab008b7e63654e2a90d0948dcf9ae.www.sig-games.com; do
+# ACM 検証レコードは完全一致すること。
+#
+# 空を不合格として明示的に弾く。単純な [ "$a" = "$b" ] は、両方とも空のときに
+# 一致と判定してしまう。名前を打ち間違えた場合も、コピペでレコード名が壊れた
+# 場合も、dig は静かに空を返すので、素通しの比較では合格に見える。
+# ACM 検証レコードは欠落しても13ヶ月後まで何も壊れないため、
+# 偽の合格を出す照合は照合しないより悪い。
+ACM1=_de2cfe4f1f83eacb4a39d3480f100a3a.sig-games.com
+ACM2=_855ab008b7e63654e2a90d0948dcf9ae.www.sig-games.com
+
+for n in "$ACM1" "$ACM2"; do
   a=$(dig +short "@$R53_NS" "$n" CNAME)
   b=$(dig +short "@$CF_NS"  "$n" CNAME)
-  [ "$a" = "$b" ] && echo "OK   $n" || echo "DIFF $n: r53=[$a] cf=[$b]"
+  echo "name: $n"
+  echo "  r53: ${a:-<EMPTY>}"
+  echo "  cf : ${b:-<EMPTY>}"
+  if [ -z "$a" ] || [ -z "$b" ]; then echo "  => NG (空。名前が違う可能性)"
+  elif [ "$a" = "$b" ]; then echo "  => OK"
+  else echo "  => DIFF"; fi
 done
 ```
 
-ACM の2行が `OK`、apex が両方とも CloudFront のアドレスを返せば合格。
+ACM の2行が `OK` で、かつ `_4abb4944ca72...` / `_210f7f32d989...` の実値が
+両側に表示されること。apex は両方とも CloudFront のアドレスを返せば合格
+（アドレスの一致は不要。順序も一致しなくてよい）。
 
 ## 2. Cloudflare 側の準備（NS はまだ変えない）
 
