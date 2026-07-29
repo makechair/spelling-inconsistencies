@@ -135,6 +135,36 @@ async def test_bandwidth_is_metered_during_streaming(
     assert status["bytes_received_month"] > 0
 
 
+async def test_collector_status_heartbeats_without_market_events(
+    collector_settings: Settings, repo: Repository, live_store: LiveStore
+):
+    """A quiet/closed market must not make a healthy collector look stale."""
+    heartbeat_settings = collector_settings.model_copy(
+        update={
+            "live_publish_interval_seconds": 0.01,
+            "collector_status_interval_seconds": 0.03,
+        }
+    )
+    service = CollectorService(
+        heartbeat_settings,
+        MockAdapter(interval_seconds=10.0),
+        repo,
+        live_store,
+    )
+
+    task = asyncio.create_task(service._publish_loop())
+    await asyncio.sleep(0.08)
+    _, first_updated_at = live_store.read_status()
+    await asyncio.sleep(0.06)
+    _, second_updated_at = live_store.read_status()
+    service.stop()
+    await asyncio.wait_for(task, timeout=1)
+
+    assert first_updated_at is not None
+    assert second_updated_at is not None
+    assert second_updated_at > first_updated_at
+
+
 def test_jitter_stays_within_bounds():
     for _ in range(200):
         value = _with_jitter(8.0, 0.25)

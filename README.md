@@ -99,12 +99,18 @@ SSH は既定で Lightsail コンソールのブラウザSSHのみを許可す�
 
 Terraform の管理対象は Lightsail（インスタンス、公開ポート、静的IP、自動スナップショット）、S3バックアップ、IAM、SNS、CloudWatch、Budgets。
 
-`main` へ push すると GitHub Actions が **テスト → `terraform apply`** を実行し、AWS 側の設定値を反映する。アプリのコード自体はインスタンス側の pull 型エージェント（`deploy/agent/`）が2分間隔で取得する。ランナーの送信元IPが固定されないため、SSH 配布にすると22番をインターネットに開ける必要があり、閉域設計と矛盾するためである。
+`infra/**` を含む `main` pushでは、GitHub Actionsが **テスト → `terraform
+apply`** を実行してAWS側の設定値を反映する。通常のアプリコードだけのpushでは
+Actionsを起動しない。コード自体はLightsail側のpull agentが2分間隔で取得し、
+revision別venvを原子的に切り替えるため、Docker buildもActions quotaも不要である。
+ランナーの送信元IPが固定されないため、SSH push配布は採用しない。
 
-手動で起動する場合、または Terraform を使わない場合は [docs/deployment.md](docs/deployment.md) を参照。
+systemdへの移行と既存SQLiteの引継ぎは
+[docs/systemd-deployment.md](docs/systemd-deployment.md)を参照。手動構築全般は
+[docs/deployment.md](docs/deployment.md)を参照。
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d
+sudo ./deploy/systemd/install.sh /opt/usstocks/app
 ```
 
 Lightsail のファイアウォールは **SSHのみ許可**でよい。Cloudflare Tunnel は外向き接続だけを使うため、80/443 を開ける必要がない。Terraform 側でも SSH 以外は明示的に閉じている。

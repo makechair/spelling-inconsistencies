@@ -1,6 +1,8 @@
 # AWS構成のIaC管理とデプロイ
 
-Lightsail を含む AWS 側の構成を Terraform で管理し、`main` への push で自動反映する。
+Lightsail を含む AWS 側の構成を Terraform で管理する。アプリはLightsail側の
+pull agentで反映し、systemd直接起動を既定とする。GitHub Actionsの無料枠がない
+期間でも、アプリdeploy自体には影響しない。
 
 ## 0. なぜ SAM ではなく Terraform か
 
@@ -100,8 +102,9 @@ CI では実行できない**。CI は OIDC ロールを引き受けて認証す
 | **AWS CloudShell** | ブラウザだけで完結。既に認証済みで、Mac 側に何も入れなくてよい |
 | Docker | `docker run --rm -v "$PWD:/w" -w /w -v ~/.aws:/root/.aws hashicorp/terraform:1.15 plan` |
 
-**初回 apply さえ終われば、以降は `main` への push で GitHub Actions が
-`terraform apply` を実行する**ので、ローカルの Terraform は任意になる。
+**初回 apply さえ終われば、以降は`infra/**`またはworkflowを変更する`main`
+pushでGitHub Actionsが`terraform apply`を実行する**ので、ローカルのTerraformは
+任意になる。アプリコードだけのpushはActionsを起動しない。
 
 CloudShell を使う場合は、リポジトリが private なのでクローンに認証が必要になる。
 `gh auth login` でトークンを作るか、`infra/terraform` 配下のファイルだけを
@@ -241,11 +244,14 @@ curl -sS https://api.github.com/meta \
 # 登録された内容を目視確認する
 sudo -u usstocks ssh-keygen -lf /var/lib/usstocks/.ssh/known_hosts
 
-# 3. デプロイエージェントを有効化
-sudo cp /opt/usstocks/app/deploy/agent/usstocks-deploy.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now usstocks-deploy.timer
+# 3. systemd runtimeとpull deploy agentを導入
+cd /opt/usstocks/app
+sudo ./deploy/systemd/install.sh /opt/usstocks/app
 ```
+
+既存Composeのnamed volumeに`market.db`がある場合、installerは誤って空DBで起動
+しないよう停止する。先に[systemd移行手順](systemd-deployment.md)の整合コピーを
+実施する。
 
 ## 6. GitHub 側の設定
 
@@ -266,20 +272,27 @@ sudo systemctl enable --now usstocks-deploy.timer
 ```
 main へ push
     │
-    ├─ GitHub Actions: test            （ruff + pytest 103件）
-    ├─ GitHub Actions: terraform-check （fmt + validate。認証情報不要）
-    │        │ どちらか失敗したらここで停止し、AWS へは一切触れない
+    ├─ infra/** またはworkflow変更時だけ:
+    │    GitHub Actions: test + terraform-check
+    │        │ 失敗したらAWSへは一切触れない
     │        v
-    └─ GitHub Actions: apply
+    │    GitHub Actions: apply
              │ OIDC でロールを引き受ける（保存された鍵はゼロ）
              │ AWS 側の設定値（Lightsail、S3、IAM、SNS、Budgets）を反映
-             v
-       インスタンス側: usstocks-deploy.timer が2分ごとに main を確認
-             │ 変化があれば git pull → docker compose up -d --build
-             │ /api/livez が応答するまで確認して完了
+    │
+    └─ 全push共通:
+         インスタンス側: usstocks-deploy.timer が2分ごとに main を確認
+             │ 変化があれば revision別venvを作成（wheel cacheを再利用）
+             │ current symlinkを原子的に切替 → systemd restart
+             │ /api/livez失敗時は前revisionへ自動rollback
              v
        collector / api が新リビジョンで稼働
 ```
+
+下段のpull deployはGitHub Actionsを利用しない。Actionsがquota超過や障害で停止して
+いても、`main`に存在するrevisionはLightsail自身が取得できる。ただしCI gateを通過
+していないrevisionまで取得し得る点は残るため、quota回復後もテストはローカルで
+実行してから`main`へ反映する。
 
 Pull Request で実行されるのは **テストと `terraform validate` まで**で、`plan` は走らない。
 

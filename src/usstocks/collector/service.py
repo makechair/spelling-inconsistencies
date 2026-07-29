@@ -293,24 +293,37 @@ class CollectorService:
         """Push changed snapshots to the live store.
 
         Only dirty symbols are written, so a market with no trades produces no
-        writes and the browser sees no artificial movement (spec 3.3).
+        snapshot writes and the browser sees no artificial movement (spec 3.3).
+        Collector status is a separate low-frequency heartbeat: without it a
+        healthy collector looks stale whenever the market is quiet or closed.
         """
+        loop = asyncio.get_running_loop()
+        last_status_write = 0.0
         while not self._stop.is_set():
             await asyncio.sleep(self._settings.live_publish_interval_seconds)
-            if not self._dirty:
-                continue
-            symbols = list(self._dirty)
-            self._dirty.clear()
-            payload = []
-            for symbol in symbols:
-                snapshot = self._snapshots.get(symbol)
-                if snapshot is None:
-                    continue
-                snapshot.current_bar = self._aggregator.current_bar(symbol) or snapshot.current_bar
-                payload.append(snapshot)
-            if payload:
-                self._live.publish(payload)
-            self._write_status()
+            if self._dirty:
+                symbols = list(self._dirty)
+                self._dirty.clear()
+                payload = []
+                for symbol in symbols:
+                    snapshot = self._snapshots.get(symbol)
+                    if snapshot is None:
+                        continue
+                    snapshot.current_bar = (
+                        self._aggregator.current_bar(symbol) or snapshot.current_bar
+                    )
+                    payload.append(snapshot)
+                if payload:
+                    self._live.publish(payload)
+
+            now = loop.time()
+            if (
+                last_status_write == 0.0
+                or now - last_status_write
+                >= self._settings.collector_status_interval_seconds
+            ):
+                self._write_status()
+                last_status_write = now
 
     async def _symbol_watch_loop(self) -> None:
         while not self._stop.is_set():

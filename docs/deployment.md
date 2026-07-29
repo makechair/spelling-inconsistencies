@@ -8,8 +8,10 @@
 > Terraform 適用後にインスタンス内部で何が起きているかを確認する場合の手順である。
 
 
-仕様書13章のフェーズ2に対応する。Lightsail 1GB を前提とするが、Docker が動く
-任意のLinuxで同じ手順が使える。
+仕様書13章のフェーズ2に対応する。Lightsail 1GB を前提とする。現在の推奨は
+collector/APIをsystemdで直接起動する構成であり、Docker Composeは互換・退避経路
+として残している。systemdの完全な手順は
+[systemd-deployment.md](systemd-deployment.md)を参照。
 
 ## 0. 事前準備
 
@@ -132,25 +134,20 @@ docker compose -f deploy/docker-compose.yml exec api \
 
 ## 4. systemd を使う場合
 
-Docker を使わない構成。どちらか一方を選ぶこと。
+Docker image buildを行わない推奨構成。Composeのcollectorと同時に起動しては
+いけない。既存データの移行、host版cloudflared、rollbackを含む完全な手順は
+[LightsailをDocker buildなしで運用する](systemd-deployment.md)を参照する。
 
 ```bash
-sudo useradd --system --home /var/lib/usstocks --create-home usstocks
-sudo mkdir -p /etc/usstocks && sudo cp .env /etc/usstocks/usstocks.env
-sudo chown root:usstocks /etc/usstocks/usstocks.env && sudo chmod 640 /etc/usstocks/usstocks.env
-
 cd /opt/usstocks/app
-python3 -m venv .venv && .venv/bin/pip install .
-sudo chown -R usstocks:usstocks /opt/usstocks /var/lib/usstocks
-
-sudo cp deploy/systemd/*.service deploy/systemd/*.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now usstocks-collector usstocks-api usstocks-backup.timer
+sudo apt-get install -y python3 python3-venv
+sudo ./deploy/systemd/install.sh /opt/usstocks/app
 ```
 
-cloudflared は公式パッケージで導入し、`deploy/cloudflared/config.example.yml`
-を `/etc/cloudflared/config.yml` に置き換えて `service` に origin
-`http://127.0.0.1:8000` を設定する。
+deploy agentはrevision単位のvenvを`/opt/usstocks/releases/`へ作成し、
+`/opt/usstocks/current`を原子的に切り替える。health checkに失敗すると前releaseへ
+自動rollbackする。更新はLightsailからの`git fetch`であり、GitHub Actionsの
+build時間やartifact容量を消費しない。
 
 プロセスを個別に再起動できること（仕様書3.6）:
 
@@ -206,6 +203,15 @@ h=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/livez'))
 詳細な監視項目は [operations.md](operations.md) を参照。
 
 ## 8. 更新
+
+systemd構成では手動更新は不要である。
+
+```bash
+sudo systemctl start usstocks-deploy.service
+journalctl -u usstocks-deploy.service -n 100
+```
+
+Compose互換構成を手動更新する場合:
 
 ```bash
 cd /opt/usstocks/app && git pull

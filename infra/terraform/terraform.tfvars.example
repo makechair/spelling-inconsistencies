@@ -30,6 +30,9 @@ ssh_key_pair_name = null
 
 lightsail_bundle_id         = "small_3_0"
 lightsail_availability_zone = "ap-northeast-1a"
+# Direct Python services are the lower-memory default. Set "compose" only when
+# container isolation is more important than capacity on the 1 GB plan.
+application_runtime = "systemd"
 
 github_owner = "makechair"
 github_repo  = "us-stock-realtime-chart"

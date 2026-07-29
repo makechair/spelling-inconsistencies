@@ -1,0 +1,1156 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>US Stock Realtime Chart — システム／インフラアーキテクチャ</title>
+  <style>
+    :root {
+      --bg: #09111d;
+      --surface: #101c2c;
+      --surface-2: #14243a;
+      --text: #e8eef7;
+      --muted: #9fb0c5;
+      --border: #263a53;
+      --accent: #62d4c7;
+      --accent-2: #73a8ff;
+      --warn: #ffcb6b;
+      --danger: #ff7b8b;
+      --ok: #7bd88f;
+      --code: #07101b;
+      --shadow: 0 18px 60px rgba(0, 0, 0, .22);
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f4f7fb;
+        --surface: #ffffff;
+        --surface-2: #eef4fb;
+        --text: #182535;
+        --muted: #58697d;
+        --border: #cfdae7;
+        --accent: #087f76;
+        --accent-2: #245fae;
+        --warn: #8c5a00;
+        --danger: #b4233b;
+        --ok: #197a34;
+        --code: #edf3f9;
+        --shadow: 0 18px 60px rgba(40, 67, 99, .11);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 86% 2%, color-mix(in srgb, var(--accent-2) 14%, transparent), transparent 26rem),
+        radial-gradient(circle at 4% 12%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 24rem),
+        var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "Noto Sans JP", sans-serif;
+      line-height: 1.72;
+    }
+
+    a { color: var(--accent-2); }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    code {
+      padding: .12em .38em;
+      border: 1px solid var(--border);
+      border-radius: .35em;
+      background: var(--code);
+      font-size: .9em;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 30px 22px;
+      border-right: 1px solid var(--border);
+      background: color-mix(in srgb, var(--bg) 90%, transparent);
+      backdrop-filter: blur(16px);
+    }
+    .brand {
+      margin-bottom: 24px;
+      font-weight: 700;
+      line-height: 1.35;
+      letter-spacing: -.02em;
+    }
+    .brand small {
+      display: block;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: .04em;
+    }
+    nav a {
+      display: block;
+      padding: 6px 9px;
+      border-left: 2px solid transparent;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+    }
+    nav a:hover {
+      border-color: var(--accent);
+      color: var(--text);
+      background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+    }
+
+    main {
+      width: min(1180px, 100%);
+      padding: 54px clamp(24px, 5vw, 74px) 90px;
+    }
+
+    .hero {
+      padding: clamp(28px, 5vw, 54px);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--surface) 96%, var(--accent) 4%),
+          color-mix(in srgb, var(--surface) 94%, var(--accent-2) 6%));
+      box-shadow: var(--shadow);
+    }
+    .eyebrow {
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 850px;
+      margin: 10px 0 15px;
+      font-size: clamp(34px, 5vw, 62px);
+      line-height: 1.08;
+      letter-spacing: -.045em;
+    }
+    .lead {
+      max-width: 850px;
+      margin: 0;
+      color: var(--muted);
+      font-size: clamp(16px, 2vw, 20px);
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 25px;
+    }
+    .pill {
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    section { scroll-margin-top: 28px; margin-top: 74px; }
+    h2 {
+      margin: 0 0 18px;
+      font-size: clamp(25px, 3vw, 36px);
+      line-height: 1.2;
+      letter-spacing: -.035em;
+    }
+    h3 {
+      margin: 34px 0 10px;
+      font-size: 19px;
+      letter-spacing: -.015em;
+    }
+    p { max-width: 900px; }
+    .section-intro {
+      max-width: 900px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .card {
+      padding: 20px;
+      border: 1px solid var(--border);
+      border-radius: 15px;
+      background: var(--surface);
+    }
+    .card h3 { margin: 0 0 7px; font-size: 16px; }
+    .card p { margin: 0; color: var(--muted); font-size: 14px; }
+    .metric {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--accent);
+      font-size: 28px;
+      font-weight: 750;
+      letter-spacing: -.04em;
+    }
+
+    .diagram {
+      margin: 24px 0;
+      padding: clamp(14px, 3vw, 28px);
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .diagram-title {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    svg {
+      display: block;
+      width: 100%;
+      min-width: 720px;
+      height: auto;
+    }
+    svg .node {
+      fill: var(--surface-2);
+      stroke: var(--border);
+      stroke-width: 1.5;
+    }
+    svg .node-accent {
+      fill: color-mix(in srgb, var(--accent) 14%, var(--surface));
+      stroke: var(--accent);
+      stroke-width: 1.8;
+    }
+    svg .node-blue {
+      fill: color-mix(in srgb, var(--accent-2) 14%, var(--surface));
+      stroke: var(--accent-2);
+      stroke-width: 1.8;
+    }
+    svg .node-warn {
+      fill: color-mix(in srgb, var(--warn) 10%, var(--surface));
+      stroke: var(--warn);
+      stroke-width: 1.8;
+    }
+    svg .edge {
+      fill: none;
+      stroke: var(--muted);
+      stroke-width: 1.7;
+      marker-end: url(#arrow);
+    }
+    svg .edge-accent {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 2.2;
+      marker-end: url(#arrow-accent);
+    }
+    svg text {
+      fill: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, "Noto Sans JP", sans-serif;
+      font-size: 13px;
+    }
+    svg .small { fill: var(--muted); font-size: 11px; }
+    svg .label { fill: var(--muted); font-size: 11px; }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(140px, 1fr));
+      gap: 26px;
+      padding: 12px 0;
+    }
+    .step {
+      position: relative;
+      min-height: 132px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface-2);
+    }
+    .step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      top: 44%;
+      right: -22px;
+      color: var(--accent);
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .step-num {
+      display: inline-grid;
+      width: 24px;
+      height: 24px;
+      margin-bottom: 9px;
+      place-items: center;
+      border-radius: 50%;
+      color: var(--bg);
+      background: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .step strong { display: block; font-size: 14px; }
+    .step span { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
+
+    .table-wrap {
+      margin: 20px 0;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      background: var(--surface-2);
+      font-size: 12px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    tr:last-child td { border-bottom: 0; }
+
+    .callout {
+      margin: 20px 0;
+      padding: 17px 19px;
+      border-left: 4px solid var(--accent-2);
+      border-radius: 0 12px 12px 0;
+      background: color-mix(in srgb, var(--accent-2) 9%, var(--surface));
+    }
+    .callout.warning {
+      border-color: var(--warn);
+      background: color-mix(in srgb, var(--warn) 9%, var(--surface));
+    }
+    .callout.danger {
+      border-color: var(--danger);
+      background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+    }
+    .callout strong { display: block; margin-bottom: 4px; }
+    .callout p { margin: 0; color: var(--muted); }
+
+    .flow-split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .lane {
+      padding: 20px;
+      border: 1px solid var(--border);
+      border-radius: 15px;
+      background: var(--surface);
+    }
+    .lane h3 { margin: 0 0 14px; }
+    .lane ol { margin: 0; padding-left: 20px; }
+    .lane li { margin: 7px 0; color: var(--muted); }
+
+    .ownership {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 16px;
+      align-items: stretch;
+    }
+    .ownership > div {
+      padding: 20px;
+      border: 1px solid var(--border);
+      border-radius: 15px;
+      background: var(--surface);
+    }
+    .ownership .bridge {
+      display: grid;
+      padding: 0;
+      place-items: center;
+      border: 0;
+      color: var(--accent);
+      background: transparent;
+      font-size: 30px;
+    }
+
+    .repo-tree {
+      padding: 20px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      color: var(--muted);
+      background: var(--code);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .foot {
+      margin-top: 72px;
+      padding-top: 25px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      .layout { display: block; }
+      .sidebar {
+        position: static;
+        width: 100%;
+        height: auto;
+        padding: 18px 22px;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .brand { margin-bottom: 10px; }
+      nav { display: flex; gap: 5px; overflow-x: auto; }
+      nav a { flex: 0 0 auto; border-left: 0; border-bottom: 2px solid transparent; }
+      main { padding-top: 30px; }
+      .grid { grid-template-columns: 1fr 1fr; }
+      .steps { grid-template-columns: 1fr 1fr; }
+      .step:not(:last-child)::after { display: none; }
+    }
+
+    @media (max-width: 620px) {
+      main { padding-inline: 16px; }
+      .hero { border-radius: 18px; }
+      .grid, .flow-split, .ownership { grid-template-columns: 1fr; }
+      .ownership .bridge { min-height: 30px; transform: rotate(90deg); }
+      .steps { grid-template-columns: 1fr; }
+    }
+
+    @media print {
+      :root {
+        --bg: #fff; --surface: #fff; --surface-2: #f4f7fa; --text: #111;
+        --muted: #475569; --border: #ccd5df; --accent: #087f76;
+        --accent-2: #245fae; --warn: #8c5a00; --danger: #b4233b;
+        --code: #f4f7fa; --shadow: none;
+      }
+      .layout { display: block; }
+      .sidebar { display: none; }
+      main { width: 100%; padding: 0; }
+      .hero, .diagram, .card, .lane { break-inside: avoid; box-shadow: none; }
+      section { margin-top: 42px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        US Stock Realtime Chart
+        <small>ARCHITECTURE 2026-07-29</small>
+      </div>
+      <nav aria-label="目次">
+        <a href="#summary">概要</a>
+        <a href="#context">全体構成</a>
+        <a href="#infra">AWS／ネットワーク</a>
+        <a href="#runtime">ランタイム</a>
+        <a href="#realtime">リアルタイムフロー</a>
+        <a href="#backfill">再接続／補完</a>
+        <a href="#api">API／SSE</a>
+        <a href="#database">データベース</a>
+        <a href="#cicd">CI/CD</a>
+        <a href="#backup">バックアップ</a>
+        <a href="#operations">監視／障害対応</a>
+        <a href="#findings">実装上の注意点</a>
+        <a href="#map">コードマップ</a>
+      </nav>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <div class="eyebrow">System &amp; Infrastructure Architecture</div>
+        <h1>個人向け米国株リアルタイムチャート</h1>
+        <p class="lead">
+          Tiingo / Alpaca の市場データを常時収集し、SQLiteへ1分足を蓄積。
+          Cloudflare Accessで保護されたブラウザへFastAPIとSSEで配信する、
+          単一Lightsail構成の実装ドキュメント。
+        </p>
+        <div class="meta">
+          <span class="pill">2026-07-29 systemd direct runtime</span>
+          <span class="pill">Python 3.11 / FastAPI</span>
+          <span class="pill">SQLite WAL</span>
+          <span class="pill">Terraform / AWS</span>
+          <span class="pill">静的コード調査</span>
+        </div>
+      </header>
+
+      <section id="summary">
+        <h2>1. 概要</h2>
+        <p class="section-intro">
+          コストと運用複雑性を最小化するため、メッセージブローカーやマネージドDBを
+          使わず、collector・API・Tunnelを1台に集約している。外部から開くポートは
+          管理用SSHだけで、Webは外向きCloudflare Tunnelを唯一の入口とする。
+        </p>
+        <div class="grid">
+          <article class="card">
+            <span class="metric">10</span>
+            <h3>最大購読銘柄</h3>
+            <p>Tiingo無料枠の月間受信帯域を意識したローカル上限。</p>
+          </article>
+          <article class="card">
+            <span class="metric">3</span>
+            <h3>独立systemd services</h3>
+            <p>collector、API、cloudflaredを個別再起動できる。</p>
+          </article>
+          <article class="card">
+            <span class="metric">0</span>
+            <h3>公開Webポート</h3>
+            <p>Lightsailの80/443は閉じ、Tunnelがloopback APIへ接続。</p>
+          </article>
+          <article class="card">
+            <span class="metric">1s</span>
+            <h3>SSE配信間隔</h3>
+            <p>変化した銘柄だけを送り、15秒ごとに価格なしheartbeat。</p>
+          </article>
+          <article class="card">
+            <span class="metric">30d</span>
+            <h3>S3保持期間</h3>
+            <p>整合確認済みSQLite gzipをStandard-IAで日次保存。</p>
+          </article>
+          <article class="card">
+            <span class="metric">$12</span>
+            <h3>月次予算guardrail</h3>
+            <p>AWS Budgetsのactual 80%とforecast 100%をSNS通知。</p>
+          </article>
+        </div>
+
+        <h3>設計の核</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>レイヤー</th><th>実装</th><th>意図</th></tr></thead>
+            <tbody>
+              <tr><td>データ取得</td><td>Tiingo主系、Alpaca手動待機系、Mock開発系</td><td>provider固有形式をdomain modelへ隔離</td></tr>
+              <tr><td>永続化</td><td><code>market.db</code> / SQLite WAL</td><td>低コスト、時系列writerをcollectorへ集中</td></tr>
+              <tr><td>ライブ共有</td><td><code>live.db</code> / tmpfs</td><td>高頻度更新をdurable DBから分離</td></tr>
+              <tr><td>公開</td><td>Cloudflare Tunnel + Access</td><td>origin web portをインターネットへ出さない</td></tr>
+              <tr><td>IaC</td><td>Terraform</td><td>Lightsailを含むAWS footprintを一元管理</td></tr>
+              <tr><td>CD</td><td>ホスト側pull agent</td><td>GitHub runner向けにSSHを全開放しない</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="context">
+        <h2>2. システムコンテキスト</h2>
+        <p class="section-intro">
+          ブラウザ、データプロバイダー、GitHub、AWSの間で、アプリホストへの接続は
+          ほぼすべて外向きに開始される。ブラウザだけがCloudflare EdgeへHTTPS接続し、
+          Edgeから先は既存Tunnelを利用する。
+        </p>
+        <div class="diagram">
+          <div class="diagram-title">System context / trust &amp; data paths</div>
+          <svg viewBox="0 0 1000 460" role="img" aria-label="システムコンテキスト図">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"/>
+              </marker>
+              <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+              </marker>
+            </defs>
+            <rect class="node" x="30" y="65" width="170" height="82" rx="13"/>
+            <text x="115" y="94" text-anchor="middle">Web Browser</text>
+            <text class="small" x="115" y="118" text-anchor="middle">HTTPS / SSE consumer</text>
+
+            <rect class="node-blue" x="290" y="45" width="200" height="120" rx="13"/>
+            <text x="390" y="78" text-anchor="middle">Cloudflare Edge</text>
+            <text class="small" x="390" y="103" text-anchor="middle">Access + Google IdP</text>
+            <text class="small" x="390" y="124" text-anchor="middle">Tunnel ingress</text>
+
+            <rect class="node-accent" x="590" y="35" width="250" height="145" rx="13"/>
+            <text x="715" y="70" text-anchor="middle">AWS Lightsail</text>
+            <text class="small" x="715" y="96" text-anchor="middle">collector / api / cloudflared</text>
+            <text class="small" x="715" y="118" text-anchor="middle">market.db + live.db</text>
+            <text class="small" x="715" y="140" text-anchor="middle">deploy / backup agents</text>
+
+            <rect class="node" x="820" y="245" width="150" height="85" rx="13"/>
+            <text x="895" y="276" text-anchor="middle">Tiingo / Alpaca</text>
+            <text class="small" x="895" y="301" text-anchor="middle">WSS + HTTPS</text>
+
+            <rect class="node" x="520" y="340" width="190" height="82" rx="13"/>
+            <text x="615" y="370" text-anchor="middle">GitHub</text>
+            <text class="small" x="615" y="394" text-anchor="middle">repo + Actions + OIDC</text>
+
+            <rect class="node" x="260" y="335" width="180" height="82" rx="13"/>
+            <text x="350" y="365" text-anchor="middle">AWS Control Plane</text>
+            <text class="small" x="350" y="390" text-anchor="middle">Terraform resources</text>
+
+            <rect class="node" x="40" y="270" width="170" height="82" rx="13"/>
+            <text x="125" y="300" text-anchor="middle">S3 / SNS</text>
+            <text class="small" x="125" y="325" text-anchor="middle">backup・state・alerts</text>
+
+            <path class="edge-accent" d="M200 105 L288 105"/>
+            <text class="label" x="244" y="91" text-anchor="middle">HTTPS</text>
+            <path class="edge-accent" d="M490 105 L588 105"/>
+            <text class="label" x="538" y="91" text-anchor="middle">Tunnel</text>
+            <path class="edge" d="M780 180 C820 210 850 220 880 245"/>
+            <text class="label" x="842" y="210">market data</text>
+            <path class="edge" d="M690 340 C700 295 710 235 712 182"/>
+            <text class="label" x="715" y="267">git fetch</text>
+            <path class="edge" d="M520 377 L442 377"/>
+            <text class="label" x="482" y="362" text-anchor="middle">OIDC apply</text>
+            <path class="edge" d="M350 335 C330 285 300 238 250 205 C210 180 170 205 145 268"/>
+            <path class="edge" d="M590 155 C500 210 420 250 210 310"/>
+            <text class="label" x="410" y="244">backup PutObject</text>
+          </svg>
+        </div>
+
+        <div class="callout">
+          <strong>責任境界</strong>
+          <p>
+            AWS側はTerraform管理だが、Cloudflare Tunnel、Access application、Google IdP、
+            DNS hostnameは手動設定。<code>terraform apply</code>成功だけでは外部公開経路の
+            完成を意味しない。
+          </p>
+        </div>
+      </section>
+
+      <section id="infra">
+        <h2>3. AWS／ネットワーク</h2>
+        <p class="section-intro">
+          TerraformはLightsailだけでなく、バックアップ、CI identity、監視と予算を
+          同じstateで管理する。state用S3バケットだけは「自分自身を作る前にstateが必要」
+          という循環を避けるため、bootstrap scriptで事前作成する。
+        </p>
+
+        <div class="diagram">
+          <div class="diagram-title">AWS logical architecture</div>
+          <svg viewBox="0 0 1060 620" role="img" aria-label="AWS論理アーキテクチャ図">
+            <defs>
+              <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"/>
+              </marker>
+            </defs>
+            <rect x="20" y="20" width="1020" height="575" rx="22" fill="none" stroke="var(--border)" stroke-width="1.5"/>
+            <text x="48" y="54">AWS account / ap-northeast-1</text>
+
+            <rect class="node-accent" x="370" y="80" width="330" height="300" rx="18"/>
+            <text x="535" y="114" text-anchor="middle">Lightsail Ubuntu 24.04 / small_3_0</text>
+            <rect class="node" x="400" y="140" width="125" height="78" rx="11"/>
+            <text x="462" y="170" text-anchor="middle">collector</text>
+            <text class="small" x="462" y="193" text-anchor="middle">320 MB</text>
+            <rect class="node" x="545" y="140" width="125" height="78" rx="11"/>
+            <text x="607" y="170" text-anchor="middle">api</text>
+            <text class="small" x="607" y="193" text-anchor="middle">320 MB</text>
+            <rect class="node" x="400" y="238" width="125" height="78" rx="11"/>
+            <text x="462" y="268" text-anchor="middle">cloudflared</text>
+            <text class="small" x="462" y="291" text-anchor="middle">128 MB</text>
+            <rect class="node" x="545" y="238" width="125" height="78" rx="11"/>
+            <text x="607" y="268" text-anchor="middle">host agents</text>
+            <text class="small" x="607" y="291" text-anchor="middle">deploy / backup</text>
+            <text class="small" x="535" y="347" text-anchor="middle">2GB swap · AutoSnapshot · static IP</text>
+
+            <rect class="node-blue" x="65" y="90" width="210" height="95" rx="13"/>
+            <text x="170" y="121" text-anchor="middle">GitHub Actions</text>
+            <text class="small" x="170" y="146" text-anchor="middle">OIDC → STS → deploy role</text>
+            <text class="small" x="170" y="165" text-anchor="middle">main branchに限定</text>
+
+            <rect class="node" x="55" y="255" width="230" height="90" rx="13"/>
+            <text x="170" y="286" text-anchor="middle">Terraform state S3</text>
+            <text class="small" x="170" y="310" text-anchor="middle">versioning · SSE · lockfile</text>
+
+            <rect class="node" x="760" y="85" width="230" height="108" rx="13"/>
+            <text x="875" y="116" text-anchor="middle">Backup S3</text>
+            <text class="small" x="875" y="140" text-anchor="middle">public block · SSE-S3</text>
+            <text class="small" x="875" y="160" text-anchor="middle">daily/* · 30 days</text>
+
+            <rect class="node" x="770" y="245" width="210" height="92" rx="13"/>
+            <text x="875" y="276" text-anchor="middle">Backup IAM user</text>
+            <text class="small" x="875" y="301" text-anchor="middle">PutObject + prefix list</text>
+
+            <rect class="node-warn" x="245" y="460" width="235" height="92" rx="13"/>
+            <text x="362" y="491" text-anchor="middle">CloudWatch Alarm</text>
+            <text class="small" x="362" y="515" text-anchor="middle">BurstCapacity &lt; 20%</text>
+
+            <rect class="node-warn" x="515" y="460" width="220" height="92" rx="13"/>
+            <text x="625" y="491" text-anchor="middle">AWS Budgets</text>
+            <text class="small" x="625" y="515" text-anchor="middle">80% actual / 100% forecast</text>
+
+            <rect class="node" x="800" y="455" width="165" height="92" rx="13"/>
+            <text x="882" y="486" text-anchor="middle">SNS → Email</text>
+            <text class="small" x="882" y="511" text-anchor="middle">manual confirmation</text>
+
+            <path d="M275 137 L368 137" fill="none" stroke="var(--muted)" stroke-width="1.7" marker-end="url(#arrow2)"/>
+            <text class="label" x="322" y="124" text-anchor="middle">terraform</text>
+            <path d="M170 185 L170 253" fill="none" stroke="var(--muted)" stroke-width="1.7" marker-end="url(#arrow2)"/>
+            <path d="M285 300 C330 300 335 280 368 280" fill="none" stroke="var(--muted)" stroke-width="1.7" marker-end="url(#arrow2)"/>
+            <path d="M700 160 L758 140" fill="none" stroke="var(--muted)" stroke-width="1.7" marker-end="url(#arrow2)"/>
+            <text class="label" x="730" y="134">backup</text>
+            <path d="M770 290 L725 290 C710 290 710 220 760 180" fill="none" stroke="var(--muted)" stroke-width="1.7" marker-end="url(#arrow2)"/>
+            <path d="M480 506 L798 506" fill="none" stroke="var(--muted)" stroke-width="1.7" marker-end="url(#arrow2)"/>
+            <path d="M735 506 L798 506" fill="none" stroke="var(--muted)" stroke-width="1.7" marker-end="url(#arrow2)"/>
+          </svg>
+        </div>
+
+        <h3>公開ポートと通信</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>方向</th><th>宛先／port</th><th>目的</th><th>制御</th></tr></thead>
+            <tbody>
+              <tr><td>Inbound</td><td>Lightsail TCP 22</td><td>管理SSH</td><td>AWS browser SSH aliasまたは明示CIDR</td></tr>
+              <tr><td>Inbound</td><td>TCP 80 / 443</td><td>なし</td><td>Terraformのauthoritative port定義から除外</td></tr>
+              <tr><td>Outbound</td><td>Cloudflare</td><td>Tunnel維持</td><td>Tunnel token</td></tr>
+              <tr><td>Outbound</td><td>Tiingo / Alpaca WSS・HTTPS</td><td>trade stream、backfill、search</td><td>provider key</td></tr>
+              <tr><td>Outbound</td><td>GitHub SSH</td><td>2分間隔fetch</td><td>read-only deploy key</td></tr>
+              <tr><td>Outbound</td><td>S3 HTTPS</td><td>daily backup</td><td>専用IAM user</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout warning">
+          <strong>IPv4だけ閉じても不十分</strong>
+          <p>
+            Lightsailはdual-stack。TerraformはIPv4とIPv6のSSH許可元を別に指定し、
+            空集合をloopback sentinelへ置換する。これにより「空指定が全開放になる」
+            Lightsail APIの危険な解釈を回避する。
+          </p>
+        </div>
+
+        <h3>認証は二重ゲート</h3>
+        <div class="steps" aria-label="認証フロー">
+          <div class="step"><span class="step-num">1</span><strong>Browser → Access</strong><span>Google IdPとCloudflare email policy。</span></div>
+          <div class="step"><span class="step-num">2</span><strong>Access JWT付与</strong><span><code>Cf-Access-Jwt-Assertion</code>を追加。</span></div>
+          <div class="step"><span class="step-num">3</span><strong>Tunnel → API</strong><span>loopback HTTP。public web portは非公開。</span></div>
+          <div class="step"><span class="step-num">4</span><strong>API再検証</strong><span>RS256、aud、iss、exp、iat、email allow-list。</span></div>
+          <div class="step"><span class="step-num">5</span><strong>Fail closed</strong><span>JWKS取得不能は503。bypassしない。</span></div>
+        </div>
+      </section>
+
+      <section id="runtime">
+        <h2>4. Lightsailランタイム</h2>
+        <p class="section-intro">
+          revision別Python venvをcollectorとAPIで共有し、cloudflaredを加えた3サービスを
+          systemdで管理する。Docker image buildは不要で、serviceごとのcgroup memory cap、
+          restart policy、journalを利用する。Composeは互換・退避経路として残す。
+        </p>
+
+        <div class="ownership">
+          <div>
+            <h3>Durable plane</h3>
+            <p><code>/var/lib/usstocks/market.db</code></p>
+            <ul>
+              <li>SQLite WAL</li>
+              <li>1分足、symbols、usage、collector state</li>
+              <li>collectorが時系列writer</li>
+              <li>APIはhistory readとsymbols write</li>
+            </ul>
+          </div>
+          <div class="bridge" aria-hidden="true">⇄</div>
+          <div>
+            <h3>Live plane</h3>
+            <p><code>/dev/shm/usstocks-live.db</code></p>
+            <ul>
+              <li>host tmpfs</li>
+              <li>現在値、進行中bar、collector status</li>
+              <li>collector write / API read</li>
+              <li>消失しても次tradeで再構築</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Service</th><th>責務</th><th>Memory</th><th>Health</th></tr></thead>
+            <tbody>
+              <tr><td><code>usstocks-collector</code></td><td>WS、bar集約、REST補完、DB／live publish</td><td>320MB</td><td>15秒status heartbeat</td></tr>
+              <tr><td><code>usstocks-api</code></td><td>REST、SSE、static UI、Access JWT検証</td><td>320MB</td><td><code>/api/livez</code></td></tr>
+              <tr><td><code>usstocks-cloudflared</code></td><td>外向きTunnel</td><td>128MB</td><td>systemd restart</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          ホストbootstrapはPython venv、SQLite、Git、AWS CLI v2、unattended upgradesを
+          導入し、2GB swapを作成する。Dockerは<code>application_runtime=compose</code>
+          の場合だけ導入する。アプリはnon-root <code>usstocks</code>で動き、
+          APIは <code>127.0.0.1:8000</code> だけをlistenする。
+        </p>
+      </section>
+
+      <section id="realtime">
+        <h2>5. リアルタイムデータフロー</h2>
+        <p class="section-intro">
+          provider payloadはAdapter境界でTrade／Quoteへ正規化され、下流はTiingoや
+          Alpaca固有のJSON形式を知らない。OHLCVはtradeだけから生成し、quoteを混ぜない。
+        </p>
+
+        <div class="diagram">
+          <div class="diagram-title">Trade to browser / hot path</div>
+          <svg viewBox="0 0 1100 360" role="img" aria-label="リアルタイムデータフロー図">
+            <defs>
+              <marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+              </marker>
+            </defs>
+            <rect class="node" x="20" y="95" width="150" height="84" rx="12"/>
+            <text x="95" y="125" text-anchor="middle">Provider WSS</text>
+            <text class="small" x="95" y="151" text-anchor="middle">Tiingo / Alpaca</text>
+
+            <rect class="node-blue" x="215" y="95" width="150" height="84" rx="12"/>
+            <text x="290" y="125" text-anchor="middle">Adapter</text>
+            <text class="small" x="290" y="151" text-anchor="middle">Trade / Quote</text>
+
+            <rect class="node-accent" x="410" y="75" width="180" height="124" rx="12"/>
+            <text x="500" y="110" text-anchor="middle">BarAggregator</text>
+            <text class="small" x="500" y="136" text-anchor="middle">OHLCV + VWAP</text>
+            <text class="small" x="500" y="158" text-anchor="middle">UTC minute bucket</text>
+            <text class="small" x="500" y="180" text-anchor="middle">late trade merge</text>
+
+            <rect class="node" x="650" y="28" width="185" height="92" rx="12"/>
+            <text x="742" y="60" text-anchor="middle">market.db</text>
+            <text class="small" x="742" y="85" text-anchor="middle">final bar UPSERT</text>
+            <rect class="node" x="650" y="156" width="185" height="92" rx="12"/>
+            <text x="742" y="188" text-anchor="middle">live.db / tmpfs</text>
+            <text class="small" x="742" y="213" text-anchor="middle">dirty snapshot / 250ms</text>
+
+            <rect class="node-blue" x="885" y="95" width="170" height="84" rx="12"/>
+            <text x="970" y="125" text-anchor="middle">FastAPI SSE</text>
+            <text class="small" x="970" y="151" text-anchor="middle">poll 1s / diff only</text>
+
+            <rect class="node" x="885" y="260" width="170" height="70" rx="12"/>
+            <text x="970" y="288" text-anchor="middle">Browser chart</text>
+            <text class="small" x="970" y="311" text-anchor="middle">candle update</text>
+
+            <path d="M170 137 L213 137" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
+            <path d="M365 137 L408 137" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
+            <path d="M590 110 C620 100 625 78 648 76" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
+            <path d="M590 162 C620 170 625 196 648 200" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
+            <path d="M835 200 C860 190 858 145 883 138" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
+            <path d="M970 179 L970 258" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
+            <path d="M835 74 C895 50 1030 80 1030 95" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 5"/>
+            <text class="label" x="920" y="59">history API read</text>
+          </svg>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>規則</th><th>実装</th></tr></thead>
+            <tbody>
+              <tr><td>bar timestamp</td><td>UTCの分開始。09:30:00 barは09:30:00〜09:30:59を表す。</td></tr>
+              <tr><td>入力</td><td>tradeのみ。quoteはliveness signalとして扱い、OHLCVへ入れない。</td></tr>
+              <tr><td>確定</td><td>次分trade受信時、または1秒ごとのroll判定。</td></tr>
+              <tr><td>無約定分</td><td>人工的なbarを生成せず、chart上もgapにする。</td></tr>
+              <tr><td>遅延trade</td><td>90秒以内なら直近final barへmerge、超過はcountしてdrop。</td></tr>
+              <tr><td>upsert</td><td>finalは既存を更新可。non-finalは既存finalを上書き不可。</td></tr>
+              <tr><td>source競合</td><td><code>USSTOCKS_SOURCE_PRIORITY</code>順に読み出し時解決。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="backfill">
+        <h2>6. 再接続／欠損補完</h2>
+        <p class="section-intro">
+          WebSocket切断は指数backoffで回復し、失われたopen market区間だけをRESTで補完する。
+          すべての再接続で全銘柄を即fetchせず、無料枠を守る制御がcollector内にある。
+        </p>
+        <div class="steps">
+          <div class="step"><span class="step-num">1</span><strong>切断分類</strong><span>購読変更は即時再接続。障害切断はbackoff対象。</span></div>
+          <div class="step"><span class="step-num">2</span><strong>gap判定</strong><span>120秒未満、または市場closedのみなら補完しない。</span></div>
+          <div class="step"><span class="step-num">3</span><strong>要求合体</strong><span>同一symbolの範囲をwiden。lookback最大30日。</span></div>
+          <div class="step"><span class="step-num">4</span><strong>token取得</strong><span>50/hourと1,000/dayをSQLiteへ永続化。</span></div>
+          <div class="step"><span class="step-num">5</span><strong>確定bar保存</strong><span>REST結果をfinalとしてupsertしstate更新。</span></div>
+        </div>
+        <p>
+          再接続delayは1、2、4秒…最大60秒で、±25%のjitterを加える。接続が60秒以上
+          継続してから切れた場合はdelayを1秒へ戻す。REST枠が空なら最大300秒待ち、
+          取得できなければrequestをqueueへ戻す。受信bytesも日／月windowへ永続化し、
+          月間1GBの80%でwarningを出す。
+        </p>
+      </section>
+
+      <section id="api">
+        <h2>7. API／SSE／ブラウザ</h2>
+        <p class="section-intro">
+          初期画面はwatchlistとhistoryをRESTで取得し、その後EventSourceでfull snapshotと
+          差分updateを受ける。SSEは最大1時間で意図的にcycleし、ブラウザが自動再接続する。
+        </p>
+        <div class="flow-split">
+          <div class="lane">
+            <h3>初期表示</h3>
+            <ol>
+              <li><code>/api/symbols?watched_only=true</code></li>
+              <li><code>/api/bars/{symbol}?days=N</code></li>
+              <li>最大20,000 barsをcandle + volumeへ描画</li>
+              <li><code>/api/live?symbols=...</code>へEventSource接続</li>
+              <li>snapshot eventで現在値を埋める</li>
+            </ol>
+          </div>
+          <div class="lane">
+            <h3>継続配信</h3>
+            <ol>
+              <li>APIがlive.dbを1秒ごとに読む</li>
+              <li>fingerprintが変わったsymbolだけupdate</li>
+              <li>collector status変化時にstatus event</li>
+              <li>15秒ごとに価格なしheartbeat</li>
+              <li>SSE error時は<code>/api/ping</code>で認証失効を区別</li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Endpoint</th><th>役割</th><th>Store</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET /api/bars/{symbol}</code></td><td>source優先解決済み1分足</td><td>market.db</td></tr>
+              <tr><td><code>GET /api/live</code></td><td>SSE snapshot / update / status / heartbeat</td><td>live.db</td></tr>
+              <tr><td><code>GET /api/symbols</code></td><td>watchlist</td><td>market.db</td></tr>
+              <tr><td><code>PUT/DELETE /api/symbols/{symbol}</code></td><td>購読管理。historyは削除しない</td><td>market.db</td></tr>
+              <tr><td><code>GET /api/export/csv</code></td><td>row streaming export</td><td>market.db</td></tr>
+              <tr><td><code>GET /api/export/parquet</code></td><td>optional pyarrow、memory生成</td><td>market.db</td></tr>
+              <tr><td><code>GET /api/health</code></td><td>collector、DB、disk、quota</td><td>両DB + filesystem</td></tr>
+              <tr><td><code>GET /api/livez</code></td><td>process liveness。唯一のpublic path</td><td>なし</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="database">
+        <h2>8. データベースと所有権</h2>
+        <p class="section-intro">
+          「単一writer」は時系列テーブルに限定される。APIはwatchlist編集のため
+          <code>symbols</code>へ短時間writeする。WAL、5秒busy timeout、thread-local
+          connectionにより複数readerと設定writeを共存させる。
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Table</th><th>Primary key</th><th>Writer</th><th>用途</th></tr></thead>
+            <tbody>
+              <tr><td><code>bars_1m</code></td><td>symbol + timestamp + source</td><td>collector</td><td>1分足、WITHOUT ROWID</td></tr>
+              <tr><td><code>symbols</code></td><td>symbol</td><td>API / collector support flag</td><td>watch、hold、provider support</td></tr>
+              <tr><td><code>ticks</code></td><td>symbol + timestamp + source</td><td>collector optional</td><td>既定retention 0で通常未使用</td></tr>
+              <tr><td><code>api_usage</code></td><td>source + kind + window</td><td>collector</td><td>REST calls / bytes</td></tr>
+              <tr><td><code>collector_state</code></td><td>symbol + source</td><td>collector</td><td>last bar / backfill</td></tr>
+              <tr><td><code>market_calendar_overrides</code></td><td>day</td><td>operator</td><td>臨時休場／早仕舞い</td></tr>
+              <tr><td><code>schema_migrations</code></td><td>version</td><td>startup migration</td><td>forward-only migration</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="cicd">
+        <h2>9. CI/CD</h2>
+        <p class="section-intro">
+          AWS desired stateとアプリrolloutは別経路で進む。GitHub ActionsはTerraformを
+          applyし、アプリはLightsailがprivate repositoryをpullする。
+        </p>
+        <div class="flow-split">
+          <div class="lane">
+            <h3>Lane A — GitHub Actions</h3>
+            <ol>
+              <li><code>infra/**</code>を含むmain push / PR / manual dispatch</li>
+              <li>Python 3.11、install、ruff、pytest</li>
+              <li>Terraform fmt、backendなしinit、validate</li>
+              <li>main pushのみOIDCでdeploy roleをassume</li>
+              <li>S3 state lock → plan → apply → outputs</li>
+            </ol>
+          </div>
+          <div class="lane">
+            <h3>Lane B — Host pull deploy</h3>
+            <ol>
+              <li>systemd timerが2分ごとに起動</li>
+              <li>read-only keyで<code>origin/main</code> fetch</li>
+              <li>変更なし／local dirtyなら停止</li>
+              <li>revision別venv作成 → current symlinkを原子的切替</li>
+              <li>collector/API restart → <code>/api/livez</code>確認</li>
+              <li>失敗時は前releaseへ自動rollback</li>
+            </ol>
+          </div>
+        </div>
+        <div class="callout danger">
+          <strong>実効上、Lane BはLane Aの成功を待たない</strong>
+          <p>
+            deploy agentはGitHub workflow statusを確認しない。テスト中またはテスト失敗の
+            commitでも、<code>main</code>に存在すればアプリへ反映し得る。CI成功でCDを
+            gateするには、成功済みSHA／release tag／deployment markerが必要。
+          </p>
+        </div>
+        <p>
+          OIDC trustはrepositoryと<code>refs/heads/main</code>へ固定され、PR tokenは
+          roleをassumeできない。長期AWS access keyをGitHubへ保存しない。pull方式は
+          GitHub-hosted runnerの送信元IPが固定されない問題を避け、Lightsail SSHを
+          <code>0.0.0.0/0</code>へ開かずに済ませる。Lane BはGitHub Actionsを実行せず、
+          Actions quotaやartifact容量を消費しない。アプリコードだけのmain pushは
+          workflowのpaths filterによりLane A自体を起動しない。
+        </p>
+      </section>
+
+      <section id="backup">
+        <h2>10. バックアップ／リストア</h2>
+        <p class="section-intro">
+          live WALファイルを単純copyせず、<code>VACUUM INTO</code>で整合コピーを作成。
+          構造検証に成功したものだけを圧縮してS3へ送る。
+        </p>
+        <div class="steps">
+          <div class="step"><span class="step-num">1</span><strong>容量確認</strong><span>free spaceがDB size × 2未満なら拒否。</span></div>
+          <div class="step"><span class="step-num">2</span><strong>整合コピー</strong><span>read-only接続から<code>VACUUM INTO</code>。</span></div>
+          <div class="step"><span class="step-num">3</span><strong>検証</strong><span><code>PRAGMA integrity_check</code>とbar件数。</span></div>
+          <div class="step"><span class="step-num">4</span><strong>保管</strong><span>gzip -9、Standard-IA、daily timestamp key。</span></div>
+          <div class="step"><span class="step-num">5</span><strong>復旧</strong><span>非上書きrestore、再検証、collectorのREST補完。</span></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Protection</th><th>整合性</th><th>役割</th></tr></thead>
+            <tbody>
+              <tr><td>SQLite WAL</td><td>process crash耐性</td><td>通常運転</td></tr>
+              <tr><td>Lightsail AutoSnapshot 06:00 UTC</td><td>crash-consistent whole disk</td><td>host復旧</td></tr>
+              <tr><td>S3 daily backup 07:10 UTC</td><td>application-consistent + verified</td><td>履歴のsystem of record</td></tr>
+              <tr><td>Provider REST</td><td>provider確定値</td><td>backup以後のgap縮小</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="operations">
+        <h2>11. 監視／障害対応</h2>
+        <p class="section-intro">
+          アプリhealthはcollectorの鮮度、disk、DB size、REST枠、帯域budgetを集約する。
+          AWS側の自動通知はCPU burstとcostに限定される。
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Signal / failure</th><th>自動挙動</th><th>手動判断</th></tr></thead>
+            <tbody>
+              <tr><td>WS切断</td><td>1〜60秒backoff + jitter、必要ならREST補完</td><td>長時間ならprovider切替</td></tr>
+              <tr><td>API crash</td><td>systemd再起動、EventSource再接続</td><td>繰返す場合はjournal確認</td></tr>
+              <tr><td>collector crash</td><td>systemd再起動、startup backfill</td><td>quotaとdata age確認</td></tr>
+              <tr><td>live.db消失</td><td>次tradeで再構築</td><td>なし</td></tr>
+              <tr><td>market.db / host喪失</td><td>自動復元なし</td><td>snapshot／S3 restore</td></tr>
+              <tr><td>JWT JWKS取得不能</td><td>503 fail closed</td><td>Cloudflare復旧待ち</td></tr>
+              <tr><td>CPU burst &lt;20%</td><td>15分後SNS</td><td>bundle／負荷見直し</td></tr>
+              <tr><td>disk 70%以上</td><td>health degraded</td><td>容量確保、backup headroom確認</td></tr>
+              <tr><td>新revision unhealthy</td><td>前releaseへ自動rollback</td><td>失敗SHAを次revisionで修正</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout warning">
+          <strong>通知の空白</strong>
+          <p>
+            backup失敗、collector stale／disconnect、systemd restart、disk不足は
+            SNSへ直接配線されていない。<code>/api/health</code>も認証必須のため、
+            外形監視またはhost側alert処理を別途設ける必要がある。
+          </p>
+        </div>
+      </section>
+
+      <section id="findings">
+        <h2>12. 現行実装で確認した注意点</h2>
+        <p class="section-intro">
+          以下は設計上の一般論ではなく、コードとデプロイ構成を突き合わせた結果。
+          本番運用前の優先確認事項となる。
+        </p>
+        <div class="grid">
+          <article class="card">
+            <h3>CIとCDの独立性</h3>
+            <p>
+              pull agentはworkflow成功を待たないため、mainへ入ったcommitをテスト完了前に
+              deployできる。Actions quota中は特にlocal testが必要。
+            </p>
+          </article>
+          <article class="card">
+            <h3>ComposeからのDB handoff</h3>
+            <p>
+              named volumeのmarket.dbを一度だけ整合コピーし、collectorを二重起動しない。
+              installerは移行漏れを検出して停止する。
+            </p>
+          </article>
+          <article class="card">
+            <h3>15秒heartbeat</h3>
+            <p>
+              tradeがない休場中もcollector statusだけを低頻度更新する。live snapshotの
+              無用な書込は増やさない。
+            </p>
+          </article>
+          <article class="card">
+            <h3>手動bootstrap境界</h3>
+            <p>
+              secret deploy keyをuser_dataへ埋めないため、最初のprivate repo cloneと
+              installer実行はout-of-bandで行う。
+            </p>
+          </article>
+          <article class="card">
+            <h3>atomic release + rollback</h3>
+            <p>
+              完成済みvenvへsymlinkを切り替え、health失敗時は前releaseへ戻す。
+              失敗SHAの2分ごとの再試行も抑止する。
+            </p>
+          </article>
+          <article class="card">
+            <h3>通知の空白</h3>
+            <p>
+              CPU burstとcost以外のapp-level異常はSNSへ未配線。journalと
+              <code>/api/health</code>のhost側監視が次の改善点。
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="map">
+        <h2>13. コードマップ／トレーサビリティ</h2>
+        <pre class="repo-tree">.
+├── src/usstocks/
+│   ├── adapters/          provider WS/REST → domain model
+│   ├── collector/         aggregation / reconnect / backfill / quota
+│   ├── api/               FastAPI / auth / REST / SSE
+│   ├── db/                schema / repository / live store / migration
+│   ├── calendar_us.py     market calendar / session
+│   ├── config.py          environment / fail-fast validation
+│   └── models.py          Trade / Quote / Bar / LiveSnapshot
+├── web/                   static HTML/CSS/JS + vendored chart library
+├── deploy/
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── agent/             pull deployment
+│   ├── backup/            backup / restore
+│   ├── cloudflared/       reference config
+│   └── systemd/           direct runtime / installer / timers
+├── infra/
+│   ├── terraform/         Lightsail / S3 / IAM / SNS / Budgets
+│   └── iam/               first-apply operator policy
+├── .github/workflows/     test / validate / terraform apply
+└── tests/                 app and domain tests</pre>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>説明対象</th><th>一次情報</th></tr></thead>
+            <tbody>
+              <tr><td>Direct runtime / release / health</td><td><code>deploy/systemd/</code>, <code>deploy/agent/deploy-agent.sh</code></td></tr>
+              <tr><td>Compose compatibility</td><td><code>deploy/docker-compose.yml</code>, <code>deploy/Dockerfile</code></td></tr>
+              <tr><td>Lightsail / firewall / snapshot</td><td><code>infra/terraform/lightsail.tf</code></td></tr>
+              <tr><td>S3 / backup IAM</td><td><code>infra/terraform/backup.tf</code></td></tr>
+              <tr><td>Monitoring / cost</td><td><code>infra/terraform/monitoring.tf</code></td></tr>
+              <tr><td>CI identity / apply</td><td><code>github_oidc.tf</code>, <code>.github/workflows/deploy.yml</code></td></tr>
+              <tr><td>Pull CD</td><td><code>deploy/agent/deploy-agent.sh</code> + systemd units</td></tr>
+              <tr><td>Realtime / backfill</td><td><code>collector/service.py</code>, <code>aggregator.py</code>, <code>backfill.py</code></td></tr>
+              <tr><td>Auth / API / SSE</td><td><code>api/app.py</code>, <code>auth.py</code>, <code>routes/live.py</code></td></tr>
+              <tr><td>Schema / ownership</td><td><code>db/migrations/0001_initial.sql</code>, <code>repository.py</code></td></tr>
+              <tr><td>Browser reconnect</td><td><code>web/app.js</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer class="foot">
+        <p>
+          本書は2026-07-29のsystemd direct runtime実装時点で、アプリとインフラ構成を
+          静的に照合して作成。
+          AWS／Cloudflareの実環境状態は未検証。詳細版とMermaid図は
+          <code>docs/system-architecture.md</code>を参照。
+        </p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

@@ -3,6 +3,7 @@
 *.env
 !.env.example
 /etc/usstocks/
+.deployed-compose-sha
 
 # Data
 data/

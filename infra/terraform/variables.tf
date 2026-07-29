@@ -53,6 +53,22 @@ variable "alert_email" {
 }
 
 # ------------------------------------------------------------------ Lightsail
+variable "application_runtime" {
+  description = <<-EOT
+    Application process runtime installed by first-boot bootstrap.
+    "systemd" avoids Docker daemon/image-build overhead on the 1 GB plan.
+    "compose" keeps the container-based compatibility path.
+    Existing instances ignore user_data changes and must be migrated manually.
+  EOT
+  type        = string
+  default     = "systemd"
+
+  validation {
+    condition     = contains(["systemd", "compose"], var.application_runtime)
+    error_message = "application_runtime must be either \"systemd\" or \"compose\"."
+  }
+}
+
 variable "lightsail_bundle_id" {
   description = <<-EOT
     Instance plan. small_3_0 is the 1 GB / 2 vCPU / 40 GB tier the

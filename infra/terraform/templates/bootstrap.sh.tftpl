@@ -22,9 +22,12 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y --no-install-recommends \
   ca-certificates curl jq git sqlite3 unzip unattended-upgrades \
-  docker.io docker-compose-v2
+  python3 python3-venv
 
-systemctl enable --now docker
+if [ "${application_runtime}" = "compose" ]; then
+  apt-get install -y --no-install-recommends docker.io docker-compose-v2
+  systemctl enable --now docker
+fi
 
 # AWS CLI comes from AWS, not apt: Ubuntu 24.04 dropped the `awscli` package
 # (v1) from the archive and never carried v2, so `apt-get install awscli` fails
@@ -44,9 +47,9 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 CONF
 
-# Swap. Three containers on a 1 GB plan is tight, and the specification lists
-# OOM as a live risk (section 12). Swap turns "collector killed" into
-# "collector slower", which is the better failure for a data collector.
+# Swap. The specification lists 1 GB OOM as a live risk. Swap turns "collector
+# killed" into "collector slower", which is the better failure for a data
+# collector regardless of whether systemd or Compose supervises it.
 if [ ! -f /swapfile ]; then
   fallocate -l 2G /swapfile
   chmod 600 /swapfile
@@ -59,10 +62,13 @@ echo 'vm.swappiness=10' > /etc/sysctl.d/99-usstocks.conf
 
 # Service account and layout.
 id -u ${project_name} >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/${project_name} ${project_name}
-usermod -aG docker ${project_name}
+if [ "${application_runtime}" = "compose" ]; then
+  usermod -aG docker ${project_name}
+fi
 install -d -o ${project_name} -g ${project_name} -m 0750 /opt/${project_name}
 install -d -o ${project_name} -g ${project_name} -m 0750 /var/lib/${project_name}
 install -d -o ${project_name} -g ${project_name} -m 0750 /var/backups/${project_name}
+install -d -o ${project_name} -g ${project_name} -m 0750 /var/cache/${project_name}/pip
 install -d -o root -g ${project_name} -m 0750 /etc/${project_name}
 
 # Placeholder env file. Real secrets are written out of band; user_data is
@@ -73,6 +79,8 @@ if [ ! -f /etc/${project_name}/${project_name}.env ]; then
 # See .env.example in the repository for the full list.
 USSTOCKS_PRIMARY_SOURCE=tiingo
 USSTOCKS_TIINGO_API_KEY=
+USSTOCKS_DB_PATH=/var/lib/usstocks/market.db
+USSTOCKS_LIVE_DB_PATH=/dev/shm/usstocks-live.db
 USSTOCKS_AUTH_MODE=cloudflare_access
 USSTOCKS_CF_ACCESS_TEAM_DOMAIN=
 USSTOCKS_CF_ACCESS_AUD=
@@ -100,4 +108,4 @@ echo
 echo "Next, out of band (see docs/aws-deployment.md):"
 echo "  1. write real values into /etc/${project_name}/${project_name}.env"
 echo "  2. install a read-only deploy key at /var/lib/${project_name}/.ssh/id_ed25519"
-echo "  3. enable the deploy agent: systemctl enable --now ${project_name}-deploy.timer"
+echo "  3. clone the repository and run deploy/systemd/install.sh"

@@ -90,8 +90,12 @@ GROUP BY session;
 ### ログ
 
 ```bash
-docker compose -f deploy/docker-compose.yml logs --tail=200 collector
+# systemd direct runtime（推奨）
 journalctl -u usstocks-collector -n 200 --no-pager
+journalctl -u usstocks-api -u usstocks-deploy.service --since today
+
+# Compose互換構成の場合
+docker compose -f deploy/docker-compose.yml logs --tail=200 collector
 ```
 
 APIキーやトークンはログフィルタでマスクされる（仕様書4.5）。それでも
@@ -109,6 +113,13 @@ APIキーやトークンはログフィルタでマスクされる（仕様書4.
 3. `PRAGMA integrity_check` で複製を検証する
 4. gzip 圧縮して S3 へアップロードする
 5. ローカルの古い世代を削除する
+
+systemd direct runtimeでは`usstocks-backup.timer`が日次実行する。手動確認:
+
+```bash
+sudo systemctl start usstocks-backup.service
+journalctl -u usstocks-backup.service -n 100 --no-pager
+```
 
 ### リストア試験（四半期に一度を推奨）
 
@@ -141,7 +152,9 @@ deploy/backup/restore.sh \
 画面から検索して追加するのが通常。CLIからも可能:
 
 ```bash
-docker compose -f deploy/docker-compose.yml exec api python scripts/seed.py TSLA
+sudo -u usstocks /usr/bin/env \
+  USSTOCKS_DB_PATH=/var/lib/usstocks/market.db \
+  /opt/usstocks/current/venv/bin/python /opt/usstocks/app/scripts/seed.py TSLA
 ```
 
 削除（購読解除）しても**履歴は消えない**。これは意図的である
@@ -163,10 +176,12 @@ collector を再起動すると反映される。
 Tiingo の長時間障害時のみ、**明示的に**行う。
 
 ```bash
-# .env
+# /etc/usstocks/usstocks.env
 USSTOCKS_PRIMARY_SOURCE=alpaca
 USSTOCKS_ALPACA_API_KEY=...
 USSTOCKS_ALPACA_API_SECRET=...
+
+sudo systemctl restart usstocks-collector
 ```
 
 collector だけを再起動する。既存の Tiingo データは上書きされず、Alpaca の足は
@@ -182,8 +197,8 @@ collector だけを再起動する。既存の Tiingo データは上書きさ�
 curl -sO -J 'https://stocks.example.com/api/export/csv?symbols=AAPL,MSFT&days=90'
 ```
 
-Parquet を使う場合はイメージに `pip install '.[parquet]'` が必要。1GB機では
-pyarrow のメモリ消費に注意し、期間を区切って取得する
+Parquetを使う場合はrelease venvに`.[parquet]` extraを含めて構築する必要がある。
+1GB機ではpyarrowのメモリ消費に注意し、期間を区切って取得する
 （[spec-review D-1](spec-review.md)）。
 
 ## 5. 定期作業
