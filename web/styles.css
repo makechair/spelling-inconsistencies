@@ -296,3 +296,11 @@ body {
   white-space: nowrap;
   border: 0;
 }
+
+/* A price carried from the last bar rather than a live quote. Dimmed so the
+   panel does not present stale data with the same weight as a live tick
+   (spec 3.2: a quiet market and a dead feed must not look alike). */
+.quote-price .last.historical {
+  opacity: .7;
+  font-weight: 500;
+}

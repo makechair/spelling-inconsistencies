@@ -31,6 +31,9 @@ const state = {
   // it is realistic to watch more than that, and a silently unsubscribed
   // symbol would just look like a stuck price.
   subscribed: null,
+  // Newest bar of the loaded range, per symbol. Outside market hours the
+  // collector publishes no live snapshot, so this is the only price there is.
+  lastBar: new Map(),
   retryDelay: 1000,
   lastEventAt: 0,
 };
@@ -267,6 +270,12 @@ async function loadBars() {
       ? payload.bars
       : payload.bars.filter((bar) => bar.session === 'regular');
     chart.setBars(bars);
+    if (bars.length) {
+      state.lastBar.set(state.selected, bars[bars.length - 1]);
+    } else {
+      state.lastBar.delete(state.selected);
+    }
+    renderQuote();
 
     // The provider is named only when more than one appears in the range.
     // Spec 5.2 forbids blending providers silently, and that is the case worth
@@ -406,12 +415,29 @@ function applyStatus(status) {
 function renderQuote() {
   const live = state.live.get(state.selected);
   if (!live) {
-    el.quoteLast.textContent = '—';
+    // No live snapshot: the market is closed, or nothing has traded since the
+    // collector started. Fall back to the newest bar on the chart rather than
+    // showing a dash -- the price is on screen either way, and a blank field
+    // next to a drawn candle reads as a fault.
+    //
+    // Marked as a close, not a last price. Spec 3.2 asks that a quiet market
+    // and a dead feed look different, and that holds for the panel as much as
+    // for the connection dot: presenting a stale figure as live would erase
+    // exactly the distinction the timestamp beside it exists to make.
+    const bar = state.lastBar.get(state.selected);
+    el.quoteLast.textContent = bar ? fmtPrice(bar.close) : '—';
+    el.quoteLast.classList.toggle('historical', Boolean(bar));
+    el.quoteLast.title = bar ? 'ライブ更新なし。チャート最終足の終値' : '';
     el.quoteChange.textContent = '';
-    el.quoteSession.textContent = '—';
-    el.quoteUpdated.textContent = '—';
+    el.quoteSession.textContent = bar
+      ? `${SESSION_LABEL[bar.session] || bar.session}（最終足）`
+      : '—';
+    el.quoteUpdated.textContent = bar ? fmtClock(bar.time * 1000) : '—';
     return;
   }
+
+  el.quoteLast.classList.remove('historical');
+  el.quoteLast.title = '';
 
   el.quoteLast.textContent = fmtPrice(live.last_price);
   el.quoteChange.className = `change ${changeClass(live.change)}`;
