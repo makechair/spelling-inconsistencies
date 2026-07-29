@@ -254,9 +254,24 @@ Route 53 Domains（Route 53 コンソール → Registered domains → `sig-game
 Cloudflare へのドメイン移管は不要である。
 
 ```bash
+# 1. 登録情報が更新されたか（AWS 側の記録）
 aws route53domains get-domain-detail --region us-east-1 --domain-name sig-games.com \
   --query 'Nameservers[].Name'
+
+# 2. .com レジストリの委任が実際に切り替わったか
+#
+# +short は使えない。TLD サーバーは自分が権威ではないので、委任を ANSWER では
+# なく AUTHORITY セクションで返す。+short は ANSWER しか出さないため、正常に
+# 委任されていても出力が空になり、失敗と区別がつかない。
+dig NS sig-games.com @a.gtld-servers.net +noall +authority
+
+# 3. ブログが生きているか
+curl -sI https://sig-games.com | head -1
 ```
+
+2 で Cloudflare の2件が出れば委任完了。まだ Route 53 の4件が出る場合は
+レジストリへの反映待ちで、数分〜1時間程度かかる。3 が 200 を返している限り
+実害はない。
 
 - Cloudflare 側でゾーンが Active になるまで数分〜数時間。
 - `.com` の委任 NS はキャッシュが最大2日ある。その間は Route 53 と Cloudflare の
