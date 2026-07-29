@@ -67,6 +67,15 @@ export class PriceChart {
     this.legend = document.createElement('div');
     this.legend.className = 'chart-legend';
     container.appendChild(this.legend);
+
+    // The price scale shows bare numbers. Every instrument here is priced in
+    // USD (the catalog import keeps only USD listings), so one static label is
+    // enough -- prefixing each tick with a currency symbol would crowd an axis
+    // that already carries two decimals.
+    const unit = document.createElement('div');
+    unit.className = 'chart-unit';
+    unit.textContent = 'USD';
+    container.appendChild(unit);
     this.chart.subscribeCrosshairMove((param) => this.#renderLegend(param));
 
     // Debounced: a single pinch or wheel gesture fires this many times, and
@@ -124,8 +133,13 @@ export class PriceChart {
         // UNIX seconds as UTC and renders them as-is; `locale` alone changes
         // only the wording. The day is shown at each boundary because an
         // intraday axis in market time crosses midnight in most zones.
+        //
+        // The comparison runs <=, not >=: TickMarkType is ordered coarse to
+        // fine (Year 0, Month 1, DayOfMonth 2, Time 3, TimeWithSeconds 4), so
+        // >= DayOfMonth catches the time marks as well and every tick on an
+        // intraday chart renders as the same date.
         tickMarkFormatter: (time, tickMarkType) =>
-          tickMarkType >= LightweightCharts.TickMarkType.DayOfMonth
+          tickMarkType <= LightweightCharts.TickMarkType.DayOfMonth
             ? formatDate(time)
             : formatTime(time),
       },

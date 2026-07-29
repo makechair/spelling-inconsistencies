@@ -217,6 +217,18 @@ body {
 }
 
 .chart-legend .legend-item { white-space: nowrap; }
+
+/* Currency of the price scale, stated once rather than on every tick. */
+.chart-unit {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 2;
+  font-size: 10px;
+  letter-spacing: .04em;
+  color: var(--muted);
+  pointer-events: none;
+}
 .chart-legend .legend-key { margin-right: 3px; opacity: .75; }
 .chart-legend .legend-value { color: var(--text, inherit); font-variant-numeric: tabular-nums; }
 
