@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     # a fresh install connecting; set it once you know your tier allows a level.
     tiingo_threshold_level: int | None = None
 
+    # Local ticker catalog. A static file, not an API endpoint, so importing
+    # it spends none of the hourly REST allowance -- and being the provider's
+    # own universe, it cannot list a symbol the price endpoints will not serve.
+    catalog_url: str = (
+        "https://apimedia.tiingo.com/docs/tiingo/daily/supported_tickers.zip"
+    )
+    catalog_timeout_seconds: float = 120.0
+    # The file carries every ticker ever covered. Anything whose coverage ended
+    # before this many days ago is dropped, so a search for a live symbol is not
+    # buried under decades of delisted ones.
+    catalog_keep_days: int = 30
+
     alpaca_api_key: str | None = None
     alpaca_api_secret: str | None = None
     alpaca_rest_base: str = "https://data.alpaca.markets"

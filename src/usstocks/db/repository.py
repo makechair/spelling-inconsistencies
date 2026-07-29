@@ -307,6 +307,76 @@ class Repository:
         sql += " ORDER BY symbol"
         return [self._row_to_symbol(row) for row in self.connection.execute(sql)]
 
+    # ------------------------------------------------------------- catalog
+    def upsert_catalog(self, rows: list[tuple]) -> int:
+        """Write one import chunk. Rows are (symbol, ..., refreshed_at)."""
+        with self.connection as conn:
+            conn.executemany(
+                "INSERT INTO symbol_catalog"
+                " (symbol, name, exchange, asset_type, price_currency,"
+                "  start_date, end_date, refreshed_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(symbol) DO UPDATE SET"
+                "   name = excluded.name,"
+                "   exchange = excluded.exchange,"
+                "   asset_type = excluded.asset_type,"
+                "   price_currency = excluded.price_currency,"
+                "   start_date = excluded.start_date,"
+                "   end_date = excluded.end_date,"
+                "   refreshed_at = excluded.refreshed_at",
+                rows,
+            )
+        return len(rows)
+
+    def prune_catalog(self, stamp: str) -> int:
+        """Drop entries the latest import did not carry.
+
+        Matched by inequality, not ordering. The stamp has second resolution, so
+        `refreshed_at < stamp` silently keeps everything when two imports land
+        in the same second -- and "rows this run did not write" is what is meant
+        regardless of how the clock compares.
+        """
+        with self.connection as conn:
+            cursor = conn.execute(
+                "DELETE FROM symbol_catalog WHERE refreshed_at <> ?", (stamp,)
+            )
+        return cursor.rowcount
+
+    def catalog_size(self) -> int:
+        row = self.connection.execute("SELECT COUNT(*) AS n FROM symbol_catalog").fetchone()
+        return int(row["n"]) if row else 0
+
+    def search_catalog(self, needle: str, limit: int = 20) -> list[SymbolInfo]:
+        """Local ticker/name search.
+
+        Ordered so an exact ticker wins, then ticker prefixes, then anything
+        matching by name -- typing "MU" should not surface MUAIX above Micron.
+        """
+        needle = needle.strip().upper()
+        if not needle:
+            return []
+        pattern = f"%{needle}%"
+        rows = self.connection.execute(
+            "SELECT symbol, name, exchange, asset_type FROM symbol_catalog"
+            " WHERE symbol LIKE ? OR UPPER(name) LIKE ?"
+            " ORDER BY"
+            "   CASE WHEN symbol = ? THEN 0"
+            "        WHEN symbol LIKE ? THEN 1"
+            "        ELSE 2 END,"
+            "   LENGTH(symbol), symbol"
+            " LIMIT ?",
+            (pattern, pattern, needle, f"{needle}%", limit),
+        ).fetchall()
+        return [
+            SymbolInfo(
+                symbol=row["symbol"],
+                name=row["name"],
+                exchange=row["exchange"],
+                asset_type=row["asset_type"],
+            )
+            for row in rows
+        ]
+
     def watched_symbols(self) -> list[str]:
         return [
             row["symbol"]

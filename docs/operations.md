@@ -201,12 +201,52 @@ Parquetを使う場合はrelease venvに`.[parquet]` extraを含めて構築す�
 1GB機ではpyarrowのメモリ消費に注意し、期間を区切って取得する
 （[spec-review D-1](spec-review.md)）。
 
+### 銘柄カタログ（ローカル検索）
+
+ティッカー検索は、提供元の対応銘柄一覧をローカルに持って解決する。検索が
+REST枠（50回/時）を食い潰さないための仕組みである（[spec-review A-2](spec-review.md)）。
+
+取得元は **API エンドポイントではなく静的ファイル**なので、**リクエスト数に
+カウントされない**。
+
+```
+https://apimedia.tiingo.com/docs/tiingo/daily/supported_tickers.zip
+```
+
+別の提供元のティッカー一覧を併用しない理由は、不整合を避けるためである。
+検索に出た銘柄の価格が取れない、という状態が起こりうる。**同じ提供元の
+universe をそのまま持つ**限り、その齟齬は原理的に発生しない。
+
+`usstocks-catalog.timer` が**週次**（日曜 08:30 UTC、米国市場が閉まっている
+時間帯）で実行する。週次で足りるのは、この間に変わるのが新規上場と上場廃止
+だけで、稼働中のおよそ1万銘柄に対して週あたり数件だからである。カタログに
+無い新しい銘柄も、検索が提供元へフォールバックするので引ける — その1件だけ
+REST を1回使う。
+
+zip は一時ファイルへストリーム保存し、行ごとに読み、**取り込み後に必ず削除**
+する（失敗時も `finally` で消す）。`PrivateTmp=true` なので、プロセスが強制
+終了しても残骸がディスクに残らない。
+
+```bash
+# 手動実行
+sudo systemctl start usstocks-catalog.service
+journalctl -u usstocks-catalog -n 20
+
+# 件数の確認
+sudo -u usstocks sqlite3 /var/lib/usstocks/market.db \
+  "SELECT COUNT(*) FROM symbol_catalog;"
+```
+
+取り込みが1件も生まなかった場合は**失敗として扱い、前回のカタログを残す**。
+配布ファイルが壊れたり形式が変わったりしたときに、検索が全滅するのを防ぐため
+である。
+
 ## 5. 定期作業
 
 | 頻度 | 作業 |
 |---|---|
 | 毎日 | `/api/health` の `problems` を確認（画面下部にも要約が出る） |
-| 毎週 | ディスク使用率、月間受信バイト数の推移 |
+| 毎週 | ディスク使用率、月間受信バイト数の推移（カタログ更新は `usstocks-catalog.timer` が自動実行） |
 | 毎月 | AWS請求、Tiingoの利用量 |
 | 四半期 | リストア試験、依存パッケージ更新（`pip list --outdated`）、APIキーのローテーション |
 | 随時 | 提供元の利用規約・料金の変更確認（仕様書12） |

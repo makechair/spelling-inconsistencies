@@ -82,9 +82,17 @@ async def search_symbols(
 ) -> list[SymbolOut]:
     """Ticker or company name search.
 
-    Local matches come first and cost nothing; the provider is only consulted
-    when the local list cannot answer, which keeps search off the REST budget
-    for symbols already being tracked (docs/spec-review.md A-2).
+    Answered locally wherever possible. Three tiers, cheapest first:
+
+    1. symbols already in the watchlist,
+    2. the imported provider catalog (usstocks-catalog.timer),
+    3. the provider's search endpoint.
+
+    Only the third spends REST budget, and with the catalog present it is
+    reached only for something the catalog does not know -- a listing newer
+    than the last import. Before the catalog existed every distinct query went
+    to the provider, so autocomplete competed with backfill for 50 calls an
+    hour (docs/spec-review.md A-2).
     """
     needle = q.strip().upper()
     known = state.repository.list_symbols()
@@ -93,6 +101,14 @@ async def search_symbols(
         for info in known
         if needle in info.symbol or (info.name and needle in info.name.upper())
     ]
+
+    if len(local) < limit:
+        seen_local = {info.symbol for info in local}
+        local += [
+            info
+            for info in state.repository.search_catalog(needle, limit=limit)
+            if info.symbol not in seen_local
+        ]
 
     remote: list[SymbolOut] = []
     if len(local) < limit and state.adapter is not None:

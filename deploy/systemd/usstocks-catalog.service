@@ -1,0 +1,32 @@
+[Unit]
+Description=Refresh the local ticker catalog from the provider's static file
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=usstocks
+Group=usstocks
+EnvironmentFile=/etc/usstocks/usstocks.env
+ExecStart=/usr/bin/env USSTOCKS_DB_PATH=/var/lib/usstocks/market.db /opt/usstocks/current/venv/bin/python -m usstocks.catalog
+
+# The download is streamed to a temporary file, unpacked row by row and deleted
+# in a finally block. PrivateTmp keeps that file inside the unit's own /tmp, so
+# a kill -9 mid-import cannot leave a stray archive on a 40 GB disk.
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/usstocks
+ProtectHome=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0027
+
+# Well below the collector's ceiling: the import streams and never holds more
+# than one chunk, so anything larger would be hiding a leak rather than needing
+# the room.
+MemoryMax=192M
+TimeoutStartSec=900

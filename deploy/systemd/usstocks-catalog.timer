@@ -1,0 +1,24 @@
+[Unit]
+Description=Weekly ticker catalog refresh
+
+[Timer]
+# Weekly, not daily. What the catalog gains between runs is new listings and
+# delistings -- a handful a week against roughly ten thousand active tickers.
+# A symbol too new to be in it still resolves: search falls through to the
+# provider, spending one REST call for the one query that needs it.
+#
+# Sunday, with the US market closed, so the import never contends with the
+# collector for the database write lock during a session.
+OnCalendar=Sun *-*-* 08:30:00 UTC
+
+# Catches up after downtime. An instance that was off over the weekend would
+# otherwise wait a full week with a catalog that keeps ageing.
+Persistent=true
+
+# The archive is served to everyone from one origin and this schedule is in a
+# public repository; spreading the start avoids a thundering herd of hosts
+# asking for the same file at the same second.
+RandomizedDelaySec=3600
+
+[Install]
+WantedBy=timers.target

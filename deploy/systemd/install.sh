@@ -68,7 +68,9 @@ for unit in \
   usstocks-api.service \
   usstocks-cloudflared.service \
   usstocks-backup.service \
-  usstocks-backup.timer; do
+  usstocks-backup.timer \
+  usstocks-catalog.service \
+  usstocks-catalog.timer; do
   install -m 0644 "${REPO_DIR}/deploy/systemd/${unit}" "${UNIT_DIR}/${unit}"
 done
 install -m 0644 \
@@ -94,8 +96,16 @@ systemctl enable \
   usstocks-collector.service \
   usstocks-api.service \
   usstocks-backup.timer \
+  usstocks-catalog.timer \
   usstocks-deploy.timer
-systemctl start usstocks-backup.timer usstocks-deploy.timer
+systemctl start usstocks-backup.timer usstocks-catalog.timer usstocks-deploy.timer
+
+# Populate the catalog now rather than waiting for Sunday. Search falls back to
+# the provider until this lands, so a failure here costs REST budget, not
+# function.
+if ! systemctl start usstocks-catalog.service; then
+  log "catalog import failed; symbol search will use the provider until it succeeds"
+fi
 
 if [[ -x /usr/bin/cloudflared ]]; then
   systemctl enable usstocks-cloudflared.service
