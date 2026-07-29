@@ -45,6 +45,37 @@ curl -s .../api/health | jq '.rest_budget'
 50に張り付いていないことを確認する。張り付く場合は
 `USSTOCKS_BACKFILL_MIN_GAP_SECONDS` を上げる。
 
+### 1.2.5 足の密度の実測（A-5・最重要）
+
+**価格が正確でも、足が飛び飛びならチャートとして使えない。**これは精度ではなく
+カバレッジの問題で、IEX単独フィードの構造的な性質である
+（[spec-review A-5](spec-review.md)）。
+
+```sql
+-- 通常取引時間に、実際に足がある分の割合
+SELECT
+  DATE(timestamp_utc)                       AS day,
+  COUNT(*)                                  AS bars,
+  ROUND(COUNT(*) * 100.0 / 390, 1)          AS pct_of_session
+FROM bars_1m
+WHERE symbol = 'AAPL' AND session = 'regular'
+GROUP BY day ORDER BY day DESC LIMIT 5;
+```
+
+通常取引は 390 分/日なので、`bars` が 390 に近いほど連続している。
+
+| 被覆率 | 判断 |
+|---|---|
+| 80%以上 | 実用的。無料枠を継続してよい |
+| 50〜80% | 銘柄による。流動性の高い銘柄だけに絞れば使える |
+| 50%未満 | **統合気配（SIP）への移行を検討する。** Alpaca 有料枠で `USSTOCKS_ALPACA_FEED=sip` |
+
+**計測は必ず通常取引時間で行うこと。**時間外は IEX の板が最も薄く、被覆率が実態より
+大幅に低く出る。
+
+移行する場合、**帯域の前提が完全に変わる**（1.1 の 1GB/月 は成立しない）。
+`USSTOCKS_MONTHLY_BANDWIDTH_BYTES` の見直しと、ディスク増加の再試算が必要になる。
+
 ### 1.3 価格の突き合わせ
 
 証券会社の画面と並べ、**同一時刻**で比較する。許容幅は自分で決めること。

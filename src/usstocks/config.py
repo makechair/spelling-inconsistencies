@@ -137,7 +137,6 @@ class Settings(BaseSettings):
 
     # ----------------------------------------------------------------- misc
     log_level: str = "INFO"
-    display_timezone: str = "America/New_York"
 
     @field_validator("source_priority", "allowed_emails", mode="before")
     @classmethod
