@@ -37,7 +37,7 @@ class TiingoAdapter(MarketDataAdapter):
         *,
         rest_base: str = "https://api.tiingo.com",
         ws_url: str = "wss://api.tiingo.com/iex",
-        threshold_level: int = 5,
+        threshold_level: int | None = None,
         timeout: float = 20.0,
     ) -> None:
         if not api_key:
@@ -62,9 +62,15 @@ class TiingoAdapter(MarketDataAdapter):
     # ------------------------------------------------------------------ REST
     async def fetch_bars(self, symbol: str, start: datetime, end: datetime) -> list[Bar]:
         url = f"{self._rest_base}/iex/{symbol.lower()}/prices"
+        # Dates only. The endpoint rejects a timestamp outright:
+        #   400 {"detail":"Error: Start date format was not correct.
+        #        Must be in YYYY-MM-DD format."}
+        # so every backfill failed and no history was ever stored. Because the
+        # request is therefore coarser than the gap being filled, the response
+        # is trimmed to the window below rather than trusted as-is.
         params = {
-            "startDate": start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "endDate": end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "startDate": start.astimezone(UTC).strftime("%Y-%m-%d"),
+            "endDate": end.astimezone(UTC).strftime("%Y-%m-%d"),
             "resampleFreq": "1min",
             "columns": "open,high,low,close,volume",
             "afterHours": "true",
@@ -93,6 +99,12 @@ class TiingoAdapter(MarketDataAdapter):
         for item in payload:
             timestamp = _parse_timestamp(item.get("date"))
             if timestamp is None:
+                continue
+            # The query is day-granular, so the response overhangs the gap at
+            # both ends. Writing the overhang would be mostly harmless -- the
+            # upsert is idempotent -- but it would make a small gap re-fetch and
+            # re-write a whole day, and hide the real size of what was missing.
+            if timestamp < start or timestamp > end:
                 continue
             try:
                 bars.append(
@@ -149,13 +161,26 @@ class TiingoAdapter(MarketDataAdapter):
 
     # ------------------------------------------------------------- WebSocket
     async def stream(self, symbols: list[str]) -> AsyncIterator[Trade | Quote]:
+        # thresholdLevel is omitted unless configured. Sending a level the plan
+        # does not allow is refused at subscribe time and the server closes the
+        # socket, so the collector reconnects forever without ever receiving a
+        # trade:
+        #   tiingo stream error: thresholdLevel not valid for your subscription
+        #   tier. Please read the new IEX Market data rules on: ...
+        # Omitting it lets Tiingo apply whatever the plan permits. Which levels
+        # a given tier accepts is not documented anywhere this code can check,
+        # so it is a setting rather than a constant -- and the bandwidth meter
+        # in /api/health is what tells you whether the resulting volume fits the
+        # 1 GB/month budget (spec-review A-1).
+        event_data: dict[str, object] = {
+            "tickers": [symbol.lower() for symbol in symbols],
+        }
+        if self._threshold_level is not None:
+            event_data["thresholdLevel"] = self._threshold_level
         subscribe = {
             "eventName": "subscribe",
             "authorization": self._api_key,
-            "eventData": {
-                "thresholdLevel": self._threshold_level,
-                "tickers": [symbol.lower() for symbol in symbols],
-            },
+            "eventData": event_data,
         }
         async with websockets.connect(
             self._ws_url, ping_interval=20, ping_timeout=20, max_queue=1024

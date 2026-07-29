@@ -49,9 +49,15 @@ class Settings(BaseSettings):
     tiingo_api_key: str | None = None
     tiingo_rest_base: str = "https://api.tiingo.com"
     tiingo_ws_url: str = "wss://api.tiingo.com/iex"
-    # Tiingo threshold level. 5 = last-sale/trade updates only. Subscribing to
-    # quotes multiplies bandwidth and cannot produce OHLCV (spec gap B-3).
-    tiingo_threshold_level: int = 5
+    # Tiingo IEX threshold level, or None to let the plan decide.
+    #
+    # Level 5 (last-sale only) is what this workload wants -- quotes carry no
+    # size, cannot produce OHLCV, and are the largest single contributor to the
+    # 1 GB/month budget (spec gaps A-1, B-3). But it is not accepted on every
+    # tier: a free key is refused at subscribe time and the socket is closed,
+    # leaving the collector reconnecting indefinitely. Defaulting to None keeps
+    # a fresh install connecting; set it once you know your tier allows a level.
+    tiingo_threshold_level: int | None = None
 
     alpaca_api_key: str | None = None
     alpaca_api_secret: str | None = None

@@ -21,10 +21,20 @@ def test_free_tier_budgets_match_the_documented_limits():
     assert settings.monthly_bandwidth_bytes == 1_000_000_000
 
 
-def test_quotes_are_not_subscribed_by_default():
-    """Threshold 5 = trades only: quotes cannot produce OHLCV and multiply
-    bandwidth (docs/spec-review.md A-1, B-3)."""
-    assert Settings().tiingo_threshold_level == 5
+def test_threshold_level_is_left_to_the_plan_by_default():
+    """Level 5 (trades only) is what the workload wants -- quotes cannot produce
+    OHLCV and multiply bandwidth (docs/spec-review.md A-1, B-3) -- but it is not
+    accepted on every tier. A free key is refused at subscribe time and the
+    socket closed, so a hard-coded 5 meant a fresh install never connected.
+    """
+    assert Settings().tiingo_threshold_level is None
+
+
+def test_threshold_level_is_sent_only_when_configured():
+    from usstocks.adapters.tiingo import TiingoAdapter
+
+    assert TiingoAdapter("k")._threshold_level is None
+    assert TiingoAdapter("k", threshold_level=5)._threshold_level == 5
 
 
 def test_second_level_data_is_not_stored_by_default():

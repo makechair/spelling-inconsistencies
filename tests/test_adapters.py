@@ -108,3 +108,58 @@ async def test_mock_adapter_skips_closed_minutes():
 async def test_mock_search():
     results = await MockAdapter().search_symbols("app")
     assert any(entry["symbol"] == "AAPL" for entry in results)
+
+
+def test_tiingo_requests_dates_and_trims_to_the_window():
+    """The IEX prices endpoint rejects a timestamp:
+
+        400 {"detail":"Error: Start date format was not correct.
+             Must be in YYYY-MM-DD format."}
+
+    Every backfill failed on this and no history was ever stored, while the
+    suite passed -- nothing exercised the request that goes over the wire.
+    Because a date-granular query returns more than the gap asked for, the
+    response is also trimmed here.
+    """
+    import asyncio
+
+    import httpx
+
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.url.params)
+        return httpx.Response(
+            200,
+            json=[
+                # Before the window.
+                {"date": "2026-07-27T13:00:00.000Z", "open": 1.0, "high": 1.0,
+                 "low": 1.0, "close": 1.0, "volume": 1},
+                # Inside it.
+                {"date": "2026-07-27T14:00:00.000Z", "open": 2.0, "high": 2.0,
+                 "low": 2.0, "close": 2.0, "volume": 2},
+                # After it.
+                {"date": "2026-07-27T20:00:00.000Z", "open": 3.0, "high": 3.0,
+                 "low": 3.0, "close": 3.0, "volume": 3},
+            ],
+        )
+
+    adapter = TiingoAdapter("test-key")
+    adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    start = datetime(2026, 7, 27, 13, 45, tzinfo=UTC)
+    end = datetime(2026, 7, 27, 15, 0, tzinfo=UTC)
+    bars = asyncio.run(adapter.fetch_bars("AAPL", start, end))
+
+    assert captured["startDate"] == "2026-07-27"
+    assert captured["endDate"] == "2026-07-27"
+    assert [bar.timestamp for bar in bars] == [
+        datetime(2026, 7, 27, 14, 0, tzinfo=UTC)
+    ]
+
+
+def test_tiingo_omits_threshold_level_unless_configured():
+    """A level the plan disallows is refused at subscribe time and the socket
+    closed, which looks like a network fault rather than a settings problem."""
+    assert TiingoAdapter("k")._threshold_level is None
+    assert TiingoAdapter("k", threshold_level=5)._threshold_level == 5
