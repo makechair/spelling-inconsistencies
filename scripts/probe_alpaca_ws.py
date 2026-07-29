@@ -41,15 +41,45 @@ def stamp() -> str:
     return datetime.now(tz=UTC).strftime("%H:%M:%S")
 
 
-async def probe(url: str, key: str, secret: str, symbols: list[str], seconds: float) -> int:
-    print(f"{stamp()} connecting to {url} (tickers: {symbols})")
+# What each stream type is called on the wire, so a count by kind can name it.
+KINDS = {
+    "t": "trade",
+    "q": "quote",
+    "b": "minute bar",
+    "d": "daily bar",
+    "u": "updated bar",
+    "s": "status",
+    "error": "error",
+    "success": "handshake",
+    "subscription": "subscription",
+}
+
+
+async def probe(
+    url: str,
+    key: str,
+    secret: str,
+    symbols: list[str],
+    channels: list[str],
+    seconds: float,
+) -> int:
+    print(f"{stamp()} connecting to {url} (tickers: {symbols}, channels: {channels})")
 
     frames = 0
-    trades = 0
+    counts: dict[str, int] = {}
     try:
         async with websockets.connect(url, ping_interval=20, ping_timeout=20) as socket:
             await socket.send(json.dumps({"action": "auth", "key": key, "secret": secret}))
-            await socket.send(json.dumps({"action": "subscribe", "trades": symbols}))
+            # Subscribing to more than trades on purpose. The collector
+            # aggregates trades into minute bars itself, but this provider can
+            # send the finished bars ("b") directly -- so a plan that withholds
+            # the tick stream may still deliver everything this system stores.
+            # Asking for all three separates "nothing is available" from "that
+            # particular channel is not".
+            request: dict[str, object] = {"action": "subscribe"}
+            for channel in channels:
+                request[channel] = symbols
+            await socket.send(json.dumps(request))
             print(f"{stamp()} auth and subscribe sent; listening for {seconds:.0f}s")
 
             deadline = asyncio.get_running_loop().time() + seconds
@@ -69,26 +99,42 @@ async def probe(url: str, key: str, secret: str, symbols: list[str], seconds: fl
                 except json.JSONDecodeError:
                     continue
                 if isinstance(messages, list):
-                    # "t" is a trade. The adapter builds bars from these alone.
-                    trades += sum(1 for m in messages if m.get("T") == "t")
+                    for message in messages:
+                        kind = str(message.get("T", "?"))
+                        counts[kind] = counts.get(kind, 0) + 1
     except Exception as exc:  # noqa: BLE001 - a probe reports rather than raises
         print(f"{stamp()} connection ended: {type(exc).__name__}: {exc}")
 
-    print(f"\n{stamp()} {frames} frame(s), {trades} trade message(s)")
+    print(f"\n{stamp()} {frames} frame(s) received")
+    for kind, count in sorted(counts.items(), key=lambda item: -item[1]):
+        print(f"  {kind:12s} {KINDS.get(kind, 'unknown'):12s} {count}")
+
+    trades = counts.get("t", 0)
+    bars = counts.get("b", 0)
     if trades:
-        print("  Streams. USSTOCKS_PRIMARY_SOURCE=alpaca is viable on this plan.")
+        print("\n  Trades stream. USSTOCKS_PRIMARY_SOURCE=alpaca works as designed.")
+    elif bars:
+        print("\n  No trades, but minute bars arrive -- which is what this system")
+        print("  stores. Usable, with the in-progress candle updating once a minute")
+        print("  rather than continuously.")
     elif frames:
-        print("  Frames arrived but no trades. Check for an error or subscription")
-        print("  message above, and whether the market is open.")
+        print("\n  Handshake only. Market closed, or this plan carries no live data")
+        print("  for these channels. Try --symbols FAKEPACA, which the provider")
+        print("  streams around the clock for exactly this check.")
     else:
-        print("  Nothing at all: check the credentials and the URL.")
-    return 0 if trades else 1
+        print("\n  Nothing at all: check the credentials and the URL.")
+    return 0 if (trades or bars) else 1
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbols", default="AAPL", help="comma separated, uppercase")
-    parser.add_argument("--seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--channels",
+        default="trades,quotes,bars",
+        help="which streams to subscribe to (trades, quotes, bars)",
+    )
+    parser.add_argument("--seconds", type=float, default=60.0)
     parser.add_argument("--url", default=os.environ.get("USSTOCKS_ALPACA_WS_URL", DEFAULT_URL))
     args = parser.parse_args()
 
@@ -102,7 +148,8 @@ def main() -> int:
         return 2
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-    return asyncio.run(probe(args.url, key, secret, symbols, args.seconds))
+    channels = [c.strip() for c in args.channels.split(",") if c.strip()]
+    return asyncio.run(probe(args.url, key, secret, symbols, channels, args.seconds))
 
 
 if __name__ == "__main__":
