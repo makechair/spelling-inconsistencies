@@ -74,7 +74,14 @@ class Settings(BaseSettings):
     alpaca_api_key: str | None = None
     alpaca_api_secret: str | None = None
     alpaca_rest_base: str = "https://data.alpaca.markets"
-    alpaca_ws_url: str = "wss://stream.data.alpaca.markets/v2/iex"
+    # "iex" on the free plan, "sip" on a paid one. SIP is the consolidated tape:
+    # every venue, so a minute in which the stock traded anywhere produces a bar
+    # rather than only the ~2-3% of volume IEX sees. Nothing else in the adapter
+    # changes -- this is the whole difference between the sparse chart the free
+    # feed draws and a continuous one.
+    alpaca_feed: str = "iex"
+    # Left empty to follow alpaca_feed. Set only to point at a different host.
+    alpaca_ws_url: str | None = None
 
     # --------------------------------------------------------- rate budgets
     # Free-tier budgets. Enforced by a persistent token bucket so that restarts

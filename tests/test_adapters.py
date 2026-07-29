@@ -205,3 +205,23 @@ def test_tiingo_drops_minutes_with_no_trades():
 
     assert [bar.timestamp.minute for bar in bars] == [5, 7]
     assert [bar.volume for bar in bars] == [25, 812]
+
+
+def test_alpaca_feed_drives_both_rest_and_websocket():
+    """One setting, not two.
+
+    The feed name appears as a REST parameter and as a path segment in the
+    socket URL. Holding them separately means a migration to the paid tape can
+    be applied to one and not the other, which presents as "the feed I am
+    paying for is not working" rather than as a half-applied setting.
+    """
+    free = AlpacaAdapter("k", "s")
+    assert free._feed == "iex"
+    assert free._ws_url.endswith("/v2/iex")
+
+    paid = AlpacaAdapter("k", "s", feed="sip")
+    assert paid._feed == "sip"
+    assert paid._ws_url.endswith("/v2/sip")
+
+    override = AlpacaAdapter("k", "s", feed="sip", ws_url="wss://example.test/v2/sip")
+    assert override._ws_url == "wss://example.test/v2/sip"

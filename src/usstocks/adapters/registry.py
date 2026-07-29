@@ -33,6 +33,7 @@ def build_adapter(settings: Settings, source: str | None = None) -> MarketDataAd
             settings.alpaca_api_key,
             settings.alpaca_api_secret,
             rest_base=settings.alpaca_rest_base,
+            feed=settings.alpaca_feed,
             ws_url=settings.alpaca_ws_url,
         )
 

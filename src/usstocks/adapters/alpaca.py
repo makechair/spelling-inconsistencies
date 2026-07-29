@@ -36,14 +36,21 @@ class AlpacaAdapter(MarketDataAdapter):
         api_secret: str,
         *,
         rest_base: str = "https://data.alpaca.markets",
-        ws_url: str = "wss://stream.data.alpaca.markets/v2/iex",
+        feed: str = "iex",
+        ws_url: str | None = None,
         timeout: float = 20.0,
     ) -> None:
         if not api_key or not api_secret:
             raise ValueError("Alpaca key and secret are required")
         self._key = api_key
         self._secret = api_secret
-        self._ws_url = ws_url
+        self._feed = feed
+        # Derived from the feed unless overridden. Holding the feed name in two
+        # places -- a REST parameter and a path segment in the socket URL --
+        # invites setting one and not the other, which reads as "the paid feed
+        # is not working" rather than as a half-applied setting.
+        self._ws_url = ws_url or f"wss://stream.data.alpaca.markets/v2/{feed}"
+
         self._client = httpx.AsyncClient(
             base_url=rest_base.rstrip("/"),
             timeout=timeout,
@@ -72,7 +79,7 @@ class AlpacaAdapter(MarketDataAdapter):
                 "start": start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "end": end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "limit": 10_000,
-                "feed": "iex",
+                "feed": self._feed,
                 "adjustment": "raw",
             }
             if page_token:
