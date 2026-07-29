@@ -22,6 +22,7 @@ const DEFAULTS = {
   extended: true,
   barSpacing: null,   // null = fit the range on first load
   rightOffset: null,
+  movingAverages: false,
 };
 
 function read() {

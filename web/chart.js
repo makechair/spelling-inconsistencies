@@ -11,6 +11,7 @@
  */
 
 import { formatDate, formatTime, onChange } from './timezone.js';
+import { sma } from './indicators.js';
 import { save, view } from './viewstate.js';
 
 function row(label, value) {
@@ -31,6 +32,14 @@ function row(label, value) {
 
 const UP = '#26a69a';
 const DOWN = '#ef5350';
+
+// Periods and colours follow the convention Japanese broker terminals use, so
+// the numbers line up with whatever the reader is comparing against.
+const MOVING_AVERAGES = [
+  { period: 5, color: '#4ea1ff' },
+  { period: 25, color: '#d9a441' },
+  { period: 75, color: '#c778dd' },
+];
 
 export class PriceChart {
   constructor(container) {
@@ -64,6 +73,19 @@ export class PriceChart {
       scaleMargins: { top: 0.08, bottom: 0.24 },
     });
 
+    this.maSeries = MOVING_AVERAGES.map(({ period, color }) => ({
+      period,
+      color,
+      series: this.chart.addLineSeries({
+        color,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        // An average is a reading, not a level to snap the crosshair to.
+        crosshairMarkerVisible: false,
+      }),
+    }));
+
     this.legend = document.createElement('div');
     this.legend.className = 'chart-legend';
     container.appendChild(this.legend);
@@ -89,9 +111,13 @@ export class PriceChart {
       }, 400);
     });
 
+    this.showMovingAverages = view().movingAverages;
+    this.setMovingAverages(this.showMovingAverages);
+
     this.lastTime = null;
     this.lastCandle = null;
     this.lastVolume = null;
+    this.candleData = [];
     this.observer = new ResizeObserver(() => this.#resize());
     this.observer.observe(container);
     this.#resize();
@@ -171,14 +197,32 @@ export class PriceChart {
         maximumFractionDigits: 2,
       });
     const time = param?.time ?? candle.time;
+    const maRows = this.showMovingAverages
+      ? this.maSeries.map((ma) => {
+          const point = param?.seriesData?.get(ma.series);
+          const item = row(`MA${ma.period}`, price(point?.value));
+          item.style.color = ma.color;
+          return item;
+        })
+      : [];
     this.legend.replaceChildren(
       row('始', price(candle.open)),
       row('高', price(candle.high)),
       row('安', price(candle.low)),
       row('終', price(candle.close)),
       row('出来高', volume?.value == null ? '—' : volume.value.toLocaleString()),
+      ...maRows,
       row('', time ? `${formatDate(time)} ${formatTime(time)}` : ''),
     );
+  }
+
+  setMovingAverages(visible) {
+    this.showMovingAverages = visible;
+    for (const ma of this.maSeries) {
+      ma.series.applyOptions({ visible });
+    }
+    save({ movingAverages: visible });
+    this.#renderLegend(null);
   }
 
   #resize() {
@@ -204,6 +248,13 @@ export class PriceChart {
     }));
     this.candles.setData(candles);
     this.volume.setData(volumes);
+    // Kept so the live bar can extend the averages without refetching. Only
+    // the trailing window is needed, but holding the array is simpler than
+    // maintaining three ring buffers.
+    this.candleData = candles;
+    for (const ma of this.maSeries) {
+      ma.series.setData(sma(candles, ma.period));
+    }
     this.lastCandle = candles.length ? candles[candles.length - 1] : null;
     this.lastVolume = volumes.length ? volumes[volumes.length - 1] : null;
     this.#renderLegend(null);
@@ -246,6 +297,28 @@ export class PriceChart {
     });
     this.lastCandle = { time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close };
     this.lastVolume = { time: bar.time, value: bar.volume };
+
+    // Without this the averages freeze at the last completed bar while the
+    // candle beside them keeps moving, which reads as a stalled indicator.
+    // Only the newest point changes, so each series is updated rather than
+    // rebuilt.
+    if (this.candleData) {
+      const last = this.candleData[this.candleData.length - 1];
+      if (last && last.time === bar.time) {
+        this.candleData[this.candleData.length - 1] = this.lastCandle;
+      } else {
+        this.candleData.push(this.lastCandle);
+      }
+      for (const ma of this.maSeries) {
+        const window = this.candleData.slice(-ma.period);
+        if (window.length === ma.period) {
+          ma.series.update({
+            time: bar.time,
+            value: window.reduce((total, item) => total + item.close, 0) / ma.period,
+          });
+        }
+      }
+    }
     this.#renderLegend(null);
     this.lastTime = bar.time;
   }
@@ -253,6 +326,8 @@ export class PriceChart {
   clear() {
     this.candles.setData([]);
     this.volume.setData([]);
+    this.candleData = [];
+    for (const ma of this.maSeries) ma.series.setData([]);
     this.lastCandle = null;
     this.lastVolume = null;
     this.legend.textContent = '';

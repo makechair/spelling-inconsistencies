@@ -56,6 +56,7 @@ const el = {
   footerStatus: document.getElementById('footer-status'),
   exportLink: document.getElementById('export-link'),
   extendedToggle: document.getElementById('extended-toggle'),
+  maToggle: document.getElementById('ma-toggle'),
 };
 
 const chart = new PriceChart(document.getElementById('chart'));
@@ -319,6 +320,11 @@ document.querySelectorAll('.range-bar button[data-days]').forEach((button) => {
   button.classList.toggle('active', Number(button.dataset.days) === state.days);
 });
 el.extendedToggle.checked = state.extended;
+
+el.maToggle.checked = view().movingAverages;
+el.maToggle.addEventListener('change', () => {
+  chart.setMovingAverages(el.maToggle.checked);
+});
 
 function updateExportLink() {
   if (!state.selected) return;
