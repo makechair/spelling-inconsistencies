@@ -449,10 +449,11 @@
     <aside class="sidebar">
       <div class="brand">
         US Stock Realtime Chart
-        <small>ARCHITECTURE 2026-07-29</small>
+        <small>ARCHITECTURE 2026-07-30</small>
       </div>
       <nav aria-label="目次">
         <a href="#summary">概要</a>
+        <a href="#why">なぜ動くのか</a>
         <a href="#context">全体構成</a>
         <a href="#infra">AWS／ネットワーク</a>
         <a href="#runtime">ランタイム</a>
@@ -473,16 +474,19 @@
         <div class="eyebrow">System &amp; Infrastructure Architecture</div>
         <h1>個人向け米国株リアルタイムチャート</h1>
         <p class="lead">
-          Tiingo / Alpaca の市場データを常時収集し、SQLiteへ1分足を蓄積。
-          Cloudflare Accessで保護されたブラウザへFastAPIとSSEで配信する、
+          Tiingo / Alpaca の1分足をRESTポーリングで収集し、SQLiteへ蓄積。
+          Cloudflare Accessで保護されたブラウザへFastAPIで配信する、
           単一Lightsail構成の実装ドキュメント。
+          <strong>無料枠ではWebSocket配信が行われない</strong>ため、
+          RESTの50回/時をどう配分するかが構成全体を決めている。
         </p>
         <div class="meta">
-          <span class="pill">2026-07-29 systemd direct runtime</span>
+          <span class="pill">2026-07-30 REST polling live path</span>
+          <span class="pill">systemd direct runtime</span>
           <span class="pill">Python 3.11 / FastAPI</span>
           <span class="pill">SQLite WAL</span>
           <span class="pill">Terraform / AWS</span>
-          <span class="pill">静的コード調査</span>
+          <span class="pill">コード照合 + 実測</span>
         </div>
       </header>
 
@@ -497,12 +501,12 @@
           <article class="card">
             <span class="metric">10</span>
             <h3>最大購読銘柄</h3>
-            <p>Tiingo無料枠の月間受信帯域を意識したローカル上限。</p>
+            <p>無料枠のREST回数から逆算したローカル上限（仕様書の30本から引き下げ）。</p>
           </article>
           <article class="card">
-            <span class="metric">3</span>
-            <h3>独立systemd services</h3>
-            <p>collector、API、cloudflaredを個別再起動できる。</p>
+            <span class="metric">50</span>
+            <h3>REST calls / hour</h3>
+            <p>唯一の生存経路。この数字が鮮度と銘柄数の両方を決めている。</p>
           </article>
           <article class="card">
             <span class="metric">0</span>
@@ -510,14 +514,14 @@
             <p>Lightsailの80/443は閉じ、Tunnelがloopback APIへ接続。</p>
           </article>
           <article class="card">
-            <span class="metric">1s</span>
-            <h3>SSE配信間隔</h3>
-            <p>変化した銘柄だけを送り、15秒ごとに価格なしheartbeat。</p>
+            <span class="metric">~2m</span>
+            <h3>表示中銘柄の鮮度</h3>
+            <p>REST取得の実効間隔。ブラウザは30秒ごとにローカルDBから追いつく。</p>
           </article>
           <article class="card">
-            <span class="metric">30d</span>
-            <h3>S3保持期間</h3>
-            <p>整合確認済みSQLite gzipをStandard-IAで日次保存。</p>
+            <span class="metric">98.7%</span>
+            <h3>通常取引の被覆率</h3>
+            <p>AAPLで385/390本（実測）。IEX単独フィードの限界は閑散銘柄に出る。</p>
           </article>
           <article class="card">
             <span class="metric">$12</span>
@@ -531,19 +535,234 @@
           <table>
             <thead><tr><th>レイヤー</th><th>実装</th><th>意図</th></tr></thead>
             <tbody>
-              <tr><td>データ取得</td><td>Tiingo主系、Alpaca手動待機系、Mock開発系</td><td>provider固有形式をdomain modelへ隔離</td></tr>
+              <tr><td>データ取得</td><td>REST 1分足ポーリング（Tiingo主系 / Alpaca待機系 / Mock開発系）</td><td>provider固有形式をdomain modelへ隔離</td></tr>
+              <tr><td>予算配分</td><td><code>last_viewed_at</code>で表示中の1銘柄へ集中</td><td>50回/時を「読まれているチャート」へ寄せる</td></tr>
+              <tr><td>銘柄検索</td><td>watchlist → ローカルcatalog → provider の3段</td><td>autocompleteがbackfillの枠を食わない</td></tr>
               <tr><td>永続化</td><td><code>market.db</code> / SQLite WAL</td><td>低コスト、時系列writerをcollectorへ集中</td></tr>
-              <tr><td>ライブ共有</td><td><code>live.db</code> / tmpfs</td><td>高頻度更新をdurable DBから分離</td></tr>
+              <tr><td>ライブ共有</td><td><code>live.db</code> / tmpfs</td><td>高頻度更新をdurable DBから分離（現在は無料枠のため無音）</td></tr>
               <tr><td>公開</td><td>Cloudflare Tunnel + Access</td><td>origin web portをインターネットへ出さない</td></tr>
               <tr><td>IaC</td><td>Terraform</td><td>Lightsailを含むAWS footprintを一元管理</td></tr>
               <tr><td>CD</td><td>ホスト側pull agent</td><td>GitHub runner向けにSSHを全開放しない</td></tr>
             </tbody>
           </table>
         </div>
+
+        <div class="callout danger">
+          <strong>前提の変化: WebSocketは無料枠では配信されない</strong>
+          <p>
+            仕様書は「WebSocketで常時受信し1秒ごとに更新する」を土台に置いていたが、
+            Tiingo・Alpacaいずれの無料枠でも実際には約定が流れない（<code>docs/spec-review.md</code> A-6、
+            2026-07-29実測）。購読は<code>code 200</code>で受理され<code>subscriptionId</code>まで
+            発行されるのに、データだけが来ない。本書の各図は<strong>RESTポーリングを生存経路</strong>
+            として描いている。WebSocket経路のコードは残っており、有料枠へ移れば設定変更だけで復活する。
+          </p>
+        </div>
+      </section>
+
+      <section id="why">
+        <h2>2. なぜこれで動くのか</h2>
+        <p class="section-intro">
+          この構成の非自明な点はひとつに集約される。<strong>1時間に50回しか外部を叩けないのに、
+          画面のチャートは数分おきに伸びていく。</strong>成立させているのは次の3つで、
+          どれか1つでも欠けると成り立たない。
+        </p>
+
+        <div class="diagram">
+          <div class="diagram-title">Why 50 calls/hour is enough</div>
+          <svg viewBox="0 0 1080 560" role="img" aria-label="無料枠50回/時でチャートが更新される理由">
+            <defs>
+              <marker id="arrow-why" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+              </marker>
+            </defs>
+
+            <text class="small" x="20" y="26">制約</text>
+            <rect class="node-warn" x="20" y="40" width="215" height="86" rx="12"/>
+            <text x="127" y="70" text-anchor="middle">WebSocket</text>
+            <text class="small" x="127" y="94" text-anchor="middle">無料枠では配信なし</text>
+            <text class="small" x="127" y="113" text-anchor="middle">（実測 / spec-review A-6）</text>
+
+            <rect class="node-warn" x="20" y="146" width="215" height="86" rx="12"/>
+            <text x="127" y="176" text-anchor="middle">REST 50 calls / hour</text>
+            <text class="small" x="127" y="200" text-anchor="middle">唯一の生存経路</text>
+            <text class="small" x="127" y="219" text-anchor="middle">= 72秒に1回ぶん</text>
+
+            <text class="small" x="300" y="26">成立させている3つの仕組み</text>
+
+            <rect class="node-accent" x="300" y="40" width="450" height="112" rx="12"/>
+            <text x="322" y="70">① RESTは「今値」ではなく「範囲」を返す</text>
+            <text class="small" x="322" y="96">fetch_bars(last_bar + 1分 → now) が、間の全分足をまとめて返す。</text>
+            <text class="small" x="322" y="116">→ 後回しにした銘柄は<tspan font-weight="700">遅れるだけで欠けない</tspan>。</text>
+            <text class="small" x="322" y="136">　開いた瞬間の1回で全部埋まる。だから予算を偏らせてよい。</text>
+
+            <rect class="node-accent" x="300" y="168" width="450" height="112" rx="12"/>
+            <text x="322" y="198">② last_viewed_at が予算の宛先を決める</text>
+            <text class="small" x="322" y="224">/api/bars が呼ばれるたびに symbols.last_viewed_at を打刻。</text>
+            <text class="small" x="322" y="244">collectorは5分以内に見られた銘柄だけを前景として扱う。</text>
+            <text class="small" x="322" y="264">→ 10銘柄へ等分（12分に1回）ではなく<tspan font-weight="700">1銘柄へ集中</tspan>。</text>
+
+            <rect class="node-accent" x="300" y="296" width="450" height="112" rx="12"/>
+            <text x="322" y="326">③ ブラウザが読むのはローカルDBだけ</text>
+            <text class="small" x="322" y="352">画面の更新は /api/bars → market.db。providerには触れない。</text>
+            <text class="small" x="322" y="372">→ <tspan font-weight="700">描画頻度と無料枠が完全に切り離される</tspan>。</text>
+            <text class="small" x="322" y="392">　30秒ごとに「まだ描いていない分」だけを取りに行く。</text>
+
+            <text class="small" x="800" y="26">結果</text>
+            <rect class="node-blue" x="800" y="40" width="260" height="112" rx="12"/>
+            <text x="930" y="70" text-anchor="middle">表示中の1銘柄</text>
+            <text class="small" x="930" y="96" text-anchor="middle">約2分ごとに新しい足が到着</text>
+            <text class="small" x="930" y="116" text-anchor="middle">画面反映は最大+30秒</text>
+            <text class="small" x="930" y="136" text-anchor="middle">≒ 30 calls/hour</text>
+
+            <rect class="node-blue" x="800" y="168" width="260" height="112" rx="12"/>
+            <text x="930" y="198" text-anchor="middle">残り9銘柄</text>
+            <text class="small" x="930" y="224" text-anchor="middle">30分ごとの保険sweepのみ</text>
+            <text class="small" x="930" y="244" text-anchor="middle">= 18 calls/hour</text>
+            <text class="small" x="930" y="264" text-anchor="middle">開けば1回で追いつく</text>
+
+            <rect class="node" x="800" y="296" width="260" height="112" rx="12"/>
+            <text x="930" y="326" text-anchor="middle">タブを閉じたら</text>
+            <text class="small" x="930" y="352" text-anchor="middle">5分で前景から降りる</text>
+            <text class="small" x="930" y="372" text-anchor="middle">誰も読んでいないチャートに</text>
+            <text class="small" x="930" y="392" text-anchor="middle">枠を使わない</text>
+
+            <path d="M235 96 C265 96 270 96 298 96" fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrow-why)"/>
+            <path d="M235 189 C265 189 270 200 298 224" fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrow-why)"/>
+            <path d="M750 96 L798 96" fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrow-why)"/>
+            <path d="M750 224 L798 224" fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrow-why)"/>
+            <path d="M750 352 L798 352" fill="none" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrow-why)"/>
+
+            <rect class="node" x="20" y="440" width="1040" height="96" rx="12"/>
+            <text x="44" y="472">市場が閉じている間はポーリング自体を止める（calendar_us）。</text>
+            <text class="small" x="44" y="500">無料枠の1時間あたりの枠は「取引時間のあいだだけ」使われる。休場中に消費しないので、</text>
+            <text class="small" x="44" y="520">寄り付き直後の再接続バックフィルや、銘柄検索がproviderへ抜けたときの余地がここから出る。</text>
+          </svg>
+        </div>
+
+        <h3>実際の消費量（10銘柄・取引時間中）</h3>
+        <p>
+          鮮度を決めているのは <code>USSTOCKS_FOREGROUND_POLL_SECONDS</code> だけではない。
+          <code>backfill_min_gap_seconds</code>（既定120秒）が「その程度の隙間ならREST枠を使う価値がない」
+          として要求を捨てるため、<strong>前景の実効間隔は90秒設定でも約2分になる</strong>。
+          これは偶然ではあるが、下の表のとおり結果的に枠の中に収まっている。
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>用途</th><th>設定</th><th>実効間隔</th><th>calls / hour</th></tr></thead>
+            <tbody>
+              <tr><td>前景（表示中の1銘柄）</td><td><code>foreground_poll_seconds=90</code></td><td>約2分（min_gap 120秒に律速）</td><td>約30</td></tr>
+              <tr><td>保険sweep（残り9銘柄）</td><td><code>background_poll_seconds=1800</code></td><td>30分</td><td>18</td></tr>
+              <tr><td>再接続／起動時backfill</td><td>都度</td><td>—</td><td>数回</td></tr>
+              <tr><td>銘柄検索</td><td>catalogに無い語のみ</td><td>—</td><td>ほぼ0</td></tr>
+              <tr><td><strong>合計</strong></td><td></td><td></td><td><strong>約48 / 上限50</strong></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout warning">
+          <strong>余裕は小さい</strong>
+          <p>
+            <code>min_gap</code> を下げて前景を本当に90秒間隔にすると40 calls/hourとなり、
+            保険sweepと合わせて58 calls/hourで<strong>上限を超える</strong>。
+            鮮度を上げるなら <code>background_poll_seconds</code> を1時間へ伸ばすか、
+            銘柄数を減らすか、有料枠へ移るかの選択になる。
+            現在の値は「実効2分・約48回」で意図せず均衡している状態である。
+          </p>
+        </div>
+
+        <h3>ブラウザに届くまでの実際の経路</h3>
+        <div class="diagram">
+          <div class="diagram-title">Live path today (solid) vs. websocket path (dormant)</div>
+          <svg viewBox="0 0 1100 420" role="img" aria-label="現在のデータ経路と休止中のWebSocket経路">
+            <defs>
+              <marker id="arrow-live" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+              </marker>
+              <marker id="arrow-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"/>
+              </marker>
+            </defs>
+
+            <text class="small" x="20" y="26">生存経路（REST）</text>
+            <rect class="node-accent" x="20" y="40" width="170" height="92" rx="12"/>
+            <text x="105" y="72" text-anchor="middle">Provider REST</text>
+            <text class="small" x="105" y="96" text-anchor="middle">/iex/{sym}/prices</text>
+            <text class="small" x="105" y="115" text-anchor="middle">1min resample</text>
+
+            <rect class="node-accent" x="235" y="30" width="185" height="112" rx="12"/>
+            <text x="327" y="60" text-anchor="middle">poll loop</text>
+            <text class="small" x="327" y="84" text-anchor="middle">前景 90秒 / 背景 30分</text>
+            <text class="small" x="327" y="103" text-anchor="middle">休場中は停止</text>
+            <text class="small" x="327" y="122" text-anchor="middle">出来高0の足を除外</text>
+
+            <rect class="node-accent" x="465" y="30" width="175" height="112" rx="12"/>
+            <text x="552" y="60" text-anchor="middle">RestBudget</text>
+            <text class="small" x="552" y="84" text-anchor="middle">50/h · 1,000/day</text>
+            <text class="small" x="552" y="103" text-anchor="middle">api_usageへ永続化</text>
+            <text class="small" x="552" y="122" text-anchor="middle">枯渇時は要求を再queue</text>
+
+            <rect class="node" x="685" y="40" width="170" height="92" rx="12"/>
+            <text x="770" y="72" text-anchor="middle">market.db</text>
+            <text class="small" x="770" y="96" text-anchor="middle">bars_1m UPSERT</text>
+            <text class="small" x="770" y="115" text-anchor="middle">is_final = true</text>
+
+            <rect class="node-blue" x="900" y="40" width="180" height="92" rx="12"/>
+            <text x="990" y="66" text-anchor="middle">Browser</text>
+            <text class="small" x="990" y="90" text-anchor="middle">30秒ごとに</text>
+            <text class="small" x="990" y="109" text-anchor="middle">/api/bars?start=最新足</text>
+
+            <path d="M190 86 L233 86" fill="none" stroke="var(--accent)" stroke-width="2.2" marker-end="url(#arrow-live)"/>
+            <path d="M420 86 L463 86" fill="none" stroke="var(--accent)" stroke-width="2.2" marker-end="url(#arrow-live)"/>
+            <path d="M640 86 L683 86" fill="none" stroke="var(--accent)" stroke-width="2.2" marker-end="url(#arrow-live)"/>
+            <path d="M855 86 L898 86" fill="none" stroke="var(--accent)" stroke-width="2.2" marker-end="url(#arrow-live)"/>
+
+            <path d="M990 132 C990 175 700 175 620 175" fill="none" stroke="var(--accent)" stroke-width="2.2" marker-end="url(#arrow-live)" stroke-dasharray="0"/>
+            <rect class="node-accent" x="400" y="152" width="220" height="46" rx="10"/>
+            <text class="small" x="510" y="180" text-anchor="middle">同じ要求が last_viewed_at を打刻</text>
+            <path d="M400 175 C360 175 327 160 327 144" fill="none" stroke="var(--accent)" stroke-width="2.2" marker-end="url(#arrow-live)"/>
+
+            <text class="small" x="20" y="252">休止中（有料枠なら復活する）</text>
+            <rect class="node" x="20" y="266" width="170" height="86" rx="12" stroke-dasharray="5 4"/>
+            <text x="105" y="298" text-anchor="middle">Provider WSS</text>
+            <text class="small" x="105" y="322" text-anchor="middle">接続はする / 無音</text>
+
+            <rect class="node" x="235" y="266" width="185" height="86" rx="12" stroke-dasharray="5 4"/>
+            <text x="327" y="298" text-anchor="middle">BarAggregator</text>
+            <text class="small" x="327" y="322" text-anchor="middle">tradeからOHLCV生成</text>
+
+            <rect class="node" x="465" y="266" width="175" height="86" rx="12" stroke-dasharray="5 4"/>
+            <text x="552" y="298" text-anchor="middle">live.db / tmpfs</text>
+            <text class="small" x="552" y="322" text-anchor="middle">進行中の足</text>
+
+            <rect class="node" x="685" y="266" width="170" height="86" rx="12" stroke-dasharray="5 4"/>
+            <text x="770" y="298" text-anchor="middle">SSE /api/live</text>
+            <text class="small" x="770" y="322" text-anchor="middle">1秒polling / 差分のみ</text>
+
+            <path d="M190 309 L233 309" fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-dim)"/>
+            <path d="M420 309 L463 309" fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-dim)"/>
+            <path d="M640 309 L683 309" fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-dim)"/>
+            <path d="M855 309 C890 309 990 280 990 136" fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-dim)"/>
+            <text class="label" x="700" y="248">現在は snapshot と</text>
+            <text class="label" x="700" y="265">status / heartbeat のみ</text>
+
+            <rect class="node-warn" x="20" y="376" width="1060" height="36" rx="10"/>
+            <text class="small" x="44" y="400">SSE経路は削除していない。<tspan font-weight="700">USSTOCKS_PRIMARY_SOURCE と有料プランを変えるだけで実線に戻る</tspan>ため、収集・集約・配信のコードはそのまま残してある。</text>
+          </svg>
+        </div>
+
+        <div class="callout">
+          <strong>読み方</strong>
+          <p>
+            実線がいま流れている経路、破線が接続はするがデータの来ない経路である。
+            ブラウザの30秒更新はローカルDBの読み出しなので無料枠を消費せず、
+            同時に <code>last_viewed_at</code> を打ち直して「この銘柄をまだ見ている」ことを
+            collectorへ伝え続ける。この打刻が止まると、5分後に前景から外れて
+            30分間隔のsweepへ落ちる。
+          </p>
+        </div>
       </section>
 
       <section id="context">
-        <h2>2. システムコンテキスト</h2>
+        <h2>3. システムコンテキスト</h2>
         <p class="section-intro">
           ブラウザ、データプロバイダー、GitHub、AWSの間で、アプリホストへの接続は
           ほぼすべて外向きに開始される。ブラウザだけがCloudflare EdgeへHTTPS接続し、
@@ -577,7 +796,7 @@
 
             <rect class="node" x="820" y="245" width="150" height="85" rx="13"/>
             <text x="895" y="276" text-anchor="middle">Tiingo / Alpaca</text>
-            <text class="small" x="895" y="301" text-anchor="middle">WSS + HTTPS</text>
+            <text class="small" x="895" y="301" text-anchor="middle">HTTPS (REST + catalog)</text>
 
             <rect class="node" x="520" y="340" width="190" height="82" rx="13"/>
             <text x="615" y="370" text-anchor="middle">GitHub</text>
@@ -618,7 +837,7 @@
       </section>
 
       <section id="infra">
-        <h2>3. AWS／ネットワーク</h2>
+        <h2>4. AWS／ネットワーク</h2>
         <p class="section-intro">
           TerraformはLightsailだけでなく、バックアップ、CI identity、監視と予算を
           同じstateで管理する。state用S3バケットだけは「自分自身を作る前にstateが必要」
@@ -702,7 +921,9 @@
               <tr><td>Inbound</td><td>Lightsail TCP 22</td><td>管理SSH</td><td>AWS browser SSH aliasまたは明示CIDR</td></tr>
               <tr><td>Inbound</td><td>TCP 80 / 443</td><td>なし</td><td>Terraformのauthoritative port定義から除外</td></tr>
               <tr><td>Outbound</td><td>Cloudflare</td><td>Tunnel維持</td><td>Tunnel token</td></tr>
-              <tr><td>Outbound</td><td>Tiingo / Alpaca WSS・HTTPS</td><td>trade stream、backfill、search</td><td>provider key</td></tr>
+              <tr><td>Outbound</td><td>Tiingo / Alpaca HTTPS</td><td>1分足ポーリング、backfill、検索fallback</td><td>provider key + RestBudget</td></tr>
+              <tr><td>Outbound</td><td>Tiingo / Alpaca WSS</td><td>接続はするが無料枠では無音（A-6）</td><td>provider key</td></tr>
+              <tr><td>Outbound</td><td><code>apimedia.tiingo.com</code> HTTPS</td><td>週次 ticker catalog zip（REST枠を消費しない）</td><td>認証不要の静的ファイル</td></tr>
               <tr><td>Outbound</td><td>GitHub SSH</td><td>2分間隔fetch</td><td>read-only deploy key</td></tr>
               <tr><td>Outbound</td><td>S3 HTTPS</td><td>daily backup</td><td>専用IAM user</td></tr>
             </tbody>
@@ -729,7 +950,7 @@
       </section>
 
       <section id="runtime">
-        <h2>4. Lightsailランタイム</h2>
+        <h2>5. Lightsailランタイム</h2>
         <p class="section-intro">
           revision別Python venvをcollectorとAPIで共有し、cloudflaredを加えた3サービスを
           systemdで管理する。Docker image buildは不要で、serviceごとのcgroup memory cap、
@@ -764,9 +985,21 @@
           <table>
             <thead><tr><th>Service</th><th>責務</th><th>Memory</th><th>Health</th></tr></thead>
             <tbody>
-              <tr><td><code>usstocks-collector</code></td><td>WS、bar集約、REST補完、DB／live publish</td><td>320MB</td><td>15秒status heartbeat</td></tr>
+              <tr><td><code>usstocks-collector</code></td><td>RESTポーリング、bar集約、backfill、DB／live publish</td><td>320MB</td><td>15秒status heartbeat</td></tr>
               <tr><td><code>usstocks-api</code></td><td>REST、SSE、static UI、Access JWT検証</td><td>320MB</td><td><code>/api/livez</code></td></tr>
               <tr><td><code>usstocks-cloudflared</code></td><td>外向きTunnel</td><td>128MB</td><td>systemd restart</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>常駐しないunit（timer駆動）</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Timer</th><th>周期</th><th>内容</th></tr></thead>
+            <tbody>
+              <tr><td><code>usstocks-deploy.timer</code></td><td>2分</td><td><code>origin/main</code>をfetchし、変化があればrelease切替</td></tr>
+              <tr><td><code>usstocks-catalog.timer</code></td><td>週次 日曜 08:30 UTC<br><code>Persistent=true</code> / <code>RandomizedDelaySec=3600</code></td><td>ticker catalogのzipを取得して<code>symbol_catalog</code>を再構築。米国市場が閉じている時間帯を選び、collectorの書込ロックと競合させない</td></tr>
+              <tr><td><code>usstocks-backup.timer</code></td><td>日次 07:10 UTC</td><td>整合コピー → 検証 → gzip → S3</td></tr>
             </tbody>
           </table>
         </div>
@@ -780,57 +1013,71 @@
       </section>
 
       <section id="realtime">
-        <h2>5. リアルタイムデータフロー</h2>
+        <h2>6. データフロー詳細</h2>
         <p class="section-intro">
-          provider payloadはAdapter境界でTrade／Quoteへ正規化され、下流はTiingoや
-          Alpaca固有のJSON形式を知らない。OHLCVはtradeだけから生成し、quoteを混ぜない。
+          provider payloadはAdapter境界でTrade／Bar／Quoteへ正規化され、下流はTiingoや
+          Alpaca固有のJSON形式を知らない。<code>bars_1m</code>へ辿り着く経路は2つあり、
+          現在動いているのはREST側だけである。両者は同じ主キーへ書くので、
+          有料枠へ移ってストリームが復活しても行が二重にはならない。
         </p>
 
         <div class="diagram">
-          <div class="diagram-title">Trade to browser / hot path</div>
-          <svg viewBox="0 0 1100 360" role="img" aria-label="リアルタイムデータフロー図">
+          <div class="diagram-title">Two inflows, one table</div>
+          <svg viewBox="0 0 1100 400" role="img" aria-label="RESTとWebSocketの2経路が同じテーブルへ書き込む図">
             <defs>
               <marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
                 <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
               </marker>
+              <marker id="arrow3d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"/>
+              </marker>
             </defs>
-            <rect class="node" x="20" y="95" width="150" height="84" rx="12"/>
-            <text x="95" y="125" text-anchor="middle">Provider WSS</text>
-            <text class="small" x="95" y="151" text-anchor="middle">Tiingo / Alpaca</text>
 
-            <rect class="node-blue" x="215" y="95" width="150" height="84" rx="12"/>
-            <text x="290" y="125" text-anchor="middle">Adapter</text>
-            <text class="small" x="290" y="151" text-anchor="middle">Trade / Quote</text>
+            <rect class="node-accent" x="20" y="30" width="165" height="92" rx="12"/>
+            <text x="102" y="62" text-anchor="middle">Provider REST</text>
+            <text class="small" x="102" y="86" text-anchor="middle">確定済み1分足</text>
+            <text class="small" x="102" y="105" text-anchor="middle">is_final = true</text>
 
-            <rect class="node-accent" x="410" y="75" width="180" height="124" rx="12"/>
-            <text x="500" y="110" text-anchor="middle">BarAggregator</text>
-            <text class="small" x="500" y="136" text-anchor="middle">OHLCV + VWAP</text>
-            <text class="small" x="500" y="158" text-anchor="middle">UTC minute bucket</text>
-            <text class="small" x="500" y="180" text-anchor="middle">late trade merge</text>
+            <rect class="node-accent" x="230" y="30" width="185" height="92" rx="12"/>
+            <text x="322" y="62" text-anchor="middle">Adapter.fetch_bars</text>
+            <text class="small" x="322" y="86" text-anchor="middle">日付のみのstart/end</text>
+            <text class="small" x="322" y="105" text-anchor="middle">窓外・出来高0を除外</text>
 
-            <rect class="node" x="650" y="28" width="185" height="92" rx="12"/>
-            <text x="742" y="60" text-anchor="middle">market.db</text>
-            <text class="small" x="742" y="85" text-anchor="middle">final bar UPSERT</text>
-            <rect class="node" x="650" y="156" width="185" height="92" rx="12"/>
-            <text x="742" y="188" text-anchor="middle">live.db / tmpfs</text>
-            <text class="small" x="742" y="213" text-anchor="middle">dirty snapshot / 250ms</text>
+            <rect class="node" x="20" y="238" width="165" height="92" rx="12" stroke-dasharray="5 4"/>
+            <text x="102" y="270" text-anchor="middle">Provider WSS</text>
+            <text class="small" x="102" y="294" text-anchor="middle">無料枠では無音</text>
+            <text class="small" x="102" y="313" text-anchor="middle">（spec-review A-6）</text>
 
-            <rect class="node-blue" x="885" y="95" width="170" height="84" rx="12"/>
-            <text x="970" y="125" text-anchor="middle">FastAPI SSE</text>
-            <text class="small" x="970" y="151" text-anchor="middle">poll 1s / diff only</text>
+            <rect class="node" x="230" y="238" width="185" height="92" rx="12" stroke-dasharray="5 4"/>
+            <text x="322" y="270" text-anchor="middle">BarAggregator</text>
+            <text class="small" x="322" y="294" text-anchor="middle">Trade → OHLCV / VWAP</text>
+            <text class="small" x="322" y="313" text-anchor="middle">UTC分bucket / late merge</text>
 
-            <rect class="node" x="885" y="260" width="170" height="70" rx="12"/>
-            <text x="970" y="288" text-anchor="middle">Browser chart</text>
-            <text class="small" x="970" y="311" text-anchor="middle">candle update</text>
+            <rect class="node-blue" x="470" y="120" width="200" height="120" rx="12"/>
+            <text x="570" y="154" text-anchor="middle">upsert_bars()</text>
+            <text class="small" x="570" y="180" text-anchor="middle">PK = symbol + ts + source</text>
+            <text class="small" x="570" y="200" text-anchor="middle">finalは上書き可</text>
+            <text class="small" x="570" y="220" text-anchor="middle">non-finalはfinalを壊さない</text>
 
-            <path d="M170 137 L213 137" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
-            <path d="M365 137 L408 137" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
-            <path d="M590 110 C620 100 625 78 648 76" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
-            <path d="M590 162 C620 170 625 196 648 200" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
-            <path d="M835 200 C860 190 858 145 883 138" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
-            <path d="M970 179 L970 258" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
-            <path d="M835 74 C895 50 1030 80 1030 95" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 5"/>
-            <text class="label" x="920" y="59">history API read</text>
+            <rect class="node" x="730" y="120" width="175" height="120" rx="12"/>
+            <text x="817" y="154" text-anchor="middle">bars_1m</text>
+            <text class="small" x="817" y="180" text-anchor="middle">WITHOUT ROWID</text>
+            <text class="small" x="817" y="200" text-anchor="middle">読み出し時に</text>
+            <text class="small" x="817" y="220" text-anchor="middle">SOURCE_PRIORITYで1本選択</text>
+
+            <rect class="node-blue" x="950" y="140" width="130" height="80" rx="12"/>
+            <text x="1015" y="172" text-anchor="middle">/api/bars</text>
+            <text class="small" x="1015" y="196" text-anchor="middle">→ chart</text>
+
+            <path d="M185 76 L228 76" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
+            <path d="M415 76 C450 76 460 110 468 138" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
+            <path d="M185 284 L228 284" fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow3d)"/>
+            <path d="M415 284 C450 284 460 250 468 222" fill="none" stroke="var(--muted)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow3d)"/>
+            <path d="M670 180 L728 180" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
+            <path d="M905 180 L948 180" fill="none" stroke="var(--accent)" stroke-width="2.1" marker-end="url(#arrow3)"/>
+
+            <text class="label" x="470" y="360">同じ主キーへ書くため、両経路が同時に動いても行は重複せず、</text>
+            <text class="label" x="470" y="378">重なった分は USSTOCKS_SOURCE_PRIORITY が読み出し時に1本へ解決する。</text>
           </svg>
         </div>
 
@@ -839,43 +1086,81 @@
             <thead><tr><th>規則</th><th>実装</th></tr></thead>
             <tbody>
               <tr><td>bar timestamp</td><td>UTCの分開始。09:30:00 barは09:30:00〜09:30:59を表す。</td></tr>
-              <tr><td>入力</td><td>tradeのみ。quoteはliveness signalとして扱い、OHLCVへ入れない。</td></tr>
+              <tr><td>ストリーム入力</td><td>tradeのみ。quoteはliveness signalとして扱い、OHLCVへ入れない。</td></tr>
+              <tr><td>REST入力</td><td>providerの確定1分足をそのまま<code>is_final=true</code>で保存。</td></tr>
+              <tr><td>出来高0の足</td><td><strong>取り込み時に破棄。</strong>Tiingoは無約定の分にも直前終値の足を返し（<code>forceFill=false</code>でも抑止されない）、そのまま保存すると「その価格で推移した」と描かれてしまう（spec-review A-5）。</td></tr>
               <tr><td>確定</td><td>次分trade受信時、または1秒ごとのroll判定。</td></tr>
               <tr><td>無約定分</td><td>人工的なbarを生成せず、chart上もgapにする。</td></tr>
               <tr><td>遅延trade</td><td>90秒以内なら直近final barへmerge、超過はcountしてdrop。</td></tr>
+              <tr><td>訂正／取消（Alpaca）</td><td><code>c</code>／<code>x</code>フレームはwarningへ記録して破棄。集計済みbarの再計算は行わない。</td></tr>
               <tr><td>upsert</td><td>finalは既存を更新可。non-finalは既存finalを上書き不可。</td></tr>
               <tr><td>source競合</td><td><code>USSTOCKS_SOURCE_PRIORITY</code>順に読み出し時解決。</td></tr>
             </tbody>
           </table>
         </div>
+
+        <div class="callout warning">
+          <strong>IEX単独フィードの被覆率</strong>
+          <p>
+            無料枠が見ているのはIEX（全米出来高の数%）だけである。実測では
+            AAPLの通常取引で385/390本＝<strong>98.7%</strong>と実用範囲だが、
+            出来高の桁は統合気配より2〜3桁小さく、閑散銘柄や時間外では
+            足が飛び飛びになる。価格そのものは正確で、証券会社アプリとの差は
+            <strong>0.08%</strong>（MU 826.93 対 826.23、同一時刻）。
+            連続した足が要る場合はSIP（有料）へ移すしかない。
+          </p>
+        </div>
       </section>
 
       <section id="backfill">
-        <h2>6. 再接続／欠損補完</h2>
+        <h2>7. 再接続／欠損補完／ポーリング</h2>
         <p class="section-intro">
-          WebSocket切断は指数backoffで回復し、失われたopen market区間だけをRESTで補完する。
-          すべての再接続で全銘柄を即fetchせず、無料枠を守る制御がcollector内にある。
+          collectorは同じ<code>BackfillCoordinator</code>を3つの用途で使う——起動時、
+          切断からの復帰時、そして<strong>定常のポーリング</strong>である。
+          入口が違うだけで、gap判定・要求合体・token取得は共通で、
+          どの経路から来ても無料枠を守る制御が1か所に集まる。
         </p>
         <div class="steps">
-          <div class="step"><span class="step-num">1</span><strong>切断分類</strong><span>購読変更は即時再接続。障害切断はbackoff対象。</span></div>
-          <div class="step"><span class="step-num">2</span><strong>gap判定</strong><span>120秒未満、または市場closedのみなら補完しない。</span></div>
+          <div class="step"><span class="step-num">1</span><strong>要求の発生</strong><span>起動 / 銘柄追加 / 切断復帰 / poll loopの周期。</span></div>
+          <div class="step"><span class="step-num">2</span><strong>gap判定</strong><span>最終足+1分からnowまでが120秒未満、または市場closedのみなら要求しない。</span></div>
           <div class="step"><span class="step-num">3</span><strong>要求合体</strong><span>同一symbolの範囲をwiden。lookback最大30日。</span></div>
           <div class="step"><span class="step-num">4</span><strong>token取得</strong><span>50/hourと1,000/dayをSQLiteへ永続化。</span></div>
           <div class="step"><span class="step-num">5</span><strong>確定bar保存</strong><span>REST結果をfinalとしてupsertしstate更新。</span></div>
         </div>
+
+        <h3>poll loopの判断順序</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>判定</th><th>やらない条件</th></tr></thead>
+            <tbody>
+              <tr><td>1</td><td>15秒ごとに起床</td><td>購読銘柄が0本</td></tr>
+              <tr><td>2</td><td><code>has_open_window(now-2分, now)</code></td><td><strong>市場が閉じていれば何もしない</strong>——休場中に枠を消費しない</td></tr>
+              <tr><td>3</td><td><code>recently_viewed(300秒)</code>から前景銘柄を1つ選ぶ</td><td>5分以内に誰も見ていなければ前景なし</td></tr>
+              <tr><td>4</td><td>前景は90秒経過で対象、他は1800秒経過で対象</td><td>まだ間隔に達していない</td></tr>
+              <tr><td>5</td><td><code>request_gap_since_last_bar()</code></td><td>gapが120秒未満（=前景の実効間隔が約2分になる理由）</td></tr>
+              <tr><td>6</td><td>backfill loopが5秒後にdrain、tokenを1つ消費</td><td>tokenが無ければ最大300秒待って再queue</td></tr>
+            </tbody>
+          </table>
+        </div>
+
         <p>
           再接続delayは1、2、4秒…最大60秒で、±25%のjitterを加える。接続が60秒以上
           継続してから切れた場合はdelayを1秒へ戻す。REST枠が空なら最大300秒待ち、
-          取得できなければrequestをqueueへ戻す。受信bytesも日／月windowへ永続化し、
-          月間1GBの80%でwarningを出す。
+          取得できなければrequestをqueueへ戻す。providerが429を返した場合も
+          <strong>要求を捨てずに再queueし、300秒のcooldownを置く</strong>——
+          捨てると、無関係な要因で同じ銘柄が再requeueされるまでgapが埋まらないままになる。
+          受信bytesも日／月windowへ永続化し、月間1GBの80%でwarningを出す
+          （ストリームが無音の現在、この数値はほぼ増えない。実際
+          「月間受信 0.0 MB」がA-6を最初に示していた兆候だった）。
         </p>
       </section>
 
       <section id="api">
-        <h2>7. API／SSE／ブラウザ</h2>
+        <h2>8. API／SSE／ブラウザ</h2>
         <p class="section-intro">
-          初期画面はwatchlistとhistoryをRESTで取得し、その後EventSourceでfull snapshotと
-          差分updateを受ける。SSEは最大1時間で意図的にcycleし、ブラウザが自動再接続する。
+          初期画面はwatchlistとhistoryをRESTで取得し、その後は
+          <strong>30秒ごとの差分取得</strong>と、EventSourceによるsnapshot／status受信を
+          並行して回す。SSEは最大1時間で意図的にcycleし、ブラウザが自動再接続する。
         </p>
         <div class="flow-split">
           <div class="lane">
@@ -884,33 +1169,60 @@
               <li><code>/api/symbols?watched_only=true</code></li>
               <li><code>/api/bars/{symbol}?days=N</code></li>
               <li>最大20,000 barsをcandle + volumeへ描画</li>
+              <li>保存済みのzoom（barSpacing / rightOffset）を復元</li>
               <li><code>/api/live?symbols=...</code>へEventSource接続</li>
-              <li>snapshot eventで現在値を埋める</li>
             </ol>
           </div>
           <div class="lane">
-            <h3>継続配信</h3>
+            <h3>継続更新</h3>
             <ol>
-              <li>APIがlive.dbを1秒ごとに読む</li>
-              <li>fingerprintが変わったsymbolだけupdate</li>
-              <li>collector status変化時にstatus event</li>
-              <li>15秒ごとに価格なしheartbeat</li>
+              <li><strong>30秒ごとに<code>/api/bars/{symbol}?start=最新足</code></strong>——ローカルDB読み出しなのでREST枠を消費しない</li>
+              <li>同じ要求が<code>last_viewed_at</code>を打刻し、collectorの前景ポーリングを維持する</li>
+              <li>タブが非表示の間は停止し、復帰時に即座に1回実行</li>
+              <li>SSEはlive.db由来のupdate／status／15秒heartbeat（ストリーム休止中はstatusとheartbeatのみ）</li>
               <li>SSE error時は<code>/api/ping</code>で認証失効を区別</li>
             </ol>
           </div>
+        </div>
+
+        <div class="callout">
+          <strong>なぜ30秒か</strong>
+          <p>
+            この要求はSQLiteの読み出しであってproviderへは届かないため、頻度は無料枠ではなく
+            「確定した1分足をどれだけ早く見せたいか」だけで決まる。同時に、これが
+            <code>viewer_idle_seconds=300</code>を満たし続ける唯一の仕組みでもある——
+            打刻が止まれば5分後に前景から外れ、30分間隔のsweepへ落ちる。
+          </p>
+        </div>
+
+        <h3>フロントエンドのモジュール</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>File</th><th>役割</th></tr></thead>
+            <tbody>
+              <tr><td><code>web/app.js</code></td><td>watchlist、検索、差分取得、SSE、再接続判定</td></tr>
+              <tr><td><code>web/chart.js</code></td><td>Lightweight Charts。軸フォーマット、legend、出来高、MA描画、zoom復元。provider帰属表示は無効化</td></tr>
+              <tr><td><code>web/timezone.js</code></td><td>表示タイムゾーンの単一の情報源。既定<code>America/New_York</code>、localStorage保存。軸とパネルが別々のzoneになる問題への対応</td></tr>
+              <tr><td><code>web/viewstate.js</code></td><td><code>{days, extended, barSpacing, rightOffset, movingAverages}</code>を保存。読み込みや銘柄切替でzoomを失わない</td></tr>
+              <tr><td><code>web/indicators.js</code></td><td>移動平均。窓が満たない間は点を出さない</td></tr>
+            </tbody>
+          </table>
         </div>
 
         <div class="table-wrap">
           <table>
             <thead><tr><th>Endpoint</th><th>役割</th><th>Store</th></tr></thead>
             <tbody>
-              <tr><td><code>GET /api/bars/{symbol}</code></td><td>source優先解決済み1分足</td><td>market.db</td></tr>
+              <tr><td><code>GET /api/bars/{symbol}</code></td><td>source優先解決済み1分足。<strong>副作用として<code>last_viewed_at</code>を打刻</strong></td><td>market.db</td></tr>
               <tr><td><code>GET /api/live</code></td><td>SSE snapshot / update / status / heartbeat</td><td>live.db</td></tr>
+              <tr><td><code>GET /api/live/snapshot</code></td><td>SSEを張らない一括読み出し</td><td>live.db</td></tr>
               <tr><td><code>GET /api/symbols</code></td><td>watchlist</td><td>market.db</td></tr>
+              <tr><td><code>GET /api/symbols/search</code></td><td>watchlist → <code>symbol_catalog</code> → provider の3段。provider段のみREST枠を消費し、10分のLRUで再問い合わせを抑える</td><td>market.db</td></tr>
               <tr><td><code>PUT/DELETE /api/symbols/{symbol}</code></td><td>購読管理。historyは削除しない</td><td>market.db</td></tr>
               <tr><td><code>GET /api/export/csv</code></td><td>row streaming export</td><td>market.db</td></tr>
               <tr><td><code>GET /api/export/parquet</code></td><td>optional pyarrow、memory生成</td><td>market.db</td></tr>
               <tr><td><code>GET /api/health</code></td><td>collector、DB、disk、quota</td><td>両DB + filesystem</td></tr>
+              <tr><td><code>GET /api/ping</code></td><td>認証sessionの生存確認</td><td>なし</td></tr>
               <tr><td><code>GET /api/livez</code></td><td>process liveness。唯一のpublic path</td><td>なし</td></tr>
             </tbody>
           </table>
@@ -918,18 +1230,33 @@
       </section>
 
       <section id="database">
-        <h2>8. データベースと所有権</h2>
+        <h2>9. データベースと所有権</h2>
         <p class="section-intro">
           「単一writer」は時系列テーブルに限定される。APIはwatchlist編集のため
           <code>symbols</code>へ短時間writeする。WAL、5秒busy timeout、thread-local
           connectionにより複数readerと設定writeを共存させる。
+          <code>symbols.last_viewed_at</code>もAPIが書き、collectorが読む——
+          両プロセス間に新しいIPCを足さずに済ませるため、既に数秒ごとに読まれている
+          このテーブルへ相乗りしている。
         </p>
+        <div class="callout">
+          <strong>catalog importが書込ロックを長く握らない理由</strong>
+          <p>
+            <code>symbol_catalog</code>は約10万行を扱う。1トランザクションで書くと、
+            その間にcollectorのbar書込がbusy timeout（5秒）を使い切ってしまうため、
+            2,000行ずつのチャンクに分けて書き込む。整合性は行ごとの<code>refreshed_at</code>
+            スタンプで担保し、取り込み完了後に「今回のスタンプ以外」を削除する。
+            スタンプにはマイクロ秒とUUIDを含める——秒精度では、同じ秒に2回走ったとき
+            古い行が消えずに残った。
+          </p>
+        </div>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Table</th><th>Primary key</th><th>Writer</th><th>用途</th></tr></thead>
             <tbody>
               <tr><td><code>bars_1m</code></td><td>symbol + timestamp + source</td><td>collector</td><td>1分足、WITHOUT ROWID</td></tr>
-              <tr><td><code>symbols</code></td><td>symbol</td><td>API / collector support flag</td><td>watch、hold、provider support</td></tr>
+              <tr><td><code>symbols</code></td><td>symbol</td><td>API / collector support flag</td><td>watch、hold、provider support、<code>last_viewed_at</code></td></tr>
+              <tr><td><code>symbol_catalog</code></td><td>symbol</td><td>catalog timer</td><td>ローカル検索用のticker台帳。使い捨て（失っても検索が劣化するだけ）</td></tr>
               <tr><td><code>ticks</code></td><td>symbol + timestamp + source</td><td>collector optional</td><td>既定retention 0で通常未使用</td></tr>
               <tr><td><code>api_usage</code></td><td>source + kind + window</td><td>collector</td><td>REST calls / bytes</td></tr>
               <tr><td><code>collector_state</code></td><td>symbol + source</td><td>collector</td><td>last bar / backfill</td></tr>
@@ -941,7 +1268,7 @@
       </section>
 
       <section id="cicd">
-        <h2>9. CI/CD</h2>
+        <h2>10. CI/CD</h2>
         <p class="section-intro">
           AWS desired stateとアプリrolloutは別経路で進む。GitHub ActionsはTerraformを
           applyし、アプリはLightsailがprivate repositoryをpullする。
@@ -988,7 +1315,7 @@
       </section>
 
       <section id="backup">
-        <h2>10. バックアップ／リストア</h2>
+        <h2>11. バックアップ／リストア</h2>
         <p class="section-intro">
           live WALファイルを単純copyせず、<code>VACUUM INTO</code>で整合コピーを作成。
           構造検証に成功したものだけを圧縮してS3へ送る。
@@ -1014,7 +1341,7 @@
       </section>
 
       <section id="operations">
-        <h2>11. 監視／障害対応</h2>
+        <h2>12. 監視／障害対応</h2>
         <p class="section-intro">
           アプリhealthはcollectorの鮮度、disk、DB size、REST枠、帯域budgetを集約する。
           AWS側の自動通知はCPU burstとcostに限定される。
@@ -1024,6 +1351,9 @@
             <thead><tr><th>Signal / failure</th><th>自動挙動</th><th>手動判断</th></tr></thead>
             <tbody>
               <tr><td>WS切断</td><td>1〜60秒backoff + jitter、必要ならREST補完</td><td>長時間ならprovider切替</td></tr>
+              <tr><td>WSは繋がるがデータが来ない</td><td><strong>検出しない。</strong>healthは<code>connected</code>のまま</td><td>最新barのtimestampと月間受信bytesで判断（A-6の発見経路）</td></tr>
+              <tr><td>REST枠の枯渇</td><td>要求を再queue。検索はローカル結果へ縮退</td><td><code>/api/health</code>の<code>rest_calls_hour</code>を確認</td></tr>
+              <tr><td>catalog import失敗</td><td>前回の行が残り検索は動き続ける。次週再試行</td><td>journalを確認。新規上場が引けないだけ</td></tr>
               <tr><td>API crash</td><td>systemd再起動、EventSource再接続</td><td>繰返す場合はjournal確認</td></tr>
               <tr><td>collector crash</td><td>systemd再起動、startup backfill</td><td>quotaとdata age確認</td></tr>
               <tr><td>live.db消失</td><td>次tradeで再構築</td><td>なし</td></tr>
@@ -1046,31 +1376,42 @@
       </section>
 
       <section id="findings">
-        <h2>12. 現行実装で確認した注意点</h2>
+        <h2>13. 現行実装で確認した注意点</h2>
         <p class="section-intro">
           以下は設計上の一般論ではなく、コードとデプロイ構成を突き合わせた結果。
           本番運用前の優先確認事項となる。
         </p>
         <div class="grid">
           <article class="card">
+            <h3>沈黙は計装できていなかった</h3>
+            <p>
+              collectorは自分が処理する<code>messageType</code>（<code>A</code>／<code>E</code>）
+              しか記録しない。購読確認<code>I</code>とheartbeat <code>H</code>は痕跡なく捨てられるため、
+              <strong>「接続はしているがデータが来ない」をログから判定できなかった</strong>。
+              生フレームを印字するprobe（<code>scripts/probe_*_ws.py</code>）が必要だった。
+            </p>
+          </article>
+          <article class="card">
+            <h3>枠は上限に近い</h3>
+            <p>
+              前景+保険sweepで約48 calls/hour（上限50）。鮮度を上げるなら
+              <code>background_poll_seconds</code>を伸ばすか銘柄を減らす必要がある。
+              healthの<code>rest_calls_hour</code>を見ておく価値がある値域。
+            </p>
+          </article>
+          <article class="card">
+            <h3>健全性の判定が実態とずれる</h3>
+            <p>
+              <code>/api/health</code>はWebSocketが繋がっていれば<code>connected</code>とみなす。
+              いまはデータが来なくても繋がるため、<strong>この項目は生存を意味しない</strong>。
+              実際の鮮度は最新barのtimestampで見る。
+            </p>
+          </article>
+          <article class="card">
             <h3>CIとCDの独立性</h3>
             <p>
               pull agentはworkflow成功を待たないため、mainへ入ったcommitをテスト完了前に
               deployできる。Actions quota中は特にlocal testが必要。
-            </p>
-          </article>
-          <article class="card">
-            <h3>ComposeからのDB handoff</h3>
-            <p>
-              named volumeのmarket.dbを一度だけ整合コピーし、collectorを二重起動しない。
-              installerは移行漏れを検出して停止する。
-            </p>
-          </article>
-          <article class="card">
-            <h3>15秒heartbeat</h3>
-            <p>
-              tradeがない休場中もcollector statusだけを低頻度更新する。live snapshotの
-              無用な書込は増やさない。
             </p>
           </article>
           <article class="card">
@@ -1088,37 +1429,60 @@
             </p>
           </article>
           <article class="card">
+            <h3>unit変更はinstaller再実行</h3>
+            <p>
+              Python／webの変更はpull agentだけで反映されるが、
+              <code>deploy/systemd/*.service</code>やtimerを変えた場合は
+              <code>install.sh</code>の再実行が要る（catalog timerの追加時がこれに当たった）。
+            </p>
+          </article>
+          <article class="card">
             <h3>通知の空白</h3>
             <p>
               CPU burstとcost以外のapp-level異常はSNSへ未配線。journalと
               <code>/api/health</code>のhost側監視が次の改善点。
             </p>
           </article>
+          <article class="card">
+            <h3>ComposeからのDB handoff</h3>
+            <p>
+              named volumeのmarket.dbを一度だけ整合コピーし、collectorを二重起動しない。
+              installerは移行漏れを検出して停止する。
+            </p>
+          </article>
         </div>
       </section>
 
       <section id="map">
-        <h2>13. コードマップ／トレーサビリティ</h2>
+        <h2>14. コードマップ／トレーサビリティ</h2>
         <pre class="repo-tree">.
 ├── src/usstocks/
-│   ├── adapters/          provider WS/REST → domain model
-│   ├── collector/         aggregation / reconnect / backfill / quota
+│   ├── adapters/          provider REST/WS → domain model（tiingo / alpaca / mock）
+│   ├── collector/         aggregation / reconnect / backfill / poll / quota
 │   ├── api/               FastAPI / auth / REST / SSE
-│   ├── db/                schema / repository / live store / migration
+│   ├── db/                schema / repository / live store / migration ×3
 │   ├── calendar_us.py     market calendar / session
+│   ├── catalog.py         週次 ticker catalog import（REST枠を使わない検索の土台）
 │   ├── config.py          environment / fail-fast validation
 │   └── models.py          Trade / Quote / Bar / LiveSnapshot
-├── web/                   static HTML/CSS/JS + vendored chart library
+├── web/                   ビルド不要の静的フロントエンド
+│   ├── app.js             watchlist / 差分取得 / SSE / 再接続
+│   ├── chart.js           Lightweight Charts（軸・legend・出来高・MA・zoom復元）
+│   ├── timezone.js        表示タイムゾーンの単一の情報源
+│   ├── viewstate.js       期間・zoom・MAの永続化
+│   ├── indicators.js      移動平均
+│   └── vendor/            vendored chart library
 ├── deploy/
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   ├── agent/             pull deployment
 │   ├── backup/            backup / restore
 │   ├── cloudflared/       reference config
-│   └── systemd/           direct runtime / installer / timers
+│   └── systemd/           direct runtime / installer / deploy・backup・catalog timers
 ├── infra/
 │   ├── terraform/         Lightsail / S3 / IAM / SNS / Budgets
 │   └── iam/               first-apply operator policy
+├── scripts/               dev / seed / tf state / SSH CIDR / provider WS probes
 ├── .github/workflows/     test / validate / terraform apply
 └── tests/                 app and domain tests</pre>
 
@@ -1133,10 +1497,14 @@
               <tr><td>Monitoring / cost</td><td><code>infra/terraform/monitoring.tf</code></td></tr>
               <tr><td>CI identity / apply</td><td><code>github_oidc.tf</code>, <code>.github/workflows/deploy.yml</code></td></tr>
               <tr><td>Pull CD</td><td><code>deploy/agent/deploy-agent.sh</code> + systemd units</td></tr>
-              <tr><td>Realtime / backfill</td><td><code>collector/service.py</code>, <code>aggregator.py</code>, <code>backfill.py</code></td></tr>
+              <tr><td><strong>RESTポーリング（生存経路）</strong></td><td><code>collector/service.py</code> の <code>_poll_loop()</code>, <code>backfill.py</code>, <code>ratelimit.py</code></td></tr>
+              <tr><td>予算の宛先決定</td><td><code>db/migrations/0003_symbol_viewing.sql</code>, <code>repository.mark_viewed / recently_viewed</code>, <code>api/routes/bars.py</code></td></tr>
+              <tr><td>集約 / 訂正 / 出来高0除外</td><td><code>collector/aggregator.py</code>, <code>adapters/tiingo.py</code>, <code>adapters/alpaca.py</code></td></tr>
+              <tr><td>ローカル検索</td><td><code>catalog.py</code>, <code>db/migrations/0002_symbol_catalog.sql</code>, <code>api/routes/symbols.py</code></td></tr>
               <tr><td>Auth / API / SSE</td><td><code>api/app.py</code>, <code>auth.py</code>, <code>routes/live.py</code></td></tr>
-              <tr><td>Schema / ownership</td><td><code>db/migrations/0001_initial.sql</code>, <code>repository.py</code></td></tr>
-              <tr><td>Browser reconnect</td><td><code>web/app.js</code></td></tr>
+              <tr><td>Schema / ownership</td><td><code>db/migrations/</code>, <code>repository.py</code></td></tr>
+              <tr><td>Browser 差分取得 / reconnect</td><td><code>web/app.js</code>（<code>refreshTail()</code>）</td></tr>
+              <tr><td>A-6の一次証拠</td><td><code>scripts/probe_tiingo_ws.py</code>, <code>scripts/probe_alpaca_ws.py</code>, <code>docs/spec-review.md</code> A-6</td></tr>
             </tbody>
           </table>
         </div>
@@ -1144,10 +1512,11 @@
 
       <footer class="foot">
         <p>
-          本書は2026-07-29のsystemd direct runtime実装時点で、アプリとインフラ構成を
-          静的に照合して作成。
-          AWS／Cloudflareの実環境状態は未検証。詳細版とMermaid図は
-          <code>docs/system-architecture.md</code>を参照。
+          本書は2026-07-30時点のコードと、2026-07-29〜30に本番インスタンスで得た実測
+          （WebSocket無配信、被覆率、価格差、REST消費）を突き合わせて作成。
+          AWS／Cloudflareの構成そのものは<code>terraform apply</code>の結果を根拠としており、
+          Terraform管理外の手動設定（Tunnel、Access、DNS）は未検証。
+          詳細版とMermaid図は <code>docs/system-architecture.md</code> を参照。
         </p>
       </footer>
     </main>

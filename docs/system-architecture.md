@@ -1,11 +1,17 @@
 # US Stock Realtime Chart — システム／インフラアーキテクチャ
 
 > 対象リポジトリ: `makechair/us-stock-realtime-chart`
-> 調査基準: 2026-07-29 / systemd direct runtime実装時点
-> 調査方法: アプリケーション、Docker Compose、systemd、Terraform、GitHub Actions、
-> バックアップスクリプトを静的に照合
-> 注意: 本書はリポジトリに実装された構成を説明する。AWS／Cloudflare の実環境を
-> 参照したものではないため、Terraform 外の手動設定や現在のデプロイ状態は未検証である。
+> 調査基準: 2026-07-30 / RESTポーリングを生存経路とした構成
+> 調査方法: アプリケーション、systemd、Terraform、GitHub Actions、バックアップ
+> スクリプトのコード照合に加え、稼働中インスタンスでの実測（WebSocket無配信、
+> 被覆率、価格差、REST消費）を突き合わせた
+> 注意: Terraform 管理外の手動設定（Cloudflare Tunnel／Access／DNS）は未検証である。
+
+> **2026-07-29 の前提変更:** 仕様書が構成全体の土台に置いていた「WebSocket で常時
+> 受信し1秒ごとに更新する」が、Tiingo・Alpaca いずれの無料枠でも成立しないことが
+> 実測で判明した（`docs/spec-review.md` A-6）。本書はこの発見を反映し、
+> **REST ポーリングを生存経路として**記述している。WebSocket 経路のコードは
+> 削除しておらず、有料枠へ移れば設定変更だけで実線に戻る。
 
 ## 1. エグゼクティブサマリー
 
@@ -17,10 +23,12 @@
 | 観点 | 実装 |
 |---|---|
 | 市場データ | Tiingo を主系、Alpaca IEX を手動切替の待機系、開発時は Mock |
-| 収集 | 独立した Python `asyncio` プロセスが WebSocket を常時購読 |
+| 収集 | 独立した Python `asyncio` プロセスが **REST で1分足をポーリング**（WebSocket も張るが無料枠では無音） |
+| 予算配分 | `symbols.last_viewed_at` を手がかりに、50 calls/hour を**画面に出ている1銘柄**へ寄せる |
+| 銘柄検索 | watchlist → ローカル `symbol_catalog` → provider の3段。provider 段だけが枠を消費する |
 | 永続化 | SQLite WAL の `market.db`。時系列は collector が単独で書く |
-| ライブ共有 | tmpfs 上の別 SQLite `live.db`。collector が書き、API が読む |
-| API／画面 | FastAPI + SSE + ビルド不要の静的 JavaScript |
+| ライブ共有 | tmpfs 上の別 SQLite `live.db`。collector が書き、API が読む（ストリーム休止中は status のみ） |
+| API／画面 | FastAPI + SSE + ビルド不要の静的 JavaScript。画面は30秒ごとにローカルDBから差分を取る |
 | 外部公開 | Cloudflare Tunnel。Lightsail の 80/443 は公開しない |
 | 認証 | Cloudflare Access とアプリ内 JWT 検証の二重ゲート |
 | 実行基盤 | Amazon Lightsail 1GB、collector/API/cloudflaredをsystemdで直接起動 |
@@ -34,24 +42,144 @@ Redis、メッセージブローカー、ロードバランサー、マネージ
 運用複雑性を抑えている。その代わり、Lightsail インスタンスとローカルDBは単一障害点であり、
 復旧は日次バックアップ、Lightsail スナップショット、プロバイダーREST補完を組み合わせる。
 
-## 2. 実装範囲と責任境界
+## 2. なぜこれで動くのか
 
-### 2.1 リポジトリで実装されているもの
+この構成の非自明な点はひとつに集約される。**1時間に50回しか外部を叩けないのに、
+画面のチャートは数分おきに伸びていく。** 成立させているのは次の3つで、どれか1つでも
+欠けると成り立たない。
 
-- Tiingo／Alpaca／Mock の市場データアダプター
+```mermaid
+flowchart LR
+    subgraph LIMIT["制約"]
+        WS["WebSocket<br/>無料枠では配信なし<br/>（実測 / A-6）"]
+        REST["REST 50 calls/hour<br/>唯一の生存経路<br/>= 72秒に1回ぶん"]
+    end
+
+    subgraph MECH["成立させている3つの仕組み"]
+        M1["① RESTは『今値』ではなく『範囲』を返す<br/>fetch_bars(last_bar+1分 → now)<br/>後回しの銘柄は<b>遅れるだけで欠けない</b>"]
+        M2["② last_viewed_at が予算の宛先を決める<br/>/api/bars が打刻 → 5分以内に見られた銘柄だけ前景<br/>10銘柄へ等分ではなく<b>1銘柄へ集中</b>"]
+        M3["③ ブラウザが読むのはローカルDBだけ<br/>画面更新は /api/bars → market.db<br/><b>描画頻度と無料枠が切り離される</b>"]
+    end
+
+    subgraph RESULT["結果"]
+        R1["表示中の1銘柄<br/>約2分ごとに新しい足<br/>画面反映は最大 +30秒<br/>≒ 30 calls/hour"]
+        R2["残り9銘柄<br/>30分ごとの保険sweep<br/>= 18 calls/hour<br/>開けば1回で追いつく"]
+        R3["タブを閉じたら<br/>5分で前景から降りる<br/>読まれていないチャートに<br/>枠を使わない"]
+    end
+
+    subgraph BASE["共通の前提"]
+        CAL["市場が閉じている間は<br/>ポーリング自体を止める（calendar_us）<br/>枠は取引時間にしか使われない"]
+    end
+
+    WS --> M1
+    REST --> M2
+    M1 --> R1
+    M2 --> R2
+    M3 --> R3
+```
+
+### 2.1 3つの仕組みの中身
+
+**① REST は「点」ではなく「範囲」を返す。**
+`fetch_bars(symbol, last_bar + 1分, now)` は、その間の全ての1分足をまとめて返す。
+つまり**後回しにした銘柄は、遅れるだけで欠けない**。1時間放置した銘柄も、開いた瞬間の
+1回の呼び出しで完全に埋まる。もし REST が「現在値のスナップショット」しか返さないAPIなら、
+呼ばなかった時間はそのまま永久に失われるので、予算を偏らせる設計そのものが成立しない。
+
+**② `last_viewed_at` が予算の宛先を決める。**
+`/api/bars/{symbol}` は呼ばれるたびに `symbols.last_viewed_at` を打刻する
+（`0003_symbol_viewing.sql`）。collector は既に数秒ごとに `symbols` を読んで購読変更を
+検出しているので、そこへ相乗りするだけで済み、2プロセス間に新しいIPCを足さずに
+「いまどれが見られているか」を知れる。50回を10銘柄へ等分すれば12分に1回だが、
+1銘柄へ寄せれば72秒に1回ぶんになる。
+
+**③ ブラウザが読むのはローカルDBだけ。**
+画面の更新は `/api/bars` → `market.db` であって、provider へは届かない。だから
+**描画頻度と無料枠は完全に無関係**である。ブラウザは30秒ごとに「まだ描いていない分」
+（`?start=最新足のtimestamp`）だけを取りに行く。この繰り返しの要求が、同時に
+②の打刻を維持する唯一の仕組みでもある。
+
+### 2.2 実際の消費量（10銘柄・取引時間中）
+
+鮮度を決めているのは `USSTOCKS_FOREGROUND_POLL_SECONDS` だけではない。
+`backfill_min_gap_seconds`（既定120秒）が「その程度の隙間に REST 枠を使う価値はない」
+として要求を捨てるため、**前景の実効間隔は90秒設定でも約2分になる**。
+
+| 用途 | 設定 | 実効間隔 | calls / hour |
+|---|---|---|---:|
+| 前景（表示中の1銘柄） | `foreground_poll_seconds=90` | 約2分（min_gap 120秒に律速） | 約30 |
+| 保険sweep（残り9銘柄） | `background_poll_seconds=1800` | 30分 | 18 |
+| 再接続／起動時backfill | 都度 | — | 数回 |
+| 銘柄検索 | catalogに無い語のみ | — | ほぼ0 |
+| **合計** | | | **約48 / 上限50** |
+
+**余裕は小さい。** `min_gap` を下げて前景を本当に90秒間隔にすると 40 calls/hour となり、
+保険sweepと合わせて 58 calls/hour で**上限を超える**。鮮度を上げるなら
+`background_poll_seconds` を1時間へ伸ばすか、銘柄数を減らすか、有料枠へ移るかの
+選択になる。現在の値は「実効2分・約48回」で意図せず均衡している状態である。
+
+なお、poll loop は市場が閉じている間は何もしない（`has_open_window`）。1時間あたりの枠は
+取引時間のあいだにしか使われないので、寄り付き直後の再接続バックフィルや、
+検索が provider へ抜けたときの余地はここから出ている。
+
+### 2.3 いま流れている経路と、休止している経路
+
+```mermaid
+flowchart LR
+    PR["Provider REST<br/>/iex/{sym}/prices<br/>1min resample"]
+    PL["poll loop<br/>前景90秒 / 背景30分<br/>休場中は停止<br/>出来高0の足を除外"]
+    RB["RestBudget<br/>50/h · 1,000/day<br/>api_usageへ永続化"]
+    MD[("market.db<br/>bars_1m UPSERT<br/>is_final = true")]
+    BR["Browser<br/>30秒ごとに<br/>/api/bars?start=最新足"]
+
+    PR --> PL --> RB --> MD --> BR
+    BR -. "同じ要求が last_viewed_at を打刻" .-> PL
+
+    WSS["Provider WSS<br/>接続はする / 無音"]
+    AGG["BarAggregator<br/>trade → OHLCV"]
+    LV[("live.db / tmpfs<br/>進行中の足")]
+    SSE["SSE /api/live<br/>1秒polling / 差分のみ"]
+
+    WSS -.-> AGG -.-> LV -.-> SSE -.-> BR
+```
+
+実線がいま流れている経路、破線が接続はするがデータの来ない経路である。SSE 経路は
+削除していない。`USSTOCKS_PRIMARY_SOURCE` と有料プランを変えるだけで実線へ戻るため、
+収集・集約・配信のコードはそのまま残してある。現在 SSE が運んでいるのは、
+起動時の snapshot と collector status、そして15秒ごとの heartbeat だけである。
+
+### 2.4 この構成が引き受けている限界
+
+| 限界 | 内容 |
+|---|---|
+| 秒単位のローソク | **不可能。** 1分足を数分おきに取るのが上限。1秒ごとの伸縮には配信されるストリームが要る |
+| 出来高の絶対値 | IEX 単独のため統合気配より2〜3桁小さい。他の板と比較できない |
+| 閑散銘柄・時間外 | 足が飛び飛びになる。AAPL の通常取引では385/390本＝**98.7%**だが、薄い銘柄では大きく落ちる |
+| 価格の正確さ | **問題ない。** 証券会社アプリとの差は 0.08%（MU 826.93 対 826.23、同一時刻の実測） |
+| 銘柄数 | 10本が上限。増やすと保険sweepが枠を食い、前景の鮮度が落ちる |
+
+## 3. 実装範囲と責任境界
+
+### 3.1 リポジトリで実装されているもの
+
+- Tiingo／Alpaca／Mock の市場データアダプター（REST・WebSocket 両方）
 - 約定から1分足を生成する collector
-- 再接続、指数バックオフ、ジッター、欠損REST補完
+- **表示中の銘柄を狙う REST ポーリング**（`_poll_loop`）と市場カレンダー連動
+- 再接続、指数バックオフ、ジッター、欠損REST補完、429 の再queue
 - 永続REST利用枠と月間受信帯域メーター
-- SQLite スキーマ、マイグレーション、ソース優先解決
-- FastAPI の履歴、ライブ、銘柄、CSV／Parquet、ヘルスAPI
+- **週次 ticker catalog import とローカル優先の3段検索**
+- SQLite スキーマ、マイグレーション3本、ソース優先解決
+- FastAPI の履歴、ライブ、銘柄、検索、CSV／Parquet、ヘルスAPI
 - Cloudflare Access JWT のアプリ内検証
-- SSE と Lightweight Charts を使う静的フロントエンド
+- Lightweight Charts を使う静的フロントエンド（タイムゾーン選択、移動平均、
+  表示状態の永続化、30秒ごとの差分取得）
 - Docker イメージと3サービスの Compose 構成
-- systemd の代替実行ユニット、デプロイtimer、バックアップtimer
+- systemd の実行ユニット、デプロイ／バックアップ／catalog の各timer
 - AWS Terraform、GitHub OIDC、CIワークフロー
 - 整合バックアップと検証付きリストアスクリプト
+- provider の生フレームを印字する WebSocket プローブ（`scripts/probe_*_ws.py`）
 
-### 2.2 リポジトリ外で設定するもの
+### 3.2 リポジトリ外で設定するもの
 
 | 対象 | 設定場所 | コードとの接点 |
 |---|---|---|
@@ -59,6 +187,7 @@ Redis、メッセージブローカー、ロードバランサー、マネージ
 | Cloudflare Access アプリ／Google IdP | Cloudflare Zero Trust | team domain、AUD、許可メール |
 | DNS hostname | Cloudflare DNS | Tunnel の public hostname |
 | Tiingo／Alpaca資格情報 | 各プロバイダー | `/etc/usstocks/usstocks.env` |
+| **プロバイダーの契約プラン** | 各プロバイダー | 無料枠では WebSocket が配信されない（A-6）。有料化すると設定変更だけでストリーム経路が復活する |
 | GitHub read-only deploy key | GitHub + Lightsail | deploy agent の SSH fetch |
 | S3 uploader access key | AWS IAM + Lightsail | バックアップ専用IAMユーザー |
 | SNS email subscription 承認 | 受信メール | Terraform 作成後に手動承認 |
@@ -68,14 +197,14 @@ Cloudflare 側の Tunnel／Access は Terraform 管理外である。したが�
 `terraform apply` が成功しても、外部hostname、Access policy、Tunnel token が正しく
 設定されていることまでは保証しない。
 
-## 3. システムコンテキスト
+## 4. システムコンテキスト
 
 ```mermaid
 flowchart LR
     U["利用者<br/>Webブラウザ"]
     CF["Cloudflare Edge<br/>Access + Tunnel"]
     APP["Lightsail<br/>systemd services"]
-    DATA["Tiingo / Alpaca<br/>WS + REST"]
+    DATA["Tiingo / Alpaca<br/>REST（生存経路） + WS（無音）"]
     GH["GitHub<br/>Repository + Actions"]
     AWS["AWS Control Plane<br/>Terraform管理対象"]
     S3["S3<br/>SQLite backup / TF state"]
@@ -83,7 +212,7 @@ flowchart LR
 
     U -->|"HTTPS / Access login"| CF
     CF -->|"Tunnel内 HTTP / SSE"| APP
-    APP -->|"WSS: trades<br/>HTTPS: backfill/search"| DATA
+    APP -->|"HTTPS: 1分足ポーリング<br/>週次 catalog zip<br/>WSS: 接続のみ"| DATA
     APP -->|"SSH git fetch<br/>2分間隔"| GH
     GH -->|"OIDC → STS<br/>terraform apply"| AWS
     APP -->|"HTTPS PutObject"| S3
@@ -97,10 +226,12 @@ flowchart LR
 2. Webトラフィックは Cloudflare Edge で Access 認証され、既存の外向きTunnelを通る。
 3. 市場データ取得、コード取得、バックアップ送信もすべてホストからの外向き通信である。
 4. GitHub Actions はアプリバイナリをホストへ送らず、AWSの構成だけをTerraformで更新する。
+5. provider へ向かう通信のうち、REST だけが枠を消費する。週次の ticker catalog は
+   API エンドポイントではなく静的な zip なので、回数に数えられない。
 
-## 4. AWS／ネットワークアーキテクチャ
+## 5. AWS／ネットワークアーキテクチャ
 
-### 4.1 論理構成
+### 5.1 論理構成
 
 ```mermaid
 flowchart TB
@@ -121,8 +252,9 @@ flowchart TB
             FW["Public ports<br/>TCP 22 only"]
             Host["Python venv + systemd<br/>2GB swap / unattended-upgrades"]
             Runtime["collector + api + cloudflared<br/>direct host processes"]
-            Agent["systemd deploy timer"]
-            Backup["backup timer / script"]
+            Agent["systemd deploy timer<br/>2分間隔"]
+            Backup["backup timer 07:10 UTC"]
+            Catalog["catalog timer<br/>週次 日曜 08:30 UTC"]
             Snapshot["AutoSnapshot 06:00 UTC"]
         end
 
@@ -157,15 +289,17 @@ flowchart TB
     Budget --> SNS
 ```
 
-### 4.2 インバウンドとアウトバウンド
+### 5.2 インバウンドとアウトバウンド
 
 | 方向 | 通信 | 用途 | 制御 |
 |---|---|---|---|
 | inbound | TCP 22 | 管理SSH | `lightsail-connect` alias、または明示CIDRのみ |
 | inbound | TCP 80/443 | なし | Terraform の public ports から除外 |
 | outbound | Cloudflare Tunnel | Webの公開経路を維持 | `cloudflared` token |
-| outbound | WSS | 市場データストリーム | provider API key |
-| outbound | HTTPS | REST補完、銘柄検索、JWKS | provider key／公開JWKS |
+| outbound | HTTPS | **1分足ポーリング**、gap補完、JWKS | provider key + RestBudget／公開JWKS |
+| outbound | WSS | 市場データストリーム（無料枠では無音） | provider API key |
+| outbound | HTTPS | 週次 ticker catalog zip（`apimedia.tiingo.com`） | 認証不要の静的ファイル。REST枠を消費しない |
+| outbound | HTTPS | 銘柄検索のprovider fallback（catalogに無い語のみ） | provider key + RestBudget |
 | outbound | SSH 22 | GitHub private repo の fetch | read-only deploy key |
 | outbound | HTTPS | S3へのバックアップ | write-onlyに近いIAM key |
 | outbound | HTTPS | OS package／Python依存／AWS CLI取得 | ホストの通常インターネット接続 |
@@ -174,7 +308,7 @@ Lightsail は dual-stack のため、Terraform は IPv4 と IPv6 のSSH許可元
 明示する。空リストをそのまま Lightsail API へ渡すと全開放として扱われ得るため、
 「許可なし」は `127.0.0.1/32` と `::1/128` の到達不能な番兵値へ変換する。
 
-### 4.3 Webリクエストのセキュリティフロー
+### 5.3 Webリクエストのセキュリティフロー
 
 ```mermaid
 sequenceDiagram
@@ -209,7 +343,7 @@ Cloudflare 側のポリシーを誤って緩めても、アプリのJWT検証と
 残る。レスポンスには CSP、`X-Frame-Options: DENY`、`nosniff`、
 `Referrer-Policy: no-referrer` が付与される。
 
-## 5. Lightsail 上のランタイム
+## 6. Lightsail 上のランタイム
 
 ```mermaid
 flowchart LR
@@ -220,7 +354,7 @@ flowchart LR
         MV[("host filesystem<br/>/var/lib/usstocks/market.db<br/>durable SQLite WAL")]
         LV[("tmpfs<br/>/dev/shm/usstocks-live.db<br/>ephemeral")]
         LOG["journald<br/>service別logs"]
-        AGENT["systemd deploy timer<br/>2分間隔"]
+        AGENT["systemd timers<br/>deploy 2分 / backup 日次 / catalog 週次"]
         RELEASE["revision別venv<br/>current symlink"]
         SWAP["2 GB swap<br/>swappiness=10"]
     end
@@ -240,11 +374,11 @@ flowchart LR
     SWAP --- A
 ```
 
-### 5.1 systemdサービス
+### 6.1 systemdサービス
 
 | サービス | エントリポイント | 責務 | 制限／ヘルス |
 |---|---|---|---|
-| `usstocks-collector` | `current/venv/bin/python -m usstocks.collector` | WS、集約、補完、時系列書込 | 320MB。15秒heartbeat |
+| `usstocks-collector` | `current/venv/bin/python -m usstocks.collector` | RESTポーリング、集約、補完、時系列書込 | 320MB。15秒heartbeat |
 | `usstocks-api` | `current/venv/bin/python -m usstocks.api` | REST、SSE、静的画面、銘柄更新 | 320MB。`/api/livez` |
 | `usstocks-cloudflared` | `cloudflared tunnel ...` | 外向きTunnel | 128MB。host port公開なし |
 
@@ -253,7 +387,18 @@ collector と API は同一releaseのvenvから別プロセスとして起動す
 から配信され、Node.jsやDocker buildを必要としない。Composeは互換経路として残るが、
 同時起動しない。
 
-### 5.2 ストレージ
+常駐しないunit（timer駆動）:
+
+| Timer | 周期 | 内容 |
+|---|---|---|
+| `usstocks-deploy.timer` | 2分 | `origin/main`をfetchし、変化があればrelease切替 |
+| `usstocks-catalog.timer` | 週次 日曜 08:30 UTC | ticker catalog を再構築。`Persistent=true` で停止中の回を取り戻し、`RandomizedDelaySec=3600` で配信元への集中を避ける。米国市場が閉じている時間帯を選び、collector の書込ロックと競合させない |
+| `usstocks-backup.timer` | 日次 07:10 UTC | 整合コピー → 検証 → gzip → S3 |
+
+`deploy/systemd/*.service` や timer を変更した場合は、ホストの `/etc/systemd/system`
+へ反映するため `deploy/systemd/install.sh` の再実行が必要である。
+
+### 6.2 ストレージ
 
 | ストア | 永続性 | 主な内容 | Writer | Reader |
 |---|---|---|---|---|
@@ -267,7 +412,48 @@ collector と API は同一releaseのvenvから別プロセスとして起動す
 `live.db` を `market.db` から分離することで、ティックごとの短命な更新が永続DBの
 1分足書込と競合せず、SSD書込も抑える。tmpfsを失っても次の約定で再構築される。
 
-## 6. リアルタイム収集フロー
+## 7. 収集フロー
+
+`bars_1m` へ辿り着く経路は2つある。現在動いているのは REST 側だけだが、
+両者は同じ主キーへ書くので、有料枠へ移ってストリームが復活しても行は重複しない。
+
+**経路A: REST ポーリング（現在の生存経路）**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant POLL as poll loop
+    participant REPO as symbols / collector_state
+    participant BF as BackfillCoordinator
+    participant BUD as RestBudget
+    participant AD as Adapter (REST)
+    participant DB as market.db
+    participant API as FastAPI
+    participant UI as Browser
+
+    loop 15秒ごとに起床
+        POLL->>POLL: has_open_window() — 休場なら何もしない
+        POLL->>REPO: recently_viewed(300秒) → 前景銘柄
+        POLL->>BF: request_gap_since_last_bar(symbol)
+        BF->>BF: gap < 120秒 / 市場closed なら要求しない
+    end
+    loop 5秒ごとにdrain
+        BF->>BUD: acquire(1) — 空なら最大300秒待って再queue
+        BF->>AD: fetch_bars(last_bar+1分 → now)
+        AD->>AD: 窓外・出来高0の足を除外
+        AD-->>BF: 確定1分足（is_final=true）
+        BF->>DB: UPSERT bars_1m + collector_state
+    end
+    loop 30秒ごと
+        UI->>API: GET /api/bars/{symbol}?start=最新足
+        API->>DB: source優先で読み出し
+        API->>REPO: mark_viewed() — 次の周回の前景を決める
+        API-->>UI: 未描画の足だけ
+        UI->>UI: chart.updateBar() で追記
+    end
+```
+
+**経路B: WebSocket ストリーム（無料枠では無音）**
 
 ```mermaid
 sequenceDiagram
@@ -282,6 +468,7 @@ sequenceDiagram
     participant UI as Browser
 
     P->>AD: provider固有frame
+    Note over P,AD: 無料枠では購読は200で受理されるが<br/>約定frameが来ない（A-6）
     AD->>AD: Trade / Quoteへ正規化、受信bytes加算
     AD->>CO: Trade
     CO->>BA: add_trade()
@@ -302,25 +489,28 @@ sequenceDiagram
     UI->>UI: 同一timestampのローソクをupdate
 ```
 
-### 6.1 1分足の規則
+### 7.1 1分足の規則
 
 | 項目 | 実装 |
 |---|---|
 | 時刻 | UTCの分開始時刻 |
-| 入力 | `Trade` のみ。`Quote` は足に混ぜない |
+| ストリーム入力 | `Trade` のみ。`Quote` は足に混ぜない |
+| REST入力 | providerの確定1分足をそのまま `is_final=true` で保存 |
 | OHLC | 最初、最大、最小、最後の約定価格 |
 | Volume | 非負の約定size合計 |
 | VWAP | `Σ(price × size) / Σ(size)` |
 | 確定 | 次分の約定、または毎秒のroll判定 |
 | 無約定分 | 人工的な足を作らない |
+| **出来高0の足** | **取り込み時に破棄。** Tiingo は無約定の分にも直前終値の足（始=高=安=終、出来高0）を返し、`forceFill=false` でも抑止されない。そのまま保存すると「その価格で推移した」と描かれ、仕様書3.3の「無い動きを描かない」に反する（A-5） |
 | 遅延約定 | 90秒以内で直前確定足がメモリにあれば再計算しupsert |
+| 訂正／取消（Alpaca） | `c`／`x` フレームは warning へ記録して破棄。集計済み bar の再計算は行わない |
 | shutdown | 作成中の足をfinalとしてflush |
 
 DBの主キーは `(symbol, timestamp_utc, source)` である。upsertは
 「新規がfinal、または既存がnon-final」のときだけ更新するため、再起動直後の
 不完全な足で確定足を壊さない。異なるデータソースは別行として共存する。
 
-### 6.2 ソース選択
+### 7.2 ソース選択
 
 同一銘柄・同一分に複数ソースの行がある場合、読み出し時に
 `USSTOCKS_SOURCE_PRIORITY` の順で1本を選ぶ。既定は Tiingo、Alpaca の順。
@@ -328,7 +518,7 @@ DBの主キーは `(symbol, timestamp_utc, source)` である。upsertは
 `USSTOCKS_PRIMARY_SOURCE` を変えてcollectorを再起動する手動操作で、自動failover
 は実装していない。
 
-## 7. 再接続とREST欠損補完
+## 8. 再接続とREST欠損補完
 
 ```mermaid
 flowchart TD
@@ -352,14 +542,36 @@ flowchart TD
     J --> X["1,2,4...最大60秒で再接続"]
 ```
 
+`BackfillCoordinator` の入口は4つある——起動時、購読銘柄の追加時、切断からの復帰時、
+そして**定常のポーリング**である。入口が違うだけで、gap判定・要求合体・token取得は
+共通なので、無料枠を守る制御が1か所に集まる。
+
+**poll loop の判断順序:**
+
+| # | 判定 | やらない条件 |
+|---:|---|---|
+| 1 | 15秒ごとに起床 | 購読銘柄が0本 |
+| 2 | `has_open_window(now-2分, now)` | **市場が閉じていれば何もしない**——休場中に枠を消費しない |
+| 3 | `recently_viewed(300秒)` から前景銘柄を1つ選ぶ | 5分以内に誰も見ていなければ前景なし |
+| 4 | 前景は90秒経過で対象、他は1800秒経過で対象 | まだ間隔に達していない |
+| 5 | `request_gap_since_last_bar()` | gapが120秒未満（= 前景の実効間隔が約2分になる理由） |
+| 6 | backfill loop が5秒後に drain、token を1つ消費 | token が無ければ最大300秒待って再queue |
+
 REST利用数は `api_usage` に時間枠・日枠で永続化される。collectorがクラッシュしても
 枠がリセットされず、再起動ループで無料枠を使い切らない。WebSocket／RESTの受信
-bytes差分も日・月単位で同じテーブルへ記録し、月間予算の80%で警告する。
+bytes差分も日・月単位で同じテーブルへ記録し、月間予算の80%で警告する
+（ストリームが無音の現在、この値はほとんど増えない。「月間受信 0.0 MB」が
+A-6 を最初に示していた兆候だった）。
 
-起動時、購読銘柄追加時、長い切断後に `last_bar_timestamp + 1分` から現在までを
-補完する。RESTから得たバーはプロバイダーの確定値として `is_final=true` で保存される。
+provider が 429 を返した場合も**要求を捨てずに再queueし、300秒のcooldownを置く**。
+捨てると、無関係な要因で同じ銘柄が再requeueされるまで gap が埋まらないままになり、
+一時的な 429 が恒久的な欠損に変わる。
 
-## 8. ブラウザ／API／SSEフロー
+起動時、購読銘柄追加時、長い切断後、そしてポーリング周期ごとに
+`last_bar_timestamp + 1分` から現在までを補完する。RESTから得たバーは
+プロバイダーの確定値として `is_final=true` で保存される。
+
+## 9. ブラウザ／API／SSEフロー
 
 ```mermaid
 sequenceDiagram
@@ -375,10 +587,15 @@ sequenceDiagram
     UI->>API: GET /api/bars/{symbol}?days=N
     API->>M: source優先でhistory read
     API-->>UI: 最大20,000 bars
-    UI->>UI: candlestick + volume描画
+    UI->>UI: candlestick + volume描画、保存済みzoomを復元
     UI->>API: EventSource /api/live?symbols=...
     API->>L: full snapshot read
     API-->>UI: snapshot event
+    loop 30秒ごと（タブが表示中のときだけ）
+        UI->>API: GET /api/bars/{symbol}?start=最新足
+        API->>M: 差分read + mark_viewed()
+        API-->>UI: 未描画の足だけ
+    end
     loop 最大1時間
         API->>L: 1秒ごとにread
         API-->>UI: update / status（変化時）
@@ -402,22 +619,38 @@ APIは1ワーカーで動作する。SQLiteコネクションはスレッドロ�
 「単一writer」は時系列テーブルに限定される。collectorは5秒ごとにwatchlistを読み、
 変更があればWebSocketを張り直す。
 
+**30秒の差分取得について。** この要求は SQLite の読み出しであって provider へは
+届かないため、頻度は無料枠ではなく「確定した1分足をどれだけ早く見せたいか」だけで
+決まる。同時に、これが `viewer_idle_seconds=300` を満たし続ける唯一の仕組みでもある。
+打刻が止まれば5分後に前景から外れ、30分間隔の sweep へ落ちる。タブが非表示の間は
+停止し、復帰時に即座に1回実行する——誰も読んでいないチャートに枠を使わないためである。
+
+**フロントエンドのモジュール:**
+
+| File | 役割 |
+|---|---|
+| `web/app.js` | watchlist、検索、30秒の差分取得（`refreshTail`）、SSE、再接続判定 |
+| `web/chart.js` | Lightweight Charts。軸フォーマット、legend、出来高、MA描画、zoom復元。provider帰属表示は無効化 |
+| `web/timezone.js` | 表示タイムゾーンの単一の情報源。既定 `America/New_York`、localStorage保存 |
+| `web/viewstate.js` | `{days, extended, barSpacing, rightOffset, movingAverages}` を保存 |
+| `web/indicators.js` | 移動平均。窓が満たない間は点を出さない |
+
 主要エンドポイント:
 
 | 種別 | パス | データ経路 |
 |---|---|---|
-| 履歴 | `GET /api/bars/{symbol}` | `market.db` → JSON |
+| 履歴 | `GET /api/bars/{symbol}` | `market.db` → JSON。**副作用として `last_viewed_at` を打刻** |
 | ライブ | `GET /api/live` | `live.db` → SSE |
 | snapshot | `GET /api/live/snapshot` | `live.db` → JSON |
 | 銘柄 | `GET/PUT/DELETE /api/symbols` | `market.db.symbols` |
-| 検索 | `GET /api/symbols/search` | ローカル優先、不足時provider |
+| 検索 | `GET /api/symbols/search` | watchlist → `symbol_catalog` → provider の3段。provider段のみREST枠を消費し、10分のLRUで再問い合わせを抑える |
 | export | `GET /api/export/csv` | `market.db` → streaming CSV |
 | export | `GET /api/export/parquet` | optional pyarrow、メモリ上で生成 |
 | health | `GET /api/health` | DB、disk、live status、budget |
 | auth probe | `GET /api/ping` | 認証session確認 |
 | liveness | `GET /api/livez` | 唯一の無認証パス |
 
-## 9. データベース構成と書込所有権
+## 10. データベース構成と書込所有権
 
 ```mermaid
 erDiagram
@@ -426,6 +659,17 @@ erDiagram
         int is_watched
         int is_held
         int supported
+        text last_viewed_at
+    }
+    SYMBOL_CATALOG {
+        text symbol PK
+        text name
+        text exchange
+        text asset_type
+        text price_currency
+        text start_date
+        text end_date
+        text refreshed_at
     }
     BARS_1M {
         text symbol PK
@@ -469,24 +713,37 @@ erDiagram
     SYMBOLS ||--o{ BARS_1M : "logical symbol"
     SYMBOLS ||--o{ TICKS : "logical symbol"
     SYMBOLS ||--o{ COLLECTOR_STATE : "logical symbol/source"
+    SYMBOL_CATALOG ||--o| SYMBOLS : "検索結果からwatchlistへ"
 ```
 
 SQLiteには外部キーを置かず、論理的な関係として扱う。`ticks` は
 `USSTOCKS_TICK_RETENTION_DAYS=0` が既定なので通常は空である。
 
-| テーブル | collector | API | 用途 |
-|---|---:|---:|---|
-| `bars_1m` | write | read | 1分足 |
-| `symbols` | read／support更新 | read／write | watchlist |
-| `ticks` | optional write/prune | readなし | 秒レベル約定保存 |
-| `api_usage` | write/read | health read | REST／帯域budget |
-| `collector_state` | write/read | 原則readなし | gap検出 |
-| `market_calendar_overrides` | 起動時read | 直接APIなし | 臨時休場 |
-| `schema_migrations` | startup | startup | forward-only migration |
+| テーブル | collector | API | catalog timer | 用途 |
+|---|---:|---:|---:|---|
+| `bars_1m` | write | read | — | 1分足 |
+| `symbols` | read／support更新／`last_viewed_at` read | read／write／`last_viewed_at` write | — | watchlist と「いま見られている銘柄」 |
+| `symbol_catalog` | — | read | write/prune | ローカル検索用のticker台帳 |
+| `ticks` | optional write/prune | readなし | — | 秒レベル約定保存 |
+| `api_usage` | write/read | health read | — | REST／帯域budget |
+| `collector_state` | write/read | 原則readなし | — | gap検出 |
+| `market_calendar_overrides` | 起動時read | 直接APIなし | — | 臨時休場 |
+| `schema_migrations` | startup | startup | — | forward-only migration |
 
-## 10. CI/CD とインフラ反映
+`symbols.last_viewed_at` は API が書き、collector が読む。両プロセス間に新しい IPC を
+足さずに済ませるため、既に数秒ごとに読まれているこのテーブルへ相乗りしている
+（A-3 と同じ判断）。
 
-### 10.1 コード上の実効フロー
+`symbol_catalog` は使い捨てである。ダウンロードから再構築できるので、失っても
+検索が劣化するだけで、利用者が入力したものは何も失われない。約10万行を扱うが、
+1トランザクションで書くと collector の bar 書込が busy timeout（5秒）を使い切るため、
+2,000行ずつのチャンクに分けて書く。整合性は行ごとの `refreshed_at` スタンプで担保し、
+取り込み完了後に「今回のスタンプ以外」を削除する。スタンプにはマイクロ秒と UUID を
+含める——秒精度では、同じ秒に2回走ったとき古い行が消えずに残った。
+
+## 11. CI/CD とインフラ反映
+
+### 11.1 コード上の実効フロー
 
 ```mermaid
 flowchart TB
@@ -524,7 +781,7 @@ flowchart TB
 workflow成功を確認しないため、テスト未実行または失敗したcommitでも`origin/main`に
 存在すればアプリへ反映し得る。
 
-### 10.2 GitHub Actions
+### 11.2 GitHub Actions
 
 | イベント | test/lint | Terraform validate | Terraform apply |
 |---|---:|---:|---:|
@@ -539,7 +796,7 @@ applyはOIDCで短期資格情報を取得する。信頼policyは
 Terraform state は事前作成した別S3バケットの `usstocks/terraform.tfstate` に保存し、
 S3 native lockfile とworkflow concurrencyで競合を抑える。
 
-### 10.3 Pullデプロイ
+### 11.3 Pullデプロイ
 
 deploy agent は次の安全策を持つ。
 
@@ -557,7 +814,7 @@ deploy agent は次の安全策を持つ。
 このpull経路はGitHub Actionsを利用しない。Actionsのquotaを使い切っていても
 `main`を取得できる一方、CI成功をrollout条件にはしていない。
 
-## 11. バックアップ／リストア
+## 12. バックアップ／リストア
 
 ```mermaid
 flowchart LR
@@ -582,7 +839,7 @@ flowchart LR
     S3 --> RESTORE --> VERIFY --> COL
 ```
 
-### 11.1 保護レイヤー
+### 12.1 保護レイヤー
 
 | レイヤー | 整合性 | 主用途 |
 |---|---|---|
@@ -595,9 +852,9 @@ flowchart LR
 backup uploaderは `daily/*` への `PutObject` と同prefixのlistだけを持ち、読み戻しや
 削除を許可しない。アクセスキー自体はTerraformで作らず、stateへ秘密を残さない。
 
-## 12. 監視と運用シグナル
+## 13. 監視と運用シグナル
 
-### 12.1 アプリ内health
+### 13.1 アプリ内health
 
 `/api/health` は次を集約する。
 
@@ -618,7 +875,12 @@ backup uploaderは `daily/*` への `PutObject` と同prefixのlistだけを持�
 | `disk_usage_high` | disk 70%以上 | `degraded` |
 | `insufficient_headroom_for_backup` | free < DB size × 2 | `degraded` |
 
-### 12.2 基盤監視
+**この判定の盲点。** `collector_disconnected` は WebSocket が繋がっているかだけを見る。
+無料枠では**繋がるがデータが来ない**ので、この項目は緑のまま実態を反映しない
+（A-6 がログから分からなかったのと同じ構造の問題である）。実際の鮮度は
+`/api/bars` の最新 timestamp、消費量は `rest_calls_hour` で見る。
+
+### 13.2 基盤監視
 
 - collectorの15秒heartbeatとAPI `/api/livez`
 - systemd `Restart=always`: process異常終了から復帰
@@ -630,12 +892,16 @@ backup uploaderは `daily/*` への `PutObject` と同prefixのlistだけを持�
 現状、collectorの切断、backup失敗、service unhealthyをSNSへ直接送る仕組みは
 Terraformにはない。外形監視も `/api/health` が認証必須のため別途必要である。
 
-## 13. 障害時の挙動
+## 14. 障害時の挙動
 
 | 障害 | 自動挙動 | データ影響／手動対応 |
 |---|---|---|
 | provider WS切断 | 1〜60秒指数backoff + jitter | 120秒以上のopen区間をREST補完 |
-| provider REST枠枯渇 | window更新まで待機、timeout後requeue | 補完完了が遅れる |
+| **WSは繋がるがデータが来ない** | **検出しない。**health は `connected` のまま | 最新barのtimestampと月間受信bytesで判断（A-6の発見経路） |
+| provider REST枠枯渇 | window更新まで待機、timeout後requeue | 補完完了が遅れる。検索はローカル結果へ縮退する |
+| provider が 429 | 要求を再queueし300秒cooldown | gapは次の周回で埋まる |
+| catalog import失敗 | 前回の行が残り検索は動き続ける | journalを確認。新規上場が引けないだけ |
+| ブラウザのタブを閉じた | 5分後に前景から外れ30分sweepへ | 次に開いた1回で全て埋まる |
 | Tiingo長時間障害 | 自動切替なし | operatorがAlpacaへ明示切替 |
 | collector crash | systemdが再起動 | 作成中barは未flushの可能性、REST補完 |
 | API crash | 独立再起動 | 収集は継続、SSE client再接続 |
@@ -647,14 +913,20 @@ Terraformにはない。外形監視も `/api/health` が認証必須のため�
 | CPU burst枯渇 | CloudWatch → SNS | collector遅延。bundle見直し |
 | 新revisionのAPI不健康 | 前releaseへ自動rollback | 失敗SHAを調査し、次revisionで修正 |
 
-## 14. 構成値と秘密情報
+## 15. 構成値と秘密情報
 
-### 14.1 主要な既定値
+### 15.1 主要な既定値
 
 | 設定 | 既定値 |
 |---|---:|
 | 最大購読銘柄 | 10 |
 | REST | 50 calls/hour、1,000 calls/day |
+| 前景ポーリング間隔 | 90秒（min_gapに律速され実効は約2分） |
+| 背景sweep間隔 | 1,800秒 |
+| 「見られている」判定の猶予 | 300秒 |
+| ブラウザの差分取得 | 30秒（ローカルDB読み出し。枠を消費しない） |
+| catalog refresh | 週次 日曜 08:30 UTC ±60分 |
+| catalog の保持条件 | `end_date` が30日以内、Stock/ETF、USD建て |
 | 月間受信budget | 1,000,000,000 bytes |
 | 帯域警告 | 80% |
 | 短いgapの補完抑止 | 120秒 |
@@ -673,7 +945,7 @@ Terraformにはない。外形監視も `/api/health` が認証必須のため�
 | backup retention | 30日 |
 | monthly AWS budget | 12 USD |
 
-### 14.2 秘密情報の置き場所
+### 15.2 秘密情報の置き場所
 
 本番値は `/etc/usstocks/usstocks.env` に置く。systemdは`EnvironmentFile`として
 直接読むためrepo内へのsecret symlinkは不要である。Terraform `user_data` には秘密を
@@ -689,9 +961,30 @@ Terraformにはない。外形監視も `/api/health` が認証必須のため�
 - S3 backup uploader access key／secret
 - GitHub deploy private key
 
-## 15. 現行実装で確認できた運用上の注意点
+`USSTOCKS_ALLOWED_EMAILS` と `USSTOCKS_SOURCE_PRIORITY` は list 型だが、
+環境変数からは `a@example.com,b@example.com` のカンマ区切りで渡す。pydantic-settings は
+list 型フィールドを環境変数ソースの内部で JSON デコードしてしまうため、両フィールドには
+`NoDecode` を付けてある。これが無いと、値の中身も受理される形式も示さないまま
+数フレーム下で `JSONDecodeError` になる。
 
-### 15.1 アプリrolloutはCI成功でgateされていない
+## 16. 現行実装で確認できた運用上の注意点
+
+### 16.1 「沈黙」は計装できていなかった
+
+collector は自分が処理する `messageType`（`A`=データ、`E`=エラー）だけを記録する。
+購読確認 `I` とハートビート `H` は痕跡なく捨てられるため、**「接続はしているが
+データが来ない」をログから判定できなかった**。想定したメッセージを前提に設計した
+計装は、沈黙という失敗を報告できない。診断には生フレームを印字するプローブ
+（`scripts/probe_tiingo_ws.py`、`scripts/probe_alpaca_ws.py`）を書き足す必要があった。
+
+同じ理由で、`/api/health` の `connected` は現在の実態を表さない（13.1 参照）。
+
+### 16.2 REST枠の余裕は小さい
+
+前景と保険sweepで約48 calls/hour（上限50）。鮮度を上げる方向へ設定を動かすと
+すぐに超える。`/api/health` の `rest_calls_hour` は、この構成では見ておく価値のある値である。
+
+### 16.3 アプリrolloutはCI成功でgateされていない
 
 GitHub ActionsのTerraform applyにはtest/lintのgateがあるが、Lightsailのdeploy agentは
 `origin/main` の更新だけを見ている。ワークフロー結果との連携、release tag、成功commit marker
@@ -701,64 +994,77 @@ GitHub APIでcheck suite成功を確認する仕組みが必要である。
 Actions quota超過中もpull deployは動くが、その間はローカルでtest/lintを通してから
 `main`へ反映する必要性がさらに高い。
 
-### 15.2 初回pull agent有効化は手動ブートストラップを要する
+### 16.4 初回pull agent有効化は手動ブートストラップを要する
 
 Terraform `user_data` はOS、Python、ユーザー、ディレクトリ、env placeholder、
 repo URLまでを作るが、private repositoryをcredential付きでcloneしない。最初のcloneと
 `deploy/systemd/install.sh`実行はout-of-bandで必要である。これは秘密のdeploy keyを
 metadataから読めるuser_dataへ埋め込まないための境界である。
 
-### 15.3 Composeへ戻す場合はDBの再移行が必要
+### 16.5 Composeへ戻す場合はDBの再移行が必要
 
 systemd release間のrollbackは自動化されている。一方、Composeとsystemdはdurable DBの
 配置が異なるため、runtime自体をComposeへ戻す場合はcollectorを両方停止し、
 `/var/lib/usstocks/market.db`をnamed volumeへSQLite online backupで戻す必要がある。
 古いCompose volumeをそのまま起動すると、切替後に収集した履歴が欠落する。
 
-### 15.4 監視通知の対象は限定的
+### 16.6 監視通知の対象は限定的
 
 TerraformでSNSへ接続されるのはLightsail CPU burstとAWS Budgetsである。backup失敗、
 collector stale／disconnect、systemd restart、disk容量はアプリ上で検出またはログ化
 されるが、SNS通知へは配線されていない。
 
-### 15.5 system unit変更はinstallerの再実行が必要
+### 16.7 system unit変更はinstallerの再実行が必要
 
 通常のPython／web変更はpull agentだけで反映される。`deploy/systemd/*.service`、
 installer、deploy service unitを変更した場合は、ホストの`/etc/systemd/system`へ
-反映するため`deploy/systemd/install.sh`を再実行する。
+反映するため`deploy/systemd/install.sh`を再実行する。catalog timer を追加したときが
+これに当たった——コードは配られていたが、timer はホストに存在しなかった。
 
-## 16. ディレクトリ／コンポーネント対応
+## 17. ディレクトリ／コンポーネント対応
 
 ```text
 .
 ├── src/usstocks/
-│   ├── adapters/          # provider境界、WS/REST正規化
-│   ├── collector/         # 集約、再接続、補完、quota、publish
+│   ├── adapters/          # provider境界、WS/REST正規化（tiingo / alpaca / mock）
+│   ├── collector/         # 集約、再接続、補完、ポーリング、quota、publish
 │   ├── api/               # FastAPI、認証、REST、SSE、静的配信
-│   ├── db/                # SQLite接続、repository、live store、migration
+│   ├── db/                # SQLite接続、repository、live store、migration ×3
 │   ├── calendar_us.py     # 米国市場日／session判定
+│   ├── catalog.py         # 週次 ticker catalog import（REST枠を使わない検索の土台）
 │   ├── config.py          # environment設定とfail-fast検証
 │   └── models.py          # provider非依存domain model
-├── web/                   # build不要のHTML/CSS/JS + vendored chart library
+├── web/                   # build不要の静的フロントエンド
+│   ├── app.js             # watchlist / 差分取得 / SSE / 再接続
+│   ├── chart.js           # Lightweight Charts（軸・legend・出来高・MA・zoom復元）
+│   ├── timezone.js        # 表示タイムゾーンの単一の情報源
+│   ├── viewstate.js       # 期間・zoom・MAの永続化
+│   ├── indicators.js      # 移動平均
+│   └── vendor/            # vendored chart library
 ├── deploy/
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   ├── agent/             # pull CD用script + systemd timer
 │   ├── backup/            # consistent backup / verified restore
 │   ├── cloudflared/       # 手動Cloudflare設定のreference
-│   └── systemd/           # direct runtime、installer、Tunnel／backup timer
+│   └── systemd/           # direct runtime、installer、deploy／backup／catalog timer
 ├── infra/
 │   ├── terraform/         # AWS desired state
 │   └── iam/               # 初回applyを行うhuman operator policy
 ├── .github/workflows/     # test / validate / terraform apply
-├── scripts/               # local dev、seed、state bootstrap、SSH CIDR更新
+├── scripts/               # local dev、seed、state bootstrap、SSH CIDR更新、
+│                          # provider WSプローブ（A-6の一次証拠）
 └── tests/                 # adapter、collector、API、DB、calendar等
 ```
 
-## 17. トレーサビリティ
+## 18. トレーサビリティ
 
 | 説明対象 | 主な一次情報 |
 |---|---|
+| **なぜ50回/時で足りるのか** | `collector/service.py` の `_poll_loop()`、`db/migrations/0003_symbol_viewing.sql`、`web/app.js` の `refreshTail()` |
+| 予算の宛先決定 | `repository.mark_viewed / recently_viewed`, `api/routes/bars.py` |
+| ローカル検索 | `catalog.py`, `db/migrations/0002_symbol_catalog.sql`, `api/routes/symbols.py` |
+| A-6の一次証拠 | `scripts/probe_tiingo_ws.py`, `scripts/probe_alpaca_ws.py`, `docs/spec-review.md` A-6 |
 | direct runtime／release／health | `deploy/systemd/`, `deploy/agent/deploy-agent.sh` |
 | Compose互換経路 | `deploy/docker-compose.yml`, `deploy/Dockerfile` |
 | Lightsail／firewall／snapshot | `infra/terraform/lightsail.tf` |
@@ -772,15 +1078,21 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 | auth boundary | `src/usstocks/api/app.py`, `auth.py` |
 | realtime flow | `src/usstocks/collector/service.py`, `aggregator.py` |
 | backfill／quota | `backfill.py`, `ratelimit.py` |
-| DB schema／ownership | `db/migrations/0001_initial.sql`, `repository.py`, `live_store.py` |
+| DB schema／ownership | `db/migrations/`, `repository.py`, `live_store.py` |
 | SSE／browser reconnect | `api/routes/live.py`, `web/app.js` |
 
-## 18. まとめ
+## 19. まとめ
 
 このリポジトリは、小規模な個人用途に合わせて、外向き接続中心、二重認証、
 単一ホスト、SQLite、pull型CDという一貫した設計を採っている。データ取得から画面までの
 経路は短く、provider障害・API再起動・live state消失には局所的に回復できる。
 
-systemd direct runtimeでは、DB／backup path、無取引時heartbeat、revision切替とrollbackを
-一貫させた。残る主要な運用課題は、CI成功とアプリrolloutの結合、app-level障害のSNS通知、
-Composeから移行する一度だけのDB handoffである。
+当初の土台であった「WebSocketで常時受信」が無料枠では成立しないと分かった後も、
+構成そのものは作り直さずに済んだ。REST が範囲を返すこと、`last_viewed_at` で予算の
+宛先を選べること、ブラウザがローカルDBしか読まないこと——この3つが、
+1時間50回という制約の下で数分おきの更新を成立させている。代償として、
+秒単位のローソクは断念し、出来高の絶対値は他の板と比較できないものになった。
+
+残る主要な運用課題は、CI成功とアプリrolloutの結合、app-level障害のSNS通知、
+Composeから移行する一度だけのDB handoff、そして
+**「繋がっているがデータが来ない」を検出できる health 判定**である。
