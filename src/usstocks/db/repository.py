@@ -466,6 +466,23 @@ class Repository:
                 ),
             )
 
+    def last_checked(self, symbol: str, source: str) -> datetime | None:
+        """When a REST fetch for this symbol last completed.
+
+        Distinct from the newest bar, and that distinction is the whole point.
+        A fetch that returns nothing still stamps this, so a frozen chart can be
+        read two ways: last bar old but this recent means the market produced
+        nothing, while both being old means collection itself stopped.
+        """
+        row = self.connection.execute(
+            "SELECT last_backfill_utc FROM collector_state "
+            "WHERE symbol = ? AND source = ?",
+            (symbol.upper(), source),
+        ).fetchone()
+        if row is None or not row["last_backfill_utc"]:
+            return None
+        return datetime.fromisoformat(row["last_backfill_utc"])
+
     def get_state(self, symbol: str, source: str) -> sqlite3.Row | None:
         return self.connection.execute(
             "SELECT * FROM collector_state WHERE symbol = ? AND source = ?",

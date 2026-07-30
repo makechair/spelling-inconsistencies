@@ -65,9 +65,15 @@ def get_bars(
     if truncated:
         bars = bars[:limit]
 
+    # Reported against the primary source, which is the one the collector is
+    # actually polling. A standby provider's state would say nothing about
+    # whether the data on screen is being kept up to date.
+    checked = repository.last_checked(symbol, settings.primary_source)
+
     return BarsResponse(
         symbol=symbol.upper(),
         count=len(bars),
         truncated=truncated,
+        checked_at=checked.isoformat() if checked else None,
         bars=[BarOut.from_bar(bar) for bar in bars],
     )

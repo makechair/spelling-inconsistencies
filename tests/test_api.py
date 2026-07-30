@@ -91,6 +91,45 @@ def test_bars_endpoint(client: TestClient, settings: Settings):
     assert first["session"] == "regular"
 
 
+def test_bars_report_the_last_fetch_even_when_the_range_is_empty(
+    client: TestClient, settings: Settings
+):
+    """The case the field exists for: a completed fetch that found nothing.
+
+    An after-hours session with no prints and a collector that died at the
+    close both leave the newest bar frozen. Only the fetch time separates them,
+    so it has to survive a response carrying zero bars.
+    """
+    checked = BASE + timedelta(hours=3)
+    with Repository(settings.db_path) as repo:
+        seed_bars(repo)
+        # Recorded under the configured primary source: the standby provider's
+        # state would say nothing about whether the screen is being kept fresh.
+        repo.record_state("AAPL", settings.primary_source, last_backfill=checked)
+
+    payload = client.get(
+        "/api/bars/AAPL",
+        params={
+            "start": (BASE + timedelta(days=1)).isoformat(),
+            "end": (BASE + timedelta(days=2)).isoformat(),
+        },
+    ).json()
+
+    assert payload["count"] == 0
+    assert payload["checked_at"] is not None
+    assert datetime.fromisoformat(payload["checked_at"]) == checked
+
+
+def test_bars_report_no_fetch_before_the_collector_has_run(
+    client: TestClient, settings: Settings
+):
+    with Repository(settings.db_path) as repo:
+        seed_bars(repo)
+
+    payload = client.get("/api/bars/AAPL", params={"days": 1}).json()
+    assert payload["checked_at"] is None
+
+
 def test_bars_rejects_inverted_range(client: TestClient):
     response = client.get(
         "/api/bars/AAPL",

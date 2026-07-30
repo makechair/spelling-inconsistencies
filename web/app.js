@@ -34,6 +34,10 @@ const state = {
   // Newest bar of the loaded range, per symbol. Outside market hours the
   // collector publishes no live snapshot, so this is the only price there is.
   lastBar: new Map(),
+  // When the collector last completed a fetch, per symbol. Read alongside the
+  // newest bar this separates "nothing traded" from "nothing is running",
+  // which the last-received time alone cannot express.
+  checkedAt: new Map(),
   retryDelay: 1000,
   lastEventAt: 0,
 };
@@ -49,6 +53,7 @@ const el = {
   quoteChange: document.getElementById('quote-change'),
   quoteSession: document.getElementById('quote-session'),
   quoteUpdated: document.getElementById('quote-updated'),
+  quoteChecked: document.getElementById('quote-checked'),
   connDot: document.getElementById('conn-dot'),
   connLabel: document.getElementById('conn-label'),
   tz: document.getElementById('tz-select'),
@@ -276,6 +281,7 @@ async function loadBars({ quiet = false } = {}) {
     } else {
       state.lastBar.delete(state.selected);
     }
+    state.checkedAt.set(state.selected, payload.checked_at || null);
     renderQuote();
 
     // The provider is named only when more than one appears in the range.
@@ -343,10 +349,16 @@ async function refreshTail() {
       `/api/bars/${symbol}?start=${encodeURIComponent(start)}`
     );
     if (state.selected !== symbol) return;  // switched while the request was out
+    // Recorded before the early return below: a poll that found nothing is
+    // exactly when this field has to move, since the bar timestamp cannot.
+    state.checkedAt.set(symbol, payload.checked_at || null);
     const bars = state.extended
       ? payload.bars
       : payload.bars.filter((bar) => bar.session === 'regular');
-    if (!bars.length) return;
+    if (!bars.length) {
+      renderQuote();
+      return;
+    }
     for (const bar of bars) chart.updateBar(bar);
     state.lastBar.set(symbol, bars[bars.length - 1]);
     renderQuote();
@@ -487,7 +499,50 @@ function applyStatus(status) {
   el.footerStatus.textContent = parts.join(' · ');
 }
 
+/**
+ * "最終確認" — when the collector last finished a fetch for this symbol.
+ *
+ * The last-received time answers "when did this last trade", which cannot
+ * distinguish an after-hours session in which nothing printed from a collector
+ * that died at the close: both freeze. This one moves on every completed fetch
+ * including the ones that returned nothing, so the two cases read differently.
+ *
+ * It legitimately stops while the market is shut, because the poll loop stops
+ * too, so that case is labelled rather than flagged.
+ */
+function renderChecked() {
+  const checked = state.checkedAt.get(state.selected);
+  if (!checked) {
+    el.quoteChecked.textContent = '—';
+    el.quoteChecked.className = '';
+    el.quoteChecked.title = 'この銘柄はまだ一度も取得されていません';
+    return;
+  }
+  const ageSeconds = Math.round((Date.now() - new Date(checked).getTime()) / 1000);
+  const live = state.live.get(state.selected);
+  const bar = state.lastBar.get(state.selected);
+  const closed = (live?.session || bar?.session) === 'closed';
+
+  el.quoteChecked.textContent =
+    ageSeconds > 120 ? `${fmtClock(checked)} (${fmtAge(ageSeconds)}前)` : fmtClock(checked);
+  // Two poll intervals of silence during a session that should be producing
+  // them is the collector having stopped, not a quiet market.
+  const overdue = !closed && ageSeconds > 600;
+  el.quoteChecked.className = overdue ? 'stale' : '';
+  el.quoteChecked.title = overdue
+    ? '取引時間中にも関わらず取得が止まっています。collectorのログを確認してください'
+    : closed
+      ? '市場が閉じている間は取得を停止します'
+      : '約定が無くてもこの時刻は進みます。進んでいるなら収集は正常です';
+}
+
+function fmtAge(seconds) {
+  if (seconds < 3600) return `${Math.round(seconds / 60)}分`;
+  return `${Math.floor(seconds / 3600)}時間${Math.round((seconds % 3600) / 60)}分`;
+}
+
 function renderQuote() {
+  renderChecked();
   const live = state.live.get(state.selected);
   if (!live) {
     // No live snapshot: the market is closed, or nothing has traded since the

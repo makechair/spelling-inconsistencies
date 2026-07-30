@@ -50,6 +50,10 @@ class BarsResponse(BaseModel):
     symbol: str
     count: int
     truncated: bool = False
+    # When the collector last completed a fetch for this symbol, whether or not
+    # it produced bars. Without it a stalled chart is unreadable: an empty
+    # after-hours session and a dead collector look identical.
+    checked_at: str | None = None
     bars: list[BarOut]
 
 
