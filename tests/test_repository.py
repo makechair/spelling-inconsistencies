@@ -176,3 +176,35 @@ def test_iter_bars_streams_multiple_symbols(repo: Repository):
     rows = list(repo.iter_bars(["AAPL", "MSFT"]))
     assert len(rows) == 6
     assert {bar.symbol for bar in rows} == {"AAPL", "MSFT"}
+
+
+def test_viewing_is_recorded_and_expires(repo: Repository):
+    """The collector aims its REST allowance with this.
+
+    Neither free tier streams any more (spec-review A-6), so 50 calls an hour is
+    the whole live budget. Spread over ten symbols it is one refresh every
+    twelve minutes; aimed at the symbol on screen it is one every seventy-two
+    seconds. The API is the only process that knows which that is.
+    """
+    now = datetime(2026, 7, 29, 15, 0, tzinfo=UTC)
+    for symbol in ("AAPL", "MSFT", "NVDA"):
+        repo.upsert_symbol(SymbolInfo(symbol=symbol, is_watched=True))
+
+    repo.mark_viewed(["AAPL"], now=now - timedelta(seconds=30))
+    repo.mark_viewed(["MSFT"], now=now - timedelta(minutes=20))
+
+    # Most recent first: that ordering is what picks the foreground symbol.
+    assert repo.recently_viewed(timedelta(hours=1), now=now) == ["AAPL", "MSFT"]
+    # Outside the window a symbol stops counting as watched, so a closed browser
+    # does not keep spending the allowance on a chart nobody is reading.
+    assert repo.recently_viewed(timedelta(minutes=5), now=now) == ["AAPL"]
+    # Never viewed at all is not "viewed long ago".
+    assert "NVDA" not in repo.recently_viewed(timedelta(days=365), now=now)
+
+
+def test_viewing_ignores_unwatched_symbols(repo: Repository):
+    """Opening a chart for something no longer tracked must not attract polls."""
+    now = datetime(2026, 7, 29, 15, 0, tzinfo=UTC)
+    repo.upsert_symbol(SymbolInfo(symbol="OLD", is_watched=False))
+    repo.mark_viewed(["OLD"], now=now)
+    assert repo.recently_viewed(timedelta(hours=1), now=now) == []

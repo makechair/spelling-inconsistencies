@@ -48,6 +48,11 @@ def get_bars(
     if start_dt >= end_dt:
         raise HTTPException(status_code=400, detail="start must be before end")
 
+    # Fetching a symbol's bars is the clearest signal that it is the one being
+    # looked at. The collector reads this to aim a REST allowance it can no
+    # longer spread across every symbol (spec-review A-6).
+    repository.mark_viewed([symbol])
+
     limit = settings.max_bars_per_request
     bars = repository.get_bars(
         symbol,

@@ -339,3 +339,20 @@ def test_search_degrades_to_local_when_the_budget_is_gone(
 
     assert called is False
     assert [item["symbol"] for item in results] == ["AAPL"]
+
+
+def test_requesting_bars_marks_the_symbol_as_viewed(client: TestClient, settings: Settings):
+    """Fetching a chart is how the collector learns where to spend its calls.
+
+    With neither free tier streaming (spec-review A-6), REST is the live path and
+    the hourly allowance only stretches to one symbol at a useful rate. The API
+    is the only process that knows which symbol a browser is showing.
+    """
+    with Repository(settings.db_path) as repo:
+        repo.upsert_symbol(SymbolInfo(symbol="AAPL", is_watched=True))
+        assert repo.recently_viewed(timedelta(minutes=5)) == []
+
+    client.get("/api/bars/AAPL", params={"days": 1})
+
+    with Repository(settings.db_path) as repo:
+        assert repo.recently_viewed(timedelta(minutes=5)) == ["AAPL"]

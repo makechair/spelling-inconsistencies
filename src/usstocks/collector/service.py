@@ -21,7 +21,7 @@ import random
 from datetime import UTC, datetime, timedelta
 
 from ..adapters.base import MarketDataAdapter
-from ..calendar_us import classify, reference_close_boundary
+from ..calendar_us import classify, has_open_window, reference_close_boundary
 from ..config import Settings
 from ..db.live_store import LiveStore
 from ..db.repository import Repository
@@ -94,6 +94,7 @@ class CollectorService:
             asyncio.create_task(self._publish_loop(), name="publish"),
             asyncio.create_task(self._symbol_watch_loop(), name="symbols"),
             asyncio.create_task(self._backfill_loop(), name="backfill"),
+            asyncio.create_task(self._poll_loop(), name="poll"),
             asyncio.create_task(self._maintenance_loop(), name="maintenance"),
         ]
         try:
@@ -356,6 +357,65 @@ class CollectorService:
             total = sum(result.bars_written for result in results)
             if total:
                 log.info("backfill wrote %d bar(s)", total)
+
+    async def _poll_loop(self) -> None:
+        """Refresh bars over REST, because the stream may carry nothing.
+
+        Both providers' free tiers stopped delivering websocket data
+        (spec-review A-6), so REST is the only live path and the whole design
+        depends on how 50 calls an hour are spent.
+
+        Spread evenly across ten symbols that is one refresh every twelve
+        minutes. Spent on the symbol actually on screen it is one every
+        seventy-two seconds, and the others lose nothing by waiting: the
+        endpoint returns every minute between the last stored bar and now, so a
+        symbol left alone is filled completely by one call when it is next
+        opened. Late, not missing.
+
+        The slow sweep is not for freshness. Backfill reaches back a bounded
+        number of days, so a symbol never opened within that window would lose
+        history permanently -- the sweep is insurance against that, and costs a
+        handful of calls a day.
+        """
+        foreground_interval = self._settings.foreground_poll_seconds
+        background_interval = self._settings.background_poll_seconds
+        window = timedelta(seconds=self._settings.viewer_idle_seconds)
+        last_swept: dict[str, float] = {}
+        loop = asyncio.get_running_loop()
+
+        while not self._stop.is_set():
+            await asyncio.sleep(min(foreground_interval, 15.0))
+            if not self._symbols:
+                continue
+            # Nothing to fetch for a market that is shut; the calendar check is
+            # free and the allowance is not.
+            now = datetime.now(tz=UTC)
+            open_window = has_open_window(
+                now - timedelta(minutes=2), now, closed_overrides=self._closed_overrides
+            )
+            if not open_window:
+                continue
+
+            viewed = await asyncio.to_thread(self._repo.recently_viewed, window)
+            foreground = next((s for s in viewed if s in self._symbols), None)
+
+            due: list[str] = []
+            if foreground is not None:
+                elapsed = loop.time() - last_swept.get(foreground, 0.0)
+                if elapsed >= foreground_interval:
+                    due.append(foreground)
+            for symbol in self._symbols:
+                if symbol == foreground:
+                    continue
+                if loop.time() - last_swept.get(symbol, 0.0) >= background_interval:
+                    due.append(symbol)
+
+            for symbol in due:
+                # request_gap_since_last_bar decides whether a gap is worth a
+                # call at all, and the budget bucket refuses when the allowance
+                # is gone -- both already in place for reconnect backfill.
+                if await self._backfill.request_gap_since_last_bar(symbol, now):
+                    last_swept[symbol] = loop.time()
 
     async def _maintenance_loop(self) -> None:
         while not self._stop.is_set():

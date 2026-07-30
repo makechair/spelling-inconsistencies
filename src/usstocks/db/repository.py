@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable, Iterator, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from ..models import Bar, Session, SymbolInfo
@@ -306,6 +306,36 @@ class Repository:
             sql += " WHERE is_watched = 1 OR is_held = 1"
         sql += " ORDER BY symbol"
         return [self._row_to_symbol(row) for row in self.connection.execute(sql)]
+
+    def mark_viewed(self, symbols: list[str], now: datetime | None = None) -> None:
+        """Record that these symbols are being looked at right now.
+
+        The collector reads this to decide where to spend a REST allowance that
+        can no longer be spread across everything (spec-review A-6). Written by
+        the API, which is the only process that knows what a browser asked for.
+        """
+        if not symbols:
+            return
+        stamp = (now or datetime.now(tz=UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.connection as conn:
+            conn.executemany(
+                "UPDATE symbols SET last_viewed_at = ? WHERE symbol = ?",
+                [(stamp, symbol.upper()) for symbol in symbols],
+            )
+
+    def recently_viewed(self, within: timedelta, now: datetime | None = None) -> list[str]:
+        """Watched symbols looked at inside `within`, most recent first."""
+        cutoff = ((now or datetime.now(tz=UTC)) - within).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return [
+            row["symbol"]
+            for row in self.connection.execute(
+                "SELECT symbol FROM symbols"
+                " WHERE (is_watched = 1 OR is_held = 1)"
+                "   AND last_viewed_at IS NOT NULL AND last_viewed_at >= ?"
+                " ORDER BY last_viewed_at DESC",
+                (cutoff,),
+            )
+        ]
 
     # ------------------------------------------------------------- catalog
     def upsert_catalog(self, rows: list[tuple]) -> int:

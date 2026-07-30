@@ -111,6 +111,20 @@ class Settings(BaseSettings):
     # symbol produces no trades. This is deliberately much slower than live
     # publishing so the heartbeat does not create avoidable SQLite churn.
     collector_status_interval_seconds: float = Field(default=15.0, gt=0, le=30)
+    # REST polling, which is the live path now that neither free tier streams
+    # (spec-review A-6). The allowance is 50 calls an hour: spread over ten
+    # symbols that is one refresh every twelve minutes, aimed at the symbol on
+    # screen it is one every seventy-two seconds. 90 leaves headroom for a
+    # reconnect backfill or a symbol search to land without starving the chart.
+    foreground_poll_seconds: float = 90.0
+    # The others are not starved, only deferred: a REST call returns every
+    # minute since the last stored bar, so an unopened symbol fills completely
+    # the moment it is opened. This sweep exists because backfill reaches back
+    # only max_lookback_days -- without it, a symbol left unopened past that
+    # window would lose history for good.
+    background_poll_seconds: float = 1800.0
+    # How long after a request a symbol still counts as being watched.
+    viewer_idle_seconds: float = 300.0
     # Spec 10.2 offers three options for second-level data with no decision.
     # Default: do not store (option 1). Set >0 to retain that many days.
     tick_retention_days: int = 0
