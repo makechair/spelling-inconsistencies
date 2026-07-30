@@ -262,9 +262,9 @@ async function select(symbol) {
   renderQuote();
 }
 
-async function loadBars() {
+async function loadBars({ quiet = false } = {}) {
   if (!state.selected) return;
-  el.chartNote.textContent = '読み込み中…';
+  if (!quiet) el.chartNote.textContent = '読み込み中…';
   try {
     const payload = await api(`/api/bars/${state.selected}?days=${state.days}`);
     const bars = state.extended
@@ -296,6 +296,75 @@ async function loadBars() {
     el.chartNote.textContent = `読み込みに失敗しました: ${error.message}`;
   }
 }
+
+/**
+ * Draw the minutes the collector has stored since the last time we looked.
+ *
+ * The chart used to be drawn once per selection and then left to the SSE
+ * stream, which was correct while the provider websocket delivered trades.
+ * It no longer does on either free tier (docs/spec-review.md A-6), so the
+ * collector refreshes bars over REST instead -- into `market.db`, where
+ * nothing was telling the browser about them. Between two page loads the
+ * chart simply stopped, however often the collector polled.
+ *
+ * This is a read of the local database, not a provider call: it spends none of
+ * the 50 calls/hour, so the interval is set by how soon a finished minute
+ * should appear rather than by budget.
+ *
+ * It is also what keeps the collector aimed here. `/api/bars` is what stamps
+ * `last_viewed_at`, and the foreground poll only covers a symbol requested
+ * within `viewer_idle_seconds` (300s) -- so without a repeating request, a
+ * chart left open would drop out of the foreground after five minutes and go
+ * back to the half-hourly sweep.
+ */
+const TAIL_REFRESH_MS = 30_000;
+
+async function refreshTail() {
+  if (!state.selected) return;
+  // A hidden tab is not being read. Letting it go on stamping `last_viewed_at`
+  // would point the allowance at a chart nobody is looking at.
+  if (document.hidden) return;
+
+  const symbol = state.selected;
+  const last = state.lastBar.get(symbol);
+  if (!last) {
+    // Nothing is drawn, so there is no tail to extend -- and this is exactly
+    // the case that needs the request most, since a symbol with no bars yet
+    // has to be marked as watched before the collector will fetch any.
+    await loadBars({ quiet: true });
+    return;
+  }
+
+  try {
+    // Inclusive of the newest bar we hold: a minute that was still open when we
+    // read it comes back revised, and updateBar() rewrites it in place.
+    const start = new Date(last.time * 1000).toISOString();
+    const payload = await api(
+      `/api/bars/${symbol}?start=${encodeURIComponent(start)}`
+    );
+    if (state.selected !== symbol) return;  // switched while the request was out
+    const bars = state.extended
+      ? payload.bars
+      : payload.bars.filter((bar) => bar.session === 'regular');
+    if (!bars.length) return;
+    for (const bar of bars) chart.updateBar(bar);
+    state.lastBar.set(symbol, bars[bars.length - 1]);
+    renderQuote();
+  } catch {
+    // Transient; the next tick retries. api() already handles an expired
+    // Access session by reloading the page.
+  }
+}
+
+setInterval(() => {
+  refreshTail();
+}, TAIL_REFRESH_MS);
+
+// Coming back to the tab should not mean waiting out the interval to see what
+// was missed while it was hidden.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshTail();
+});
 
 document.querySelectorAll('.range-bar button[data-days]').forEach((button) => {
   button.addEventListener('click', async () => {
