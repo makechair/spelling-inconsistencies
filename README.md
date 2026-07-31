@@ -10,7 +10,7 @@
 - **ブラウザ配信:** SSE（最大1秒間隔）
 - **フロントエンド:** TradingView Lightweight Charts（ビルド不要・同梱）
 - **外部入口・認証:** Cloudflare Tunnel + Cloudflare Access（Google認証）
-- **想定インフラ:** Amazon Lightsail 1GB
+- **想定インフラ:** Amazon Lightsail 2GB（systemd直接起動）
 
 ## 最初に読むもの
 
@@ -125,6 +125,12 @@ Cloudflare Tunnel / Access の設定は [docs/cloudflare-setup.md](docs/cloudfla
 deploy/backup/backup.sh                              # 整合バックアップ + S3
 deploy/backup/restore.sh s3://bucket/... /tmp/x.db   # リストアと検証
 ```
+
+定量分析コーパスは、Tiingo調整済み日足とteitenのNotionニュースを日付／銘柄別Parquetへ
+正規化し、既存バックアップバケットの`corpus/`へ保存する。日足はTue–Sat 12:30 JST、
+Notion同期は毎日13:00 JSTのsystemd oneshotで、常駐サーバやDocker buildは増やさない。
+詳細は[docs/analysis-spec.md](docs/analysis-spec.md)と
+[docs/system-architecture.md](docs/system-architecture.md) §19を参照。
 
 ## 開発
 

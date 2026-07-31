@@ -124,6 +124,7 @@ GROUP BY session;
 # systemd direct runtime（推奨）
 journalctl -u usstocks-collector -n 200 --no-pager
 journalctl -u usstocks-api -u usstocks-deploy.service --since today
+journalctl -u usstocks-news-corpus.service --since today
 
 # Compose互換構成の場合
 docker compose -f deploy/docker-compose.yml logs --tail=200 collector
@@ -131,6 +132,24 @@ docker compose -f deploy/docker-compose.yml logs --tail=200 collector
 
 APIキーやトークンはログフィルタでマスクされる（仕様書4.5）。それでも
 ログを外部へ貼る前には目視すること。
+
+REST fetchが成功しても3回連続で0本だった銘柄は、`symbols.supported=0`とnoteが設定され、
+ウォッチリストに警告が出る。有効barが戻れば自動解除される。通常16:45 ET以降
+（短縮取引日は通常終了45分後）はproviderの既知の配信終了なので、REST pollを行わず
+このカウンタも増えない。
+
+### Notionニュースコーパス
+
+```bash
+systemctl list-timers usstocks-news-corpus.timer
+sudo systemctl start usstocks-news-corpus.service
+journalctl -u usstocks-news-corpus.service -n 100 --no-pager
+```
+
+credentialは`/teiten/notion-token`と`/teiten/notion-db-id`をSSMから復号するが、
+値はログへ出さない。成功時はページ数・partition数・upload数だけを記録する。
+ローカル状態は`/var/lib/usstocks/corpus/news-state.json`、S3は
+`corpus/news/date=YYYY-MM-DD/part.parquet`。2回目の実行で変更がなければupload数0が正常。
 
 ## 3. バックアップとリストア
 

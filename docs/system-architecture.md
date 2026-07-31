@@ -6,8 +6,8 @@
 > スクリプトのコード照合に加え、稼働中インスタンスでの実測（WebSocket無配信、
 > 被覆率、価格差、REST消費）を突き合わせた
 > 注意: Terraform 管理外の手動設定（Cloudflare Tunnel／Access／DNS）は未検証である。
-> 追記: 2026-07-31 に定量分析用の日足コーパス（Phase 1）を実装し、本書19節へ
-> REST予算共有、Parquet、S3、systemd timer の構成を追加した。
+> 追記: 2026-07-31 に定量分析用の日足コーパス（Phase 1）とNotionニュースコーパス
+> （Phase 2）を実装し、本書19節へREST予算共有、差分同期、S3確定フローを追加した。
 
 > **2026-07-29 の前提変更:** 仕様書が構成全体の土台に置いていた「WebSocket で常時
 > 受信し1秒ごとに更新する」が、Tiingo・Alpaca いずれの無料枠でも成立しないことが
@@ -38,7 +38,7 @@
 | CI | GitHub Actions でテスト、lint、Terraform validate/apply |
 | CD | Lightsail 上の systemd timer が `main` を2分間隔で pull |
 | バックアップ | SQLite 整合コピーを gzip 化し、S3 Standard-IA へ日次保管 |
-| 分析コーパス | Tiingo調整済み日足を少数ずつ取得し、銘柄別Parquetとして同じS3へ保管 |
+| 分析コーパス | Tiingo調整済み日足とNotionニュースをParquet化し、同じS3へ保管 |
 
 システム全体は「単一ホスト・単一リージョン・単一SQLite」という意図的に小さな構成で、
 Redis、メッセージブローカー、ロードバランサー、マネージドDBを追加せず、月額コストと
@@ -900,7 +900,7 @@ Terraformにはない。外形監視も `/api/health` が認証必須のため�
 | 障害 | 自動挙動 | データ影響／手動対応 |
 |---|---|---|
 | provider WS切断 | 1〜60秒指数backoff + jitter | 120秒以上のopen区間をREST補完 |
-| **WSは繋がるがデータが来ない** | **検出しない。**health は `connected` のまま | 最新barのtimestampと月間受信bytesで判断（A-6の発見経路） |
+| **WSは繋がるがデータが来ない** | WS単独では`connected`のまま。生存経路のRESTは3回連続空でsymbolを警告 | 最新bar、symbol note、月間受信bytesで判断 |
 | provider REST枠枯渇 | window更新まで待機、timeout後requeue | 補完完了が遅れる。検索はローカル結果へ縮退する |
 | provider が 429 | 要求を再queueし300秒cooldown | gapは次の周回で埋まる |
 | catalog import失敗 | 前回の行が残り検索は動き続ける | journalを確認。新規上場が引けないだけ |
@@ -925,7 +925,9 @@ Terraformにはない。外形監視も `/api/health` が認証必須のため�
 | 最大購読銘柄 | 10 |
 | REST | 50 calls/hour、1,000 calls/day |
 | 前景ポーリング間隔 | 90秒（min_gapに律速され実効は約2分） |
-| 背景sweep間隔 | 1,800秒 |
+| 背景sweep間隔 | 3,600秒 |
+| REST poll終了 | 通常16:45 ET／短縮取引日は通常終了45分後 |
+| 成功空fetch警告 | 3回連続（有効bar取得で自動解除） |
 | 「見られている」判定の猶予 | 300秒 |
 | ブラウザの差分取得 | 30秒（ローカルDB読み出し。枠を消費しない） |
 | catalog refresh | 週次 日曜 08:30 UTC ±60分 |
@@ -939,6 +941,7 @@ Terraformにはない。外形監視も `/api/health` が認証必須のため�
 | SSE poll | 1秒 |
 | SSE heartbeat | 15秒 |
 | SSE最大寿命 | 1時間 |
+| API graceful shutdown | 10秒（systemd stop上限15秒） |
 | 最大history response | 20,000 bars |
 | symbol table poll | 5秒 |
 | systemd memory cap | collector 320MB / API 320MB / tunnel 128MB |
@@ -963,6 +966,7 @@ Terraformにはない。外形監視も `/api/health` が認証必須のため�
 - Cloudflare Access AUD
 - S3 backup uploader access key／secret
 - GitHub deploy private key
+- Notion token／DB ID（host envへ複製せず、SSMの`/teiten`からoneshotだけが読む）
 
 `USSTOCKS_ALLOWED_EMAILS` と `USSTOCKS_SOURCE_PRIORITY` は list 型だが、
 環境変数からは `a@example.com,b@example.com` のカンマ区切りで渡す。pydantic-settings は
@@ -972,13 +976,16 @@ list 型フィールドを環境変数ソースの内部で JSON デコードし
 
 ## 16. 現行実装で確認できた運用上の注意点
 
-### 16.1 「沈黙」は計装できていなかった
+### 16.1 「沈黙」はWSとRESTを分けて扱う
 
 collector は自分が処理する `messageType`（`A`=データ、`E`=エラー）だけを記録する。
 購読確認 `I` とハートビート `H` は痕跡なく捨てられるため、**「接続はしているが
 データが来ない」をログから判定できなかった**。想定したメッセージを前提に設計した
-計装は、沈黙という失敗を報告できない。診断には生フレームを印字するプローブ
+WS計装だけでは、沈黙という失敗を報告できない。診断には生フレームを印字するプローブ
 （`scripts/probe_tiingo_ws.py`、`scripts/probe_alpaca_ws.py`）を書き足す必要があった。
+一方、現在の生存経路であるRESTは、成功しても0本だったfetchを銘柄ごとに数え、
+3回連続で`symbols.supported=0`とnoteを設定する。次に有効barを得た時点で自動解除する。
+ポーリング自体も通常16:45 ETで止めるため、providerの既知の配信終了後を誤警告しない。
 
 同じ理由で、`/api/health` の `connected` は現在の実態を表さない（13.1 参照）。
 
@@ -1032,7 +1039,7 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 ├── src/usstocks/
 │   ├── adapters/          # provider境界、WS/REST正規化（tiingo / alpaca / mock）
 │   ├── collector/         # 集約、再接続、補完、ポーリング、quota、publish
-│   ├── corpus/            # 調整済み日足、Parquet、S3 upload、段階的universe投入
+│   ├── corpus/            # 調整済み日足 + Notion news、Parquet、S3差分upload
 │   ├── api/               # FastAPI、認証、REST、SSE、静的配信
 │   ├── db/                # SQLite接続、repository、live store、migration ×3
 │   ├── calendar_us.py     # 米国市場日／session判定
@@ -1077,6 +1084,7 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 | Lightsail／firewall／snapshot | `infra/terraform/lightsail.tf` |
 | S3／backup IAM | `infra/terraform/backup.tf` |
 | 日足コーパス／共有REST予算 | `corpus/daily.py`, `collector/ratelimit.py`, `data/universe.csv`, `deploy/systemd/usstocks-corpus.*` |
+| Notionニュースコーパス | `corpus/news.py`, `deploy/systemd/usstocks-news-corpus.*`, teitenのNotion DB／SSM |
 | budget／SNS／CloudWatch | `infra/terraform/monitoring.tf` |
 | GitHub OIDC権限 | `infra/terraform/github_oidc.tf` |
 | CI apply | `.github/workflows/deploy.yml` |
@@ -1089,7 +1097,7 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 | DB schema／ownership | `db/migrations/`, `repository.py`, `live_store.py` |
 | SSE／browser reconnect | `api/routes/live.py`, `web/app.js` |
 
-## 19. 定量分析用の日足コーパス
+## 19. 定量分析用の日足＋ニュースコーパス
 
 リアルタイムチャートの10銘柄とは別に、AI・半導体50銘柄のイベントスタディ用データを
 構築する。分足履歴は翌日に再取得できない実例があるため、コーパスはTiingo dailyの
@@ -1132,7 +1140,9 @@ collectorとoneshot timerが別プロセスでも、同じ `market.db.api_usage`
 1銘柄分のParquetは同一ディレクトリの一時ファイルへ書き、完成後だけ置換する。
 ローカル確定後にS3 uploadが失敗した場合、`state.json` の `pending_upload` を残し、
 次回はAPIを再消費せずS3送信だけを再試行する。Lightsail上の既存backup uploaderは
-`daily/*` と `corpus/*` だけへ `PutObject` でき、削除や他prefixの読取りは許可しない。
+`daily/*` と `corpus/*` だけへ `PutObject` でき、削除やS3読取りは許可しない。
+加えてPhase 2に必要なSSMの`/teiten/notion-token`と`/teiten/notion-db-id`だけを
+`GetParameter`できる。LLM API keyを含む他のSSM parameterは読めない。
 S3送信はrevision venvのboto3から行い、SSE-S3（AES256）を明示する。
 
 ### 19.4 ランタイムへの影響
@@ -1151,6 +1161,31 @@ swap使用52KiB、root disk使用5.6GiB / 58GiB（10%）だった。`systemctl s
 AMD 9,211行、INTC 9,211行を2026-07-30まで取得し、3 partitionすべてをS3へ送信した。
 処理時間は約6秒、systemd計測のCPU時間は約1.3秒だった。
 
+### 19.5 Notionニュースの差分同期
+
+```mermaid
+flowchart LR
+    NT["usstocks-news-corpus.timer<br/>毎日04:00 UTC／13:00 JST"] --> SSM["SSM GetParameter<br/>notion-token + notion-db-idのみ"]
+    SSM --> NQ["Notion query<br/>page_size=100で全件pagination"]
+    NQ --> VALIDATE["schema検証<br/>ticker / enum / confidence"]
+    VALIDATE --> NORMALIZE["headline / summary_ja / my_take<br/>tickers / event_type / sentiment<br/>source / URLs / timestamps"]
+    NORMALIZE --> GROUP["event_dateごとにgroup"]
+    GROUP --> HASH{"Parquet SHA-256<br/>前回と変化?"}
+    HASH -->|No| SKIP["uploadなし"]
+    HASH -->|Yes| PUT["S3 corpus/news/<br/>date=YYYY-MM-DD/part.parquet"]
+    PUT --> STATE["news-state.jsonを日ごとに確定"]
+```
+
+teitenがNotionの唯一のwriterであり、本アプリはread-only mirrorである。数百ページ規模では
+全件queryは数リクエストなので、後編集やアーカイブも反映できる全論理同期を選ぶ。
+Parquetの内容ハッシュが同じ日付はPUTしない。全ページがアーカイブされた日だけは、
+同じschemaの0行Parquetを上書きし、`DeleteObject`権限なしで古いイベントを無効化する。
+
+`XPost`の固定区切りから事実要約`summary_ja`とAI下書き`my_take`を分離する。
+未知のenumや範囲外confidenceは黙ってnullへ落とさず同期全体を失敗させるため、
+teiten側のschema変更を分析結果へ混入する前に検知できる。oneshotは`MemoryMax=384M`、
+毎日13:00 JST実行で、常駐メモリとTiingo REST枠を消費しない。
+
 ## 20. まとめ
 
 このリポジトリは、小規模な個人用途に合わせて、外向き接続中心、二重認証、
@@ -1164,5 +1199,5 @@ AMD 9,211行、INTC 9,211行を2026-07-30まで取得し、3 partitionすべて�
 秒単位のローソクは断念し、出来高の絶対値は他の板と比較できないものになった。
 
 残る主要な運用課題は、CI成功とアプリrolloutの結合、app-level障害のSNS通知、
-Composeから移行する一度だけのDB handoff、そして
-**「繋がっているがデータが来ない」を検出できる health 判定**である。
+WS有料化時にheartbeatとmarket-data沈黙を区別するhealth判定である。現在の無料枠で
+生存経路になっているRESTについては、連続空fetchのsymbol警告を実装済みである。

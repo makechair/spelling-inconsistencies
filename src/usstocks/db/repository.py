@@ -279,7 +279,7 @@ class Repository:
     def set_supported(self, symbol: str, supported: bool, note: str | None = None) -> None:
         with transaction(self.connection) as conn:
             conn.execute(
-                "UPDATE symbols SET supported = ?, note = COALESCE(?, note),"
+                "UPDATE symbols SET supported = ?, note = ?,"
                 " updated_at = ? WHERE symbol = ?",
                 (int(supported), note, datetime.now(tz=UTC).isoformat(), symbol.upper()),
             )

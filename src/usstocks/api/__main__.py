@@ -17,9 +17,10 @@ def main() -> int:
         port=settings.api_port,
         log_level=settings.log_level.lower(),
         # One worker: SSE clients and SQLite readers gain nothing from more,
-        # and the instance has 1 GB of RAM (spec 12, "1GB memory pressure").
+        # and the instance has 2 GB of RAM.
         workers=1,
         timeout_keep_alive=75,
+        timeout_graceful_shutdown=settings.api_graceful_shutdown_seconds,
     )
     return 0
 

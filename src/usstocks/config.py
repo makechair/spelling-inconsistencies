@@ -125,6 +125,15 @@ class Settings(BaseSettings):
     background_poll_seconds: float = 3600.0
     # How long after a request a symbol still counts as being watched.
     viewer_idle_seconds: float = 300.0
+    # Tiingo IEX stops adding bars at about 16:45 ET. Continuing until the
+    # exchange's 20:00 extended-hours boundary only burns the free REST budget.
+    # Express this relative to the regular close so early-close days stop at
+    # 13:45 ET rather than using a hard-coded wall-clock time.
+    rest_poll_after_close_minutes: int = Field(default=45, ge=0, le=240)
+    # A successful request with no bars is not an adapter failure, but several
+    # in a row during the polling window is actionable. Surface it on the
+    # symbol instead of leaving a silently frozen chart.
+    empty_fetch_warning_threshold: int = Field(default=3, ge=1, le=20)
     # Spec 10.2 offers three options for second-level data with no decision.
     # Default: do not store (option 1). Set >0 to retain that many days.
     tick_retention_days: int = 0
@@ -139,6 +148,10 @@ class Settings(BaseSettings):
     # vanished without a detectable disconnect cannot pin a database
     # connection indefinitely.
     sse_max_stream_seconds: float = 3600.0
+    # Bound deploy downtime when long-lived SSE clients are connected. Uvicorn
+    # cancels the remaining streams after this grace period; EventSource
+    # reconnects automatically to the restarted process.
+    api_graceful_shutdown_seconds: int = Field(default=10, ge=1, le=60)
     max_bars_per_request: int = 20_000
     web_dir: Path = REPO_ROOT / "web"
 
@@ -154,6 +167,19 @@ class Settings(BaseSettings):
     corpus_max_new_symbols_per_run: int = Field(default=3, ge=0, le=50)
     corpus_refresh_hours: float = Field(default=20.0, gt=0)
     corpus_overlap_days: int = Field(default=14, ge=1, le=90)
+
+    # ------------------------------------------------------------ news corpus
+    # Direct values are useful for local development. Production leaves these
+    # empty and resolves the two SecureString parameters from the teiten
+    # pipeline's SSM prefix only when the news oneshot runs.
+    notion_token: str | None = None
+    notion_db_id: str | None = None
+    notion_ssm_prefix: str = "/teiten"
+    notion_api_base: str = "https://api.notion.com/v1"
+    notion_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    # Defaults to <corpus_s3_root>/news.
+    news_s3_uri: str | None = None
+    news_max_pages: int = Field(default=10_000, ge=1, le=100_000)
 
     # ------------------------------------------------------------------- auth
     auth_mode: AuthMode = "cloudflare_access"

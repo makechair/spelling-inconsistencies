@@ -167,6 +167,10 @@ def test_supported_flag(repo: Repository):
     info = repo.get_symbol("XYZQ")
     assert info.supported is False
     assert info.note == "no intraday data"
+    repo.set_supported("XYZQ", True)
+    info = repo.get_symbol("XYZQ")
+    assert info.supported is True
+    assert info.note is None
 
 
 def test_iter_bars_streams_multiple_symbols(repo: Repository):

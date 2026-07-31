@@ -465,7 +465,7 @@
         <a href="#backup">バックアップ</a>
         <a href="#operations">監視／障害対応</a>
         <a href="#findings">実装上の注意点</a>
-        <a href="#corpus">日足分析コーパス</a>
+        <a href="#corpus">分析コーパス</a>
         <a href="#map">コードマップ</a>
       </nav>
     </aside>
@@ -482,7 +482,7 @@
           RESTの50回/時をどう配分するかが構成全体を決めている。
         </p>
         <div class="meta">
-          <span class="pill">2026-07-31 REST polling + daily corpus</span>
+          <span class="pill">2026-07-31 REST polling + daily/news corpus</span>
           <span class="pill">systemd direct runtime</span>
           <span class="pill">Python 3.11 / FastAPI</span>
           <span class="pill">SQLite WAL</span>
@@ -544,7 +544,7 @@
               <tr><td>公開</td><td>Cloudflare Tunnel + Access</td><td>origin web portをインターネットへ出さない</td></tr>
               <tr><td>IaC</td><td>Terraform</td><td>Lightsailを含むAWS footprintを一元管理</td></tr>
               <tr><td>CD</td><td>ホスト側pull agent</td><td>GitHub runner向けにSSHを全開放しない</td></tr>
-              <tr><td>分析コーパス</td><td>Tiingo調整済み日足 → Parquet → S3</td><td>50銘柄を段階投入し、イベントスタディの正本を作る</td></tr>
+              <tr><td>分析コーパス</td><td>Tiingo調整済み日足 + Notionニュース → Parquet → S3</td><td>価格とイベントを同じDuckDBクエリで突き合わせる</td></tr>
             </tbody>
           </table>
         </div>
@@ -1002,6 +1002,7 @@
               <tr><td><code>usstocks-catalog.timer</code></td><td>週次 日曜 08:30 UTC<br><code>Persistent=true</code> / <code>RandomizedDelaySec=3600</code></td><td>ticker catalogのzipを取得して<code>symbol_catalog</code>を再構築。米国市場が閉じている時間帯を選び、collectorの書込ロックと競合させない</td></tr>
               <tr><td><code>usstocks-backup.timer</code></td><td>日次 07:10 UTC</td><td>整合コピー → 検証 → gzip → S3</td></tr>
               <tr><td><code>usstocks-corpus.timer</code></td><td>Tue–Sat 03:30 UTC<br>12:30 JST</td><td>新規最大3・合計最大10銘柄の調整済み日足をParquet化してS3へ送る</td></tr>
+              <tr><td><code>usstocks-news-corpus.timer</code></td><td>毎日 04:00 UTC<br>13:00 JST</td><td>Notion全ページを論理同期し、変更日partitionだけS3へ送る</td></tr>
             </tbody>
           </table>
         </div>
@@ -1353,7 +1354,7 @@
             <thead><tr><th>Signal / failure</th><th>自動挙動</th><th>手動判断</th></tr></thead>
             <tbody>
               <tr><td>WS切断</td><td>1〜60秒backoff + jitter、必要ならREST補完</td><td>長時間ならprovider切替</td></tr>
-              <tr><td>WSは繋がるがデータが来ない</td><td><strong>検出しない。</strong>healthは<code>connected</code>のまま</td><td>最新barのtimestampと月間受信bytesで判断（A-6の発見経路）</td></tr>
+              <tr><td>WSは繋がるがデータが来ない</td><td>WS単独では<code>connected</code>のまま。生存経路のRESTは3回連続空でsymbol警告</td><td>最新bar、symbol note、月間受信bytesを確認</td></tr>
               <tr><td>REST枠の枯渇</td><td>要求を再queue。検索はローカル結果へ縮退</td><td><code>/api/health</code>の<code>rest_calls_hour</code>を確認</td></tr>
               <tr><td>catalog import失敗</td><td>前回の行が残り検索は動き続ける。次週再試行</td><td>journalを確認。新規上場が引けないだけ</td></tr>
               <tr><td>API crash</td><td>systemd再起動、EventSource再接続</td><td>繰返す場合はjournal確認</td></tr>
@@ -1385,12 +1386,13 @@
         </p>
         <div class="grid">
           <article class="card">
-            <h3>沈黙は計装できていなかった</h3>
+            <h3>沈黙はWSとRESTを分ける</h3>
             <p>
               collectorは自分が処理する<code>messageType</code>（<code>A</code>／<code>E</code>）
               しか記録しない。購読確認<code>I</code>とheartbeat <code>H</code>は痕跡なく捨てられるため、
-              <strong>「接続はしているがデータが来ない」をログから判定できなかった</strong>。
-              生フレームを印字するprobe（<code>scripts/probe_*_ws.py</code>）が必要だった。
+              <strong>WSだけでは「接続はしているがデータが来ない」を判定できない</strong>。
+              現在の生存経路であるRESTは3回連続空fetchでsymbol警告を出し、
+              有効barの復帰時に自動解除する。既知の配信終了後は16:45 ETでpoll自体を止める。
             </p>
           </article>
           <article class="card">
@@ -1456,11 +1458,11 @@
       </section>
 
       <section id="corpus">
-        <h2>14. 日足分析コーパス</h2>
+        <h2>14. 日足＋ニュース分析コーパス</h2>
         <p class="section-intro">
-          ニュースと株価反応を突き合わせるため、AI・半導体50銘柄の調整済み日足を
-          銘柄別ParquetとしてS3へ蓄積する。分足履歴は翌日に同じ内容を再取得できない
-          実例があるため、長期分析の正本には使わない。
+          ニュースと株価反応を突き合わせるため、AI・半導体50銘柄の調整済み日足と
+          teitenのNotionイベントをParquetとしてS3へ蓄積する。分足履歴は翌日に
+          同じ内容を再取得できない実例があるため、長期分析の正本には使わない。
         </p>
 
         <div class="steps" aria-label="日足コーパス取得フロー">
@@ -1487,7 +1489,7 @@
               <li><code>/var/lib/usstocks/corpus</code>にpartitionと<code>state.json</code>。</li>
               <li>一時ファイル完成後だけ<code>os.replace</code>して正本化。</li>
               <li>S3失敗時は<code>pending_upload</code>を残し、次回はAPIを使わず再送。</li>
-              <li>host IAMは<code>daily/*</code>と<code>corpus/*</code>へのPutObjectだけ。</li>
+              <li>host IAMはS3 PutObjectとNotion用SSM 2項目のGetParameterだけ。</li>
             </ol>
           </article>
         </div>
@@ -1507,10 +1509,31 @@
             <thead><tr><th>S3 key</th><th>内容</th><th>更新単位</th></tr></thead>
             <tbody>
               <tr><td><code>corpus/daily/symbol=NVDA/part.parquet</code></td><td>raw OHLCV + adjusted OHLCV + split/dividend</td><td>1銘柄ずつ置換</td></tr>
+              <tr><td><code>corpus/news/date=2026-07-30/part.parquet</code></td><td>summary、tickers、event type、sentiment、confidence、出典</td><td>内容hashが変わった日だけ置換</td></tr>
               <tr><td><code>corpus/universe/sectors.parquet</code></td><td>symbol → subsector</td><td>CSV digest変更時</td></tr>
               <tr><td>ローカルのみ <code>state.json</code></td><td>最終成功、最終bar、upload再送状態</td><td>各partition確定時</td></tr>
+              <tr><td>ローカルのみ <code>news-state.json</code></td><td>日別ParquetのSHA-256、ページ件数</td><td>変更partition確定時</td></tr>
             </tbody>
           </table>
+        </div>
+
+        <h3>Notion → S3（Phase 2）</h3>
+        <div class="steps" aria-label="Notionニュースコーパス同期フロー">
+          <div class="step"><span class="step-num">1</span><strong>最小credential</strong><span>SSMからNotion token／DB IDの2項目だけ取得。</span></div>
+          <div class="step"><span class="step-num">2</span><strong>全論理同期</strong><span><code>page_size=100</code>で全ページを取得し、編集・archiveも反映。</span></div>
+          <div class="step"><span class="step-num">3</span><strong>schema検証</strong><span>ticker、enum、confidenceのdriftを検出して停止。</span></div>
+          <div class="step"><span class="step-num">4</span><strong>日付partition</strong><span>summaryと見立てを分離し、イベント日ごとにParquet化。</span></div>
+          <div class="step"><span class="step-num">5</span><strong>差分PUT</strong><span>SHA-256が変わった日だけ<code>corpus/news/...</code>を置換。</span></div>
+        </div>
+
+        <div class="callout">
+          <strong>常駐サービスを増やさない</strong>
+          <p>
+            Notion同期は毎日13:00 JSTのoneshotで、<code>MemoryMax=384M</code>。
+            現在の数百ページならNotion APIは数リクエストで、Tiingo REST枠も消費しない。
+            全イベントがarchiveされた日は0行Parquetを上書きするため、
+            S3の<code>DeleteObject</code>権限も不要である。
+          </p>
         </div>
 
         <div class="callout">
@@ -1529,7 +1552,7 @@
 ├── src/usstocks/
 │   ├── adapters/          provider REST/WS → domain model（tiingo / alpaca / mock）
 │   ├── collector/         aggregation / reconnect / backfill / poll / quota
-│   ├── corpus/            adjusted daily / Parquet / S3 / staged universe
+│   ├── corpus/            adjusted daily + Notion news / Parquet / S3
 │   ├── api/               FastAPI / auth / REST / SSE
 │   ├── db/                schema / repository / live store / migration ×3
 │   ├── calendar_us.py     market calendar / session
@@ -1567,6 +1590,7 @@
               <tr><td>Compose compatibility</td><td><code>deploy/docker-compose.yml</code>, <code>deploy/Dockerfile</code></td></tr>
               <tr><td>Lightsail / firewall / snapshot</td><td><code>infra/terraform/lightsail.tf</code></td></tr>
               <tr><td>S3 / backup IAM</td><td><code>infra/terraform/backup.tf</code></td></tr>
+              <tr><td>Notion news corpus</td><td><code>corpus/news.py</code>, <code>usstocks-news-corpus.*</code>, teiten SSM</td></tr>
               <tr><td>Monitoring / cost</td><td><code>infra/terraform/monitoring.tf</code></td></tr>
               <tr><td>CI identity / apply</td><td><code>github_oidc.tf</code>, <code>.github/workflows/deploy.yml</code></td></tr>
               <tr><td>Pull CD</td><td><code>deploy/agent/deploy-agent.sh</code> + systemd units</td></tr>

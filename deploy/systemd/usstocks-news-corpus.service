@@ -1,0 +1,28 @@
+[Unit]
+Description=Mirror teiten Notion events to the S3 analysis corpus
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=usstocks
+Group=usstocks
+WorkingDirectory=/var/lib/usstocks
+EnvironmentFile=/etc/usstocks/usstocks.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/env USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus /opt/usstocks/current/venv/bin/python -m usstocks.corpus.news
+
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/usstocks
+ProtectHome=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0027
+
+MemoryMax=384M
+TimeoutStartSec=900

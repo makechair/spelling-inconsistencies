@@ -67,6 +67,7 @@ class BackfillCoordinator:
         max_lookback_days: int = 30,
         closed_overrides: frozenset = frozenset(),
         rate_limit_cooldown_seconds: float = 300.0,
+        empty_fetch_warning_threshold: int = 3,
     ) -> None:
         self._adapter = adapter
         self._repo = repository
@@ -78,6 +79,8 @@ class BackfillCoordinator:
         self._lock = asyncio.Lock()
         self._cooldown = timedelta(seconds=rate_limit_cooldown_seconds)
         self._retry_after: datetime | None = None
+        self._empty_fetch_warning_threshold = empty_fetch_warning_threshold
+        self._consecutive_empty_fetches: dict[str, int] = {}
 
     async def request(self, symbol: str, start: datetime, end: datetime) -> None:
         """Queue a gap. Duplicate symbols merge instead of stacking."""
@@ -157,8 +160,9 @@ class BackfillCoordinator:
             return BackfillResult(request.symbol, 0, "error")
 
         written = self._repo.upsert_bars(bars)
-        self._repo.set_supported(request.symbol, True)
         if bars:
+            self._consecutive_empty_fetches.pop(request.symbol, None)
+            self._repo.set_supported(request.symbol, True)
             self._repo.record_state(
                 request.symbol,
                 self._adapter.name,
@@ -166,6 +170,15 @@ class BackfillCoordinator:
                 last_backfill=datetime.now(tz=UTC),
             )
         else:
+            count = self._consecutive_empty_fetches.get(request.symbol, 0) + 1
+            self._consecutive_empty_fetches[request.symbol] = count
+            if count >= self._empty_fetch_warning_threshold:
+                note = (
+                    f"{self._adapter.name} returned no bars for {count} "
+                    "consecutive successful fetches"
+                )
+                self._repo.set_supported(request.symbol, False, note=note)
+                log.warning("%s: %s", request.symbol, note)
             self._repo.record_state(
                 request.symbol, self._adapter.name, last_backfill=datetime.now(tz=UTC)
             )

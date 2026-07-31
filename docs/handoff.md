@@ -38,7 +38,7 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
 ## 2. 今すぐ知っておくべき直近の変更（2026-07-31セッション）
 
 当初のClaudeセッションは設計・意思決定のみだったが、Codex引き継ぎ後の
-2026-07-31セッションで Phase 0 と Phase 1 のローカル実装まで進んだ。実施したのは:
+2026-07-31セッションで Phase 0〜2 の実装まで進んだ。実施したのは:
 
 1. `docs/analysis-spec.md` を新規作成 — Phase 0〜4の作業計画、REST枠の配分、
    50銘柄ユニバース（`data/universe.csv`）、S3ストレージ設計
@@ -65,6 +65,15 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
    - 初回はNVDA 6,922行、AMD 9,211行、INTC 9,211行をS3へ送信し3/3成功
    - 本番envの誤記 `AWS_DEFAULT_REGION=p-northeast-1` は
      `ap-northeast-1` へ修正済み
+6. Phase 2を実装:
+   - `corpus/news.py`でNotion全ページを日付別Parquetへ正規化
+   - SHA-256が変わったpartitionだけS3へPUTし、アーカイブ日は空partitionで置換
+   - SSMに必要な2パラメータが存在することを値の復号なしで確認
+   - IAMはこの2項目の`GetParameter`だけを既存host userへ追加
+7. 本体側の残件を実装:
+   - REST pollingを通常16:45 ETで停止（短縮取引日対応）
+   - 3回連続の成功空fetchをsymbol警告として表示し、復旧時に自動解除
+   - SSE接続中のAPI停止を10秒で打ち切り、deploy停止時間を短縮
 
 コミット履歴（このセッション分、新しい順）:
 
@@ -102,12 +111,9 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
 
 ### 4-3. Phase 2（Notion取り込み + 統合）
 
-teiten 側の実装は完了済みなので、**このリポジトリ側で Notion API から
-`Tickers`/`EventType`/`Sentiment`/`Confidence` を含む既存フィールドを読み出す
-スクリプトを新規実装する**必要がある。Notion の DB ID・トークンは teiten 側の
-SSM (`/teiten/notion-token`, `/teiten/notion-db-id`) にあるはずだが、**このリポジトリ
-からは未確認**。teiten 側との接続テストがまだ行われていない（`docs/analysis-spec.md`
-5節「残課題」参照）。
+ローカル実装と153テストは完了。Notionの認証情報2項目がSSMに存在することも確認済み。
+残るのはLightsailで`usstocks-news-corpus.service`を初回実行し、ページ件数、
+日付partition、S3 objectを確認する本番接続テストだけ。
 
 ### 4-4. 本体側の未処理TODO
 
@@ -152,9 +158,9 @@ make install && make dev   # http://127.0.0.1:8000
 
 ## 7. 次に着手するならこの順で
 
-1. **次回timerで新規3銘柄追加と共有REST予算を確認**（4xxなら増加を止める）
-2. **teiten側とのNotion API接続確認**（§4-3）
-3. 本体側の未処理TODO（§4-4）— コーパス作業と並行可能
+1. **Phase 2の本番接続確認**（§4-3）
+2. **次回timerで新規3銘柄追加と共有REST予算を確認**（4xxなら増加を止める）
+3. Alpaca APIキーを管理画面でローテーション
 
 新しい担当者・エージェントが作業を始める際は、まず `docs/analysis-spec.md` の
 「再調査してはいけない確定事項」を読み、同じ検証をやり直さないこと。作業後は

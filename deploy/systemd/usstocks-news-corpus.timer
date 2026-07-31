@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh the Notion-derived news corpus daily
+
+[Timer]
+# 04:00 UTC = 13:00 JST, after teiten's 12:00 JST collection and outside the
+# US market window. The source query is a few paginated Notion requests and
+# uploads only changed date partitions.
+OnCalendar=*-*-* 04:00:00 UTC
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

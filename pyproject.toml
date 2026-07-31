@@ -33,6 +33,7 @@ usstocks-collector = "usstocks.collector.__main__:main"
 usstocks-api = "usstocks.api.__main__:main"
 usstocks-migrate = "usstocks.db.migrate:main"
 usstocks-corpus-daily = "usstocks.corpus.daily:main"
+usstocks-corpus-news = "usstocks.corpus.news:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

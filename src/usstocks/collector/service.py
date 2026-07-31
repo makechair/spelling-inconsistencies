@@ -21,7 +21,7 @@ import random
 from datetime import UTC, datetime, timedelta
 
 from ..adapters.base import MarketDataAdapter
-from ..calendar_us import classify, has_open_window, reference_close_boundary
+from ..calendar_us import classify, is_rest_poll_window, reference_close_boundary
 from ..config import Settings
 from ..db.live_store import LiveStore
 from ..db.repository import Repository
@@ -72,6 +72,7 @@ class CollectorService:
             self._budget,
             min_gap_seconds=settings.backfill_min_gap_seconds,
             closed_overrides=closed,
+            empty_fetch_warning_threshold=settings.empty_fetch_warning_threshold,
         )
 
         self._symbols: list[str] = []
@@ -390,8 +391,13 @@ class CollectorService:
             # Nothing to fetch for a market that is shut; the calendar check is
             # free and the allowance is not.
             now = datetime.now(tz=UTC)
-            open_window = has_open_window(
-                now - timedelta(minutes=2), now, closed_overrides=self._closed_overrides
+            open_window = is_rest_poll_window(
+                now,
+                after_regular_close_minutes=(
+                    self._settings.rest_poll_after_close_minutes
+                ),
+                closed_overrides=self._closed_overrides,
+                early_overrides=self._early_overrides,
             )
             if not open_window:
                 continue

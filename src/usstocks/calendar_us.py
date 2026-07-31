@@ -174,6 +174,36 @@ def classify(
     return Session.CLOSED
 
 
+def is_rest_poll_window(
+    moment: datetime,
+    *,
+    after_regular_close_minutes: int = 45,
+    closed_overrides: frozenset[date] = frozenset(),
+    early_overrides: frozenset[date] = frozenset(),
+) -> bool:
+    """Whether the REST live-poll loop should spend an allowance token.
+
+    The exchange's extended session lasts until 20:00 ET, but the free Tiingo
+    IEX feed observed by this application stops adding bars around 16:45 ET.
+    The end is relative to the day's regular close so shortened sessions are
+    handled without another calendar table.
+    """
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    eastern = moment.astimezone(EASTERN)
+    bounds = session_bounds(
+        eastern.date(),
+        closed_overrides=closed_overrides,
+        early_overrides=early_overrides,
+    )
+    if bounds is None:
+        return False
+    poll_start = datetime.combine(eastern.date(), PRE_OPEN, tzinfo=EASTERN)
+    regular_close = datetime.combine(eastern.date(), bounds[Session.REGULAR][1], tzinfo=EASTERN)
+    poll_end = regular_close + timedelta(minutes=after_regular_close_minutes)
+    return poll_start <= eastern < poll_end
+
+
 def reference_close_boundary(
     moment: datetime,
     *,

@@ -17,6 +17,9 @@ ExecStart=/usr/bin/env USSTOCKS_DB_PATH=/var/lib/usstocks/market.db USSTOCKS_LIV
 
 Restart=always
 RestartSec=5
+# Uvicorn waits at most 10 seconds for SSE clients; leave systemd a small
+# margin, then force termination rather than making every deploy wait 90s.
+TimeoutStopSec=15
 
 MemoryMax=320M
 OOMPolicy=stop

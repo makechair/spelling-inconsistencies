@@ -172,6 +172,32 @@ async def test_state_is_recorded_after_backfill(repo: Repository, bars: int):
     assert state["last_backfill_utc"] is not None
 
 
+async def test_consecutive_empty_fetches_set_and_success_clears_warning(
+    repo: Repository,
+):
+    adapter = RecordingAdapter(bars_per_call=0)
+    coordinator = make_coordinator(repo, adapter, empty_fetch_warning_threshold=3)
+    repo.upsert_symbol(SymbolInfo(symbol="AAPL", is_watched=True))
+
+    for _ in range(2):
+        await coordinator.request("AAPL", NOW - timedelta(minutes=10), NOW)
+        await coordinator.drain()
+    assert repo.get_symbol("AAPL").supported is None
+
+    await coordinator.request("AAPL", NOW - timedelta(minutes=10), NOW)
+    await coordinator.drain()
+    warned = repo.get_symbol("AAPL")
+    assert warned.supported is False
+    assert "3 consecutive successful fetches" in (warned.note or "")
+
+    adapter._bars_per_call = 1
+    await coordinator.request("AAPL", NOW - timedelta(minutes=10), NOW)
+    await coordinator.drain()
+    recovered = repo.get_symbol("AAPL")
+    assert recovered.supported is True
+    assert recovered.note is None
+
+
 async def test_provider_rate_limit_requeues_and_backs_off(repo: Repository):
     """A 429 is not the same as a permanent failure.
 

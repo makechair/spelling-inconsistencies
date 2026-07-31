@@ -1,6 +1,7 @@
 # Off-instance backup storage (spec 4.4, 10.4).
 
 data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
 
 resource "aws_s3_bucket" "backup" {
   bucket = "${var.project_name}-backup-${var.environment}-${data.aws_caller_identity.current.account_id}"
@@ -143,10 +144,26 @@ data "aws_iam_policy_document" "backup_uploader" {
       values   = ["daily/*", "corpus/*"]
     }
   }
+
+  # The news-corpus oneshot reads the existing teiten integration credentials
+  # without copying them into another env file or secret store. No wildcard:
+  # this host cannot read the LLM key or any unrelated SSM parameter.
+  statement {
+    sid       = "ReadNotionCorpusCredentials"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/teiten/notion-token",
+      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/teiten/notion-db-id",
+    ]
+  }
 }
 
 resource "aws_iam_user_policy" "backup_uploader" {
-  name   = "write-backups-and-corpus-only"
+  # Keep the historical name so Terraform and the already-provisioned inline
+  # policy agree. The policy body below is the authority; the legacy name is
+  # intentionally narrower than its current responsibilities.
+  name   = "write-daily-backups-only"
   user   = aws_iam_user.backup_uploader.name
   policy = data.aws_iam_policy_document.backup_uploader.json
 }
