@@ -148,6 +148,16 @@ function median(values) {
     : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+function quantile(values, probability) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const position = (sorted.length - 1) * probability;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return sorted[lower];
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+}
+
 function focusStatistics(studies, horizon) {
   const raw = studies.filter((study) => study[`raw_return_${horizon}d`] != null);
   const dateValues = new Map(
@@ -159,6 +169,7 @@ function focusStatistics(studies, horizon) {
     (study) => study[`exploratory_relative_return_${horizon}d`] != null,
   );
   const peerWeight = peer.reduce((total, study) => total + weight(study), 0);
+  const reactionReturns = [...dateValues.values()];
   return {
     events: raw.length,
     dateEvents: dateValues.size,
@@ -170,7 +181,11 @@ function focusStatistics(studies, horizon) {
           0,
         ) / effective
       : null,
-    median: median([...dateValues.values()]),
+    reactionReturns,
+    median: median(reactionReturns),
+    reactionWinRate: reactionReturns.length
+      ? reactionReturns.filter((value) => value > 0).length / reactionReturns.length
+      : null,
     winRate: effective
       ? raw.reduce(
           (total, study) =>
@@ -258,15 +273,14 @@ function renderHorizonChart(studies) {
   const points = HORIZONS.map((horizon) => ({
     horizon,
     ...focusStatistics(studies, horizon),
+  })).map((point) => ({
+    ...point,
+    minimum: point.reactionReturns.length ? Math.min(...point.reactionReturns) : null,
+    q1: quantile(point.reactionReturns, 0.25),
+    q3: quantile(point.reactionReturns, 0.75),
+    maximum: point.reactionReturns.length ? Math.max(...point.reactionReturns) : null,
   }));
-  const series = [
-    { label: "加重平均", key: "mean", className: "report-chart-mean", color: "#38bdf8" },
-    { label: "反応日中央値", key: "median", className: "report-chart-median", color: "#f8c36a" },
-    { label: "peer差", key: "peerMean", className: "report-chart-peer", color: "#a78bfa" },
-  ];
-  const values = series.flatMap((item) =>
-    points.map((point) => point[item.key]).filter((value) => value != null),
-  );
+  const values = points.flatMap((point) => point.reactionReturns);
   if (!values.length) return;
   const geometry = chartGeometry(values);
   drawChartGrid(svg, geometry);
@@ -275,65 +289,81 @@ function renderHorizonChart(studies) {
     return geometry.left + (index / (HORIZONS.length - 1)) * geometry.width;
   };
 
-  series.forEach((item, index) => {
-    const available = points.filter((point) => point[item.key] != null);
-    if (!available.length) return;
-    available.forEach((point) => {
-      const pointX = x(point.horizon) + (index - 1) * 9;
-      const pointY = geometry.y(point[item.key]);
-      svg.append(svgNode("line", {
-        x1: pointX,
-        y1: geometry.y(0),
-        x2: pointX,
-        y2: pointY,
-        class: item.className,
-        opacity: 0.55,
-      }));
-      const circle = svgNode("circle", {
-        cx: pointX,
-        cy: pointY,
-        r: 5,
-        fill: item.color,
-        class: "report-chart-point",
-      });
-      circle.append(svgNode("title", {}, `${item.label} ${percent(point[item.key], true)}`));
-      svg.append(circle);
-      if (item.key === "median") {
-        svg.append(svgNode(
-          "text",
-          {
-            x: pointX,
-            y: pointY + (point[item.key] >= 0 ? -10 : 17),
-            "text-anchor": "middle",
-            class: "report-chart-value",
-          },
-          percent(point[item.key], true),
-        ));
-      }
+  points.filter((point) => point.dateEvents).forEach((point) => {
+    const pointX = x(point.horizon);
+    const opacity = point.dateEvents < 5 ? 0.42 : 1;
+    const rangeTitle = `${horizonLabel(point.horizon)} / 中央値${percent(point.median, true)} / ` +
+      `中央50% ${percent(point.q1, true)}〜${percent(point.q3, true)} / n=${point.dateEvents}`;
+    const range = svgNode("line", {
+      x1: pointX,
+      y1: geometry.y(point.maximum),
+      x2: pointX,
+      y2: geometry.y(point.minimum),
+      class: "report-chart-range",
+      opacity,
     });
-    const legendX = geometry.left + index * 142;
-    svg.append(
-      svgNode("circle", {
-        cx: legendX + 5,
-        cy: 18,
-        r: 5,
-        fill: item.color,
-      }),
-      svgNode("text", { x: legendX + 16, y: 22, class: "report-chart-label" }, item.label),
-    );
-  });
-
-  HORIZONS.forEach((horizon) => {
-    svg.append(svgNode(
+    range.append(svgNode("title", {}, rangeTitle));
+    const iqr = svgNode("line", {
+      x1: pointX,
+      y1: geometry.y(point.q3),
+      x2: pointX,
+      y2: geometry.y(point.q1),
+      class: "report-chart-iqr",
+      opacity,
+    });
+    iqr.append(svgNode("title", {}, rangeTitle));
+    const medianPoint = svgNode("circle", {
+      cx: pointX,
+      cy: geometry.y(point.median),
+      r: 6,
+      class: "report-chart-median-point",
+      opacity,
+    });
+    medianPoint.append(svgNode("title", {}, rangeTitle));
+    svg.append(range, iqr, medianPoint, svgNode(
       "text",
       {
+        x: pointX,
+        y: geometry.y(point.median) + (point.median >= 0 ? -11 : 19),
+        "text-anchor": "middle",
+        class: "report-chart-value",
+        opacity,
+      },
+      percent(point.median, true),
+    ));
+  });
+
+  svg.append(
+    svgNode("line", { x1: geometry.left, y1: 18, x2: geometry.left + 22, y2: 18, class: "report-chart-range" }),
+    svgNode("text", { x: geometry.left + 28, y: 22, class: "report-chart-label" }, "観測全範囲"),
+    svgNode("line", { x1: geometry.left + 140, y1: 18, x2: geometry.left + 162, y2: 18, class: "report-chart-iqr" }),
+    svgNode("text", { x: geometry.left + 170, y: 22, class: "report-chart-label" }, "中央50%"),
+    svgNode("circle", { cx: geometry.left + 276, cy: 18, r: 6, class: "report-chart-median-point" }),
+    svgNode("text", { x: geometry.left + 288, y: 22, class: "report-chart-label" }, "中央値"),
+  );
+
+  HORIZONS.forEach((horizon) => {
+    const horizonPoint = points.find((point) => point.horizon === horizon);
+    const sampleLabel = horizonPoint?.dateEvents < 5
+      ? `参考 n=${horizonPoint?.dateEvents || 0}`
+      : `n=${horizonPoint?.dateEvents || 0} / 上昇${percent(horizonPoint?.reactionWinRate)}`;
+    svg.append(
+      svgNode("text",
+      {
         x: x(horizon),
-        y: geometry.top + geometry.height + 25,
+        y: geometry.top + geometry.height + 20,
         "text-anchor": "middle",
         class: "report-chart-label",
       },
       horizon === 0 ? "反応日" : `+${horizon}日`,
-    ));
+      ),
+      svgNode("text", {
+        x: x(horizon),
+        y: geometry.top + geometry.height + 38,
+        "text-anchor": "middle",
+        class: "report-chart-sample",
+      }, sampleLabel),
+    );
   });
 
   const day0 = points.find((point) => point.horizon === 0);
@@ -347,11 +377,18 @@ function renderHorizonChart(studies) {
   const movement = day0?.median != null && day5?.median != null
     ? `反応日${percent(day0.median, true)}から5日後${percent(day5.median, true)}へ変化しました。`
     : "";
+  const consistency = day5?.q1 < 0 && day5?.q3 < 0
+    ? "5日後の中央50%もすべてマイナスで、下落傾向に一定の再現性があります。"
+    : day5?.q1 < 0 && day5?.q3 > 0
+      ? "5日後の中央50%が0%をまたぎ、結果は上昇と下落に割れています。"
+      : day5?.q1 > 0
+        ? "5日後の中央50%もすべてプラスで、上昇傾向に一定の再現性があります。"
+        : "";
   const longTerm = !day20 || day20.dateEvents < 5
     ? `20日後は${day20?.dateEvents || 0}反応日しかなく、長期判断には使えません。`
     : `20日後は${day20.dateEvents}反応日の観測があります。`;
   elements.focusHorizonInterpretation.textContent =
-    `今回：${movement}${trend}${longTerm} 単独の売買シグナルではなく、価格トレンドと合わせて使います。`;
+    `今回：${movement}${trend}${consistency}${longTerm} 単独の売買シグナルではなく、価格トレンドと合わせて使います。`;
 }
 
 function renderTimelineChart(studies) {

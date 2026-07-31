@@ -571,9 +571,10 @@ body {
 .report-chart-zero { stroke: var(--muted); stroke-width: 1.2; }
 .report-chart-label { fill: var(--muted); font-size: 13px; }
 .report-chart-value { fill: var(--text); font-size: 12px; }
-.report-chart-mean { fill: none; stroke: var(--accent); stroke-width: 3; }
-.report-chart-median { fill: none; stroke: #f8c36a; stroke-width: 2.5; }
-.report-chart-peer { fill: none; stroke: #a78bfa; stroke-width: 2; stroke-dasharray: 6 5; }
+.report-chart-range { stroke: var(--muted); stroke-width: 2; }
+.report-chart-iqr { stroke: var(--accent); stroke-width: 14; stroke-linecap: round; }
+.report-chart-median-point { fill: #f8c36a; stroke: var(--bg); stroke-width: 2; }
+.report-chart-sample { fill: var(--muted); font-size: 11px; }
 .report-chart-point { stroke: var(--bg); stroke-width: 2; }
 .report-chart-positive { fill: #22c55e; }
 .report-chart-negative { fill: #ef4444; }

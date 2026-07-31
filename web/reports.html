@@ -85,13 +85,13 @@
       </div>
       <div class="report-focus-charts">
         <article>
-          <h3>期間別の株価反応</h3>
-          <p class="report-chart-description">ニュース反応日から各期間までの累計リターンを、独立した集計点として比較します。点の間は未観測のため結びません。</p>
+          <h3>期間別のリターン分布</h3>
+          <p class="report-chart-description">ニュース反応日から各期間までの累計リターンについて、典型値・ばらつき・再現性を比較します。</p>
           <svg id="focus-horizon-chart" viewBox="0 0 720 300" role="img"
-               aria-label="期間別の加重平均、反応日中央値、peer差"></svg>
+               aria-label="期間別リターンの中央値、中央50パーセント範囲、観測全範囲"></svg>
           <div class="report-chart-guide">
             <strong>判断の読み方</strong>
-            <p>0%より上は上昇、下は下落です。平均より外れ値に強い「反応日中央値」を重視し、紫のpeer差で同業株にも共通する動きかを確認します。</p>
+            <p>黄色い点が中央値、青い太線が中央50%の範囲、細線が観測された全範囲です。範囲が狭く一方向なら再現性が高く、0%をまたぐなら結果が割れています。</p>
             <p id="focus-horizon-interpretation" class="report-chart-interpretation"></p>
           </div>
         </article>
