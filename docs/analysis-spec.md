@@ -109,53 +109,80 @@ s3://<既存バックアップバケット>/corpus/
 ## 5. teiten-pipeline との統合
 
 **別リポジトリ**（`~/Library/CloudStorage/Dropbox/stock/collection/teiten-pipeline`、
-Mac ローカル）。既に Haiku で記事要約を生成しており、API課金の口が既にある。
+Mac ローカル、コードは GitHub に無い）。GitHub上の別セッション
+「Semiconductor market monitoring pipeline」に実装内容を確認済み（2026-07-31）。
+**以下は実測（コード引用）に基づく確定事項。再調査不要。**
 
-**本命の節約は「バッチ共有」ではなく「同じ記事に2回課金しないこと」。**
+### 実態（旧仮説からの修正）
 
-```
-❌ 記事本文 ─→ [Haiku: 要約]     ─→ Notion
-   記事本文 ─→ [Haiku: 銘柄抽出] ─→ corpus      ← 入力トークンを2回払う
+`src/shared/summarize.py` が `requests.post` で Messages API を**同期**呼び出し
+（`claude-haiku-4-5`、`template.yaml:33` で明示設定）。**Batch API ではない。**
+`summarize_and_cluster(items)` が候補記事群を**1回の呼び出しで**クラスタリング＋要約
+まで行っており（`app.py:67`）、「要約」と「銘柄抽出」を別々に課金している問題は
+**そもそも存在しない**。よって旧セクションの ❌/✅ 対比（2重課金の解消）は的外れ
+だった。本当の機会は「既存の1回の呼び出しのスキーマに新フィールドを足すだけで、
+呼び出し回数を増やさずに済む」という点のみ。
 
-✅ 記事本文 ─→ [Haiku: 要約 + 銘柄抽出] ─┬─→ Notion
-                                        └─→ corpus
-```
+**実際の出力スキーマ**（`summarize.py:56-74`）は単一オブジェクトではなく、
+クラスタ単位の配列:
 
-入力（記事本文）が支配的なので、1回にまとめると**合算ワークロードが約半分**。
-追加は出力トークン数百のみ。Batch の50%引きと合わせて素直な同期実装比**約25%**。
-
-既存スキーマに足すフィールド:
-
-```python
-output_config={"format": {"type": "json_schema", "schema": {
-  "type": "object",
-  "properties": {
-    "summary":    {"type": "string"},                    # teiten 既存
-    "tickers":    {"type": "array", "items": {"type": "string"}},
-    "event_type": {"type": "string", "enum": [
-                     "earnings","guidance","product","mna",
-                     "regulatory","supply_chain","macro","other"]},
-    "sentiment":  {"type": "string", "enum": ["positive","neutral","negative"]},
-    "confidence": {"type": "number"},
-  },
-  "required": ["summary","tickers","event_type","sentiment","confidence"],
-  "additionalProperties": False,
-}}}
+```json
+{
+  "results": [
+    {
+      "ids": [0, 2],
+      "headline": "...",
+      "summary_ja": "...",
+      "my_take": "...",
+      "category": "HBM|DRAM|NAND|先端パッケージ|装置|決算|統計|その他",
+      "importance": 1
+    }
+  ]
+}
 ```
 
-**注意点:**
+新フィールド（`tickers` / `event_type` / `sentiment` / `confidence`）は
+`results[]` の各要素（＝クラスタ＝ Notion 1ページ）に追加する。旧案の
+`summary` フィールドは存在せず、`summary_ja`（事実寄り）が該当。`my_take`
+（見立て・解釈）とは分離されているので、**定量分析には `summary_ja` のみ使う**。
 
-- **Haiku 4.5 の prompt cache 最小長は 4,096 トークン**（Opus 5 は 512）。共通の抽出
-  指示がこれを下回ると、**エラーも警告もなく黙ってキャッシュされない**。この規模なら
-  無理に超えさせず、Batch の50%引きだけで十分
-- teiten が同期実行なら **Batch へ移すだけで既存分も50%引き**。日次収集なら24時間以内の
-  完了は問題にならない
-- 構造化出力なのでパース失敗のリトライが構造的に消える
+### 新たに判明したブロッカー
 
-**着手前に必要な情報**（未取得。Macローカルのため参照不可）:
-1. 現在の抽出呼び出し — モデル、同期かBatchか、プロンプトの形
-2. 出力スキーマ / Notion プロパティの対応
-3. 1日あたりの記事本数
+- **構造化出力は永続化されていない。** API レスポンスは Notion へ書き込んだ後
+  破棄される（`summarize.py` 内でパース後に捨てる）。corpus 側にフィールドを
+  増やしても、**保存先を新設しない限り読み出せない**。選択肢は次の2つ:
+  1. teiten 側で LLM 呼び出し直後に corpus 用ストレージ（S3/Parquet）へ直接書く
+  2. 新フィールドを Notion プロパティとしても書き込み、後から Notion API 経由で
+     読み戻す（Notion のレート制限と型変換が追加で乗る）
+- **処理量が想定よりはるかに少ない。** 収集自体は毎回300件超あるが、
+  `MAX_LLM_ITEMS=4`（`template.yaml:35`）× 1日3回実行（6/12/18時JST）で、
+  LLM が要約するのは**最大12件/日**。クラスタ統合でNotionページ数はさらに
+  少ない。イベントスタディの母数として十分か要検討（本セクション末の判断参照）。
+- **ニュースの対象範囲が半導体メモリ・装置寄り。** `category` の列挙値
+  （HBM/DRAM/NAND/先端パッケージ/装置/決算/統計/その他）は teiten の収集源が
+  メモリ・半導体装置に特化していることを示唆する。3節のユニバース50銘柄には
+  `ai_platform`（MSFT, GOOGL, AMZN, META, ORCL, PLTR, NOW, CRM）や
+  `eda_ip`（SNPS, CDNS, ARM）等、teiten の収集範囲に入っているか不明な銘柄が
+  多く含まれる。カバレッジは Phase 2 着手前に確認が要る。
+- **クラスタリングは実行内限定。** `ids` による統合は同一実行の候補間のみで、
+  日をまたいだ重複記事の統合はしない（Notion側の `Sources` 照合による重複排除は
+  あるが、統合ではなくスキップ）。
+
+### 新フィールド案（`results[]` の各要素に追加）
+
+```json
+{
+  "tickers":    {"type": "array", "items": {"type": "string"}},
+  "event_type": {"type": "string", "enum": [
+                   "earnings","guidance","product","mna",
+                   "regulatory","supply_chain","macro","other"]},
+  "sentiment":  {"type": "string", "enum": ["positive","neutral","negative"]},
+  "confidence": {"type": "number"}
+}
+```
+
+`category`（半導体サブセクタの分類）と `event_type`（ニュースの性質）は別軸なので
+併存させる。実装自体は teiten 側の会話で進める（このリポジトリの管轄外）。
 
 ## 6. フェーズ
 
@@ -163,11 +190,13 @@ output_config={"format": {"type": "json_schema", "schema": {
 |---|---|---|---|
 | 0 | 日足エンドポイントの検証 | プローブ出力 | — |
 | 1 | 日足コーパス | `universe.csv`, 取得スクリプト, systemd timer, S3 Parquet | 0 |
-| 2 | Notion取り込み + 抽出統合 | teiten スキーマ拡張, corpus への書き出し | teiten情報 |
+| 2 | Notion取り込み + 抽出統合 | teiten スキーマ拡張, corpus への書き出し | 永続化方式の決定、カバレッジ確認 |
 | 3 | イベントスタディ | DuckDB クエリ / ノートブック | 1, 2 |
 | 4（任意） | イベント窓の分足オンデマンド取得 | 既存 backfill の再利用 | 3 |
 
-Phase 1 と Phase 2 は独立しており、並行して進められる。
+Phase 1 と Phase 2 は独立しており、並行して進められる。teiten 実装の実態確認は
+完了した（5節）。Phase 2 着手前に残る判断は5節末の「新たに判明したブロッカー」
+3点（永続化方式／処理量の十分性／ニュース対象範囲のカバレッジ）。
 
 ## 7. 未処理のTODO（本体側）
 
