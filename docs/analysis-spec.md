@@ -360,8 +360,8 @@ h = 0, 1, 2, 5, 20取引日
 - 発表タイミング（pre-market / regular / after-hours / date-only）
 
 初版の成果物はDuckDB SQL、fixtureを使った境界テスト、Parquet出力、
-Markdown/HTMLレポートとする。現在の1分足チャートへのニュースmarker表示は別機能であり、
-Phase 3の集計結果が妥当と確認できてからAPI/UIを追加する。Phase 4は必要なイベントだけ
+Markdown/HTMLレポートとする。日次履歴のJSON API／閲覧UIまでPhase 3へ追加済みである。
+現在の1分足チャートへのニュースmarker表示は別機能であり、Phase 4は必要なイベントだけ
 分足をオンデマンド取得し、日中の反応窓を細分化する任意拡張とする。
 
 #### Phase 3 実装（2026-07-31）
@@ -373,14 +373,23 @@ Phase 3の集計結果が妥当と確認できてからAPI/UIを追加する。P
 | event明細 | `analysis/latest/event_returns.parquet` |
 | 集計 | `analysis/latest/event_summary.parquet` |
 | 未接続ticker | `analysis/latest/event_unmatched.parquet` |
-| 人向け出力 | `analysis/latest/report.md`, `report.html` |
+| 日次履歴 | `analysis/daily/date=YYYY-MM-DD/`、`analysis/index.json` |
+| API／比較用 | 日次の`report.json`（全集計と直前版との差分） |
+| 人向け出力 | 日次および`analysis/latest/`の`report.md`, `report.html` |
 | commit marker | `analysis/latest/manifest.json`（S3 uploadは常に最後） |
+| サイト | ヘッダーの「分析レポート」、`/api/analysis/reports*` |
 | 定期実行 | `usstocks-event-study.service` / `.timer`（毎日13:30 JST） |
 
 DuckDBは1 thread、memory limit 256MB。systemd側は`MemoryMax=512M`で囲う。Phase 1/2の
 ローカルParquetだけを読み、Tiingo／Notion APIを呼ばない。同一内容の再実行はSHA-256で
 判定してS3 PUTを0件にする。manifestを最後に送るため、利用側はmanifestが指すdigestを
 完全な世代として扱える。
+
+JSTの日付単位でスナップショットを保持し、毎回その日時点の全日足・全Notion corpusを
+再計算する。直前の日次`report.json`を比較対象として、接続件数などのカバレッジ差分と
+全体の加重平均リターン差分を次のJSONへ含める。これにより、入力追加で過去イベントの
+観測窓が埋まった場合も、「現在の分析」と「直前版で見えていた分析」を区別できる。
+Web APIはこの軽量JSONだけを読み、常駐APIへParquet依存とメモリ負荷を持ち込まない。
 
 fixtureでは、16:00 ET境界、週末、時刻なし、同一イベントの1/N重み、20取引日窓の
 重なり、未収録ticker、最低3 peerのsubsector benchmark、同一入力の再実行でupload 0を

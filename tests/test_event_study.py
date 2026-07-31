@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -241,8 +242,24 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert unmatched[0]["reason"] == "symbol_not_in_daily_corpus"
     assert "Notionイベント × 株価変動" in (output / "report.md").read_text()
     assert "<!doctype html>" in (output / "report.html").read_text()
+    report = json.loads((output / "report.json").read_text())
+    assert report["report_date"] == "2026-07-31"
+    assert report["previous_report_date"] is None
+    assert report["counts"]["matched_events"] == 4
+    assert report["summary"]
     assert (output / "manifest.json").exists()
-    assert uploads[-1][1].endswith("/analysis/latest/manifest.json")
+    daily = tmp_path / "corpus" / "analysis" / "daily" / "date=2026-07-31"
+    assert (daily / "report.json").exists()
+    index = json.loads((tmp_path / "corpus" / "analysis" / "index.json").read_text())
+    assert index["latest_report_date"] == "2026-07-31"
+    assert [entry["report_date"] for entry in index["reports"]] == ["2026-07-31"]
+    destinations = [destination for _, destination in uploads]
+    assert any(
+        path.endswith("/analysis/daily/date=2026-07-31/manifest.json")
+        for path in destinations
+    )
+    assert any(path.endswith("/analysis/latest/manifest.json") for path in destinations)
+    assert destinations[-1].endswith("/analysis/index.json")
 
     upload_count = len(uploads)
     run(
@@ -251,6 +268,30 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
         now=datetime(2026, 7, 31, 9, 0, tzinfo=UTC),
     )
     assert len(uploads) == upload_count
+
+    run(
+        settings,
+        uploader=lambda path, destination: uploads.append((path, destination)),
+        now=datetime(2026, 8, 1, 8, 0, tzinfo=UTC),
+    )
+    august = json.loads(
+        (
+            tmp_path
+            / "corpus"
+            / "analysis"
+            / "daily"
+            / "date=2026-08-01"
+            / "report.json"
+        ).read_text()
+    )
+    assert august["previous_report_date"] == "2026-07-31"
+    assert august["comparison"]["count_deltas"]["matched_events"] == 0
+    assert len(august["comparison"]["overall"]) == 10
+    index = json.loads((tmp_path / "corpus" / "analysis" / "index.json").read_text())
+    assert [entry["report_date"] for entry in index["reports"]] == [
+        "2026-08-01",
+        "2026-07-31",
+    ]
 
 
 def test_event_study_requires_all_three_input_families(tmp_path: Path):

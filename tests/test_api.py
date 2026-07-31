@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -302,7 +303,15 @@ def test_every_route_is_gated_when_access_is_enabled(settings: Settings):
     )
     app = create_app(guarded)
     with TestClient(app) as test_client:
-        for path in ("/", "/api/health", "/api/symbols", "/api/live", "/static/app.js"):
+        for path in (
+            "/",
+            "/reports",
+            "/api/analysis/reports",
+            "/api/health",
+            "/api/symbols",
+            "/api/live",
+            "/static/app.js",
+        ):
             response = test_client.get(path)
             assert response.status_code in {401, 403, 503}, path
 
@@ -339,6 +348,54 @@ def test_index_is_served(client: TestClient):
     assert 'id="chart-grid"' in response.text
     assert response.text.count("data-chart-days=") == 4
     assert 'data-chart-days="7"' in response.text
+    assert 'href="/reports"' in response.text
+
+
+def test_analysis_report_page_and_json_archive(settings: Settings, tmp_path: Path):
+    corpus = tmp_path / "corpus"
+    analysis = corpus / "analysis"
+    report_dir = analysis / "daily" / "date=2026-07-31"
+    report_dir.mkdir(parents=True)
+    report = {
+        "version": 1,
+        "report_date": "2026-07-31",
+        "daily_through": "2026-07-30",
+        "notion_through": "2026-07-31T00:00:00+00:00",
+        "counts": {"matched_events": 4},
+        "summary": [],
+    }
+    (report_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    index = {
+        "version": 1,
+        "latest_report_date": "2026-07-31",
+        "reports": [
+            {
+                "report_date": "2026-07-31",
+                "counts": {"matched_events": 4},
+            }
+        ],
+    }
+    (analysis / "index.json").write_text(json.dumps(index), encoding="utf-8")
+    configured = settings.model_copy(update={"corpus_local_dir": corpus})
+
+    with TestClient(create_app(configured)) as test_client:
+        page = test_client.get("/reports")
+        assert page.status_code == 200
+        assert 'id="report-date"' in page.text
+        assert "/static/reports.js" in page.text
+
+        listed = test_client.get("/api/analysis/reports")
+        assert listed.status_code == 200
+        assert listed.json()["latest_report_date"] == "2026-07-31"
+
+        latest = test_client.get("/api/analysis/reports/latest")
+        assert latest.status_code == 200
+        assert latest.json()["counts"]["matched_events"] == 4
+
+        dated = test_client.get("/api/analysis/reports/2026-07-31")
+        assert dated.status_code == 200
+        assert dated.json()["report_date"] == "2026-07-31"
+        assert test_client.get("/api/analysis/reports/2026-07-30").status_code == 404
 
 
 def test_repeated_search_does_not_hit_the_provider_twice(client: TestClient, monkeypatch):

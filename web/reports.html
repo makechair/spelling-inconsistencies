@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>分析レポート | US Stocks</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand brand-link" href="/">US&nbsp;Stocks</a>
+  <a class="topbar-link active" href="/reports" aria-current="page">分析レポート</a>
+  <span class="report-topbar-note">Notionイベント × 株価変動</span>
+</header>
+
+<main class="report-layout">
+  <section class="report-hero">
+    <div>
+      <p class="report-eyebrow">DAILY EVENT STUDY</p>
+      <h1>分析レポート</h1>
+      <p class="report-lead">
+        その日時点の全日足とNotionイベントを再集計した日次スナップショットです。
+        過去版を残し、母集団と結果の変化を同じ指標で比較します。
+      </p>
+    </div>
+    <label class="report-date-picker" for="report-date">
+      レポート日
+      <select id="report-date" disabled>
+        <option>読み込み中…</option>
+      </select>
+    </label>
+  </section>
+
+  <p id="report-status" class="report-status" role="status">レポートを読み込んでいます…</p>
+
+  <div id="report-content" hidden>
+    <section class="report-data-version" aria-label="データ版">
+      <div><span>レポート日</span><strong id="report-day">—</strong></div>
+      <div><span>日足データ</span><strong id="daily-through">—</strong></div>
+      <div><span>Notion更新</span><strong id="notion-through">—</strong></div>
+    </section>
+
+    <section>
+      <h2>カバレッジ</h2>
+      <div class="report-cards">
+        <article><span>Notionページ</span><strong id="count-pages">—</strong></article>
+        <article><span>tickerイベント</span><strong id="count-events">—</strong></article>
+        <article><span>日足へ接続</span><strong id="count-matched">—</strong></article>
+        <article><span>未接続</span><strong id="count-unmatched">—</strong></article>
+        <article><span>時刻なし</span><strong id="count-date-only">—</strong></article>
+        <article><span>重複窓あり</span><strong id="count-overlap">—</strong></article>
+      </div>
+    </section>
+
+    <section class="report-observation" aria-labelledby="observation-title">
+      <div>
+        <p class="report-eyebrow">TODAY'S READ</p>
+        <h2 id="observation-title">今回の読み取り</h2>
+      </div>
+      <p id="report-observation">—</p>
+    </section>
+
+    <section>
+      <div class="report-section-heading">
+        <div>
+          <h2>前回比較</h2>
+          <p id="comparison-label" class="report-section-note">—</p>
+        </div>
+      </div>
+      <div id="comparison-empty" class="report-empty" hidden></div>
+      <div id="comparison-table-wrap" class="report-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>指標</th>
+              <th>期間</th>
+              <th>今回</th>
+              <th>前回</th>
+              <th>差</th>
+            </tr>
+          </thead>
+          <tbody id="comparison-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <div class="report-section-heading">
+        <div>
+          <h2>全イベント</h2>
+          <p class="report-section-note">類似記事を1/Nで重み付けした全イベント集計</p>
+        </div>
+      </div>
+      <div class="report-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>指標</th>
+              <th>期間</th>
+              <th>イベント数</th>
+              <th>実効件数</th>
+              <th>加重平均</th>
+              <th>中央値</th>
+              <th>勝率</th>
+              <th>95% CI</th>
+            </tr>
+          </thead>
+          <tbody id="overall-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <div class="report-section-heading">
+        <div>
+          <h2>イベント種別別</h2>
+          <p class="report-section-note">20取引日窓が重なるイベントを除いたabnormal return</p>
+        </div>
+      </div>
+      <div class="report-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>イベント種別</th>
+              <th>期間</th>
+              <th>イベント数</th>
+              <th>加重平均</th>
+              <th>中央値</th>
+              <th>勝率</th>
+            </tr>
+          </thead>
+          <tbody id="event-type-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="report-method">
+      <h2>この分析の読み方</h2>
+      <ul>
+        <li><code>raw_return</code>は反応取引日の直前終値を基準にした調整済みリターンです。</li>
+        <li><code>abnormal_return</code>は同subsectorの等ウェイトreturnを差し引きます。</li>
+        <li>過去の日次版も同じ定義で保存するため、データ追加による結果の変化を比較できます。</li>
+        <li>日足分析であり、日中発表の発表前変動を分離できないため、因果ではなく関連を示します。</li>
+      </ul>
+      <p id="unmatched-symbols" class="report-section-note"></p>
+    </section>
+  </div>
+</main>
+
+<footer class="footer">
+  <span>日次13:30 JST更新 / Parquet本体はAPIプロセスへ読み込みません</span>
+  <a href="/">チャートへ戻る</a>
+</footer>
+
+<script type="module" src="/static/reports.js"></script>
+</body>
+</html>

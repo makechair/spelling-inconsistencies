@@ -8,7 +8,7 @@
 > 注意: Terraform 管理外の手動設定（Cloudflare Tunnel／Access／DNS）は未検証である。
 > 追記: 2026-07-31 に定量分析用の日足コーパス（Phase 1）とNotionニュースコーパス
 > （Phase 2）を実装し、本書19節へREST予算共有、差分同期、S3確定フローを追加した。
-> Phase 3のイベントスタディはDuckDB SQL、Parquet、Markdown／HTML reportまで
+> Phase 3のイベントスタディは日次履歴、前回比較JSON、認証付きAPI／閲覧UIまで
 > 実装し、systemd timer、初回分析、S3保存まで本番確認済み。
 
 > **2026-07-29 の前提変更:** 仕様書が構成全体の土台に置いていた「WebSocket で常時
@@ -1093,7 +1093,7 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 | S3／backup IAM | `infra/terraform/backup.tf` |
 | 日足コーパス／共有REST予算 | `corpus/daily.py`, `collector/ratelimit.py`, `data/universe.csv`, `deploy/systemd/usstocks-corpus.*` |
 | Notionニュースコーパス | `corpus/news.py`, `deploy/systemd/usstocks-news-corpus.*`, teitenのNotion DB／SSM |
-| イベントスタディ | `corpus/event_study.py`, `corpus/sql/event_study.sql`, `deploy/systemd/usstocks-event-study.*` |
+| イベントスタディ／日次レポート | `corpus/event_study.py`, `corpus/sql/event_study.sql`, `api/routes/analysis.py`, `web/reports.*`, `deploy/systemd/usstocks-event-study.*` |
 | budget／SNS／CloudWatch | `infra/terraform/monitoring.tf` |
 | GitHub OIDC権限 | `infra/terraform/github_oidc.tf` |
 | CI apply | `.github/workflows/deploy.yml` |
@@ -1213,7 +1213,9 @@ flowchart LR
     RETURN --> ABNORMAL["raw - subsector<br/>abnormal return"]
     BENCH --> ABNORMAL
     ABNORMAL --> DEDUP["同一symbol/date/typeを<br/>1/Nで重み付け"]
-    DEDUP --> REPORT["event_returns.parquet<br/>Markdown / HTML report"]
+    DEDUP --> REPORT["日付別Parquet<br/>JSON / Markdown / HTML"]
+    REPORT --> HISTORY["直前report.json<br/>件数・統計差分"]
+    HISTORY --> API["認証付きJSON API<br/>ヘッダーの分析レポート"]
 ```
 
 発表時刻をNew York時間へ直し、取引日の16:00より前は当日、以後・週末・休場日は
@@ -1234,8 +1236,8 @@ SPY／QQQ／SMHは未知の月間ユニークシンボル枠を消費するた�
 平均だけでなく中央値、勝率、四分位、95%信頼区間を出す。
 
 日中発表前後を日足だけで分離することはできないため、この段階で測れるのは
-「イベントと同日以降の変動の関連」であり、厳密な因果効果ではない。現在の
-1分足チャートへのニュースmarkerはPhase 3の妥当性確認後に別API/UIとして追加し、
+「イベントと同日以降の変動の関連」であり、厳密な因果効果ではない。日次集計の
+履歴閲覧UIは実装済みだが、1分足チャートへのニュースmarkerは別API/UIとして追加し、
 必要ならPhase 4で対象イベントだけ分足をオンデマンド取得する。
 
 実装は`corpus/event_study.py`が入出力・時刻正規化・atomic write・S3差分転送を担当し、
@@ -1244,6 +1246,13 @@ SPY／QQQ／SMHは未知の月間ユニークシンボル枠を消費するた�
 毎日13:30 JSTのoneshotでPhase 1/2のローカルParquetだけを読むため、
 ライブcollectorとREST予算を奪い合わない。S3では`manifest.json`を最後に更新し、
 途中までuploadされた世代を完成済みと誤認しない。
+
+成果物はJSTの日付ごとに`analysis/daily/date=YYYY-MM-DD/`へ保存し、同時に
+`analysis/latest/`を更新する。各日次`report.json`には全summaryと直前版との差分を
+含め、`analysis/index.json`が閲覧可能な日付を列挙する。認証済みAPIはJSONだけを読み、
+DuckDB／pyarrowやイベント明細Parquetを常駐プロセスへimportしない。サイトヘッダーの
+「分析レポート」から日付を選び、カバレッジ、今回の読み取り、前回比較、全体／種別別の
+統計を参照できる。
 
 2026-07-31の本番初回実行では、Notion 368ページからticker付き17イベントを展開し、
 現時点の日足corpusへ1件を接続、16件を未接続として明示した。初回は6ファイルをS3へ

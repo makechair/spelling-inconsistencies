@@ -164,18 +164,26 @@ journalctl -u usstocks-event-study.service -n 100 --no-pager
 DuckDBで読む。Tiingo／Notion APIは呼ばない。出力は次のとおり。
 
 ```text
-/var/lib/usstocks/corpus/analysis/latest/
-  event_returns.parquet    # event × symbol、0/1/2/5/20取引日return
-  event_summary.parquet    # 軸・sample・metric・horizon別の統計
-  event_unmatched.parquet  # 日足へ接続できなかったticker
-  report.md
-  report.html
-  manifest.json            # S3で最後に更新するcommit marker
+/var/lib/usstocks/corpus/analysis/
+  index.json               # 日付別レポートの軽量index
+  latest/                  # 下記の日次成果物の最新コピー
+  daily/date=YYYY-MM-DD/
+    event_returns.parquet    # event × symbol、0/1/2/5/20取引日return
+    event_summary.parquet    # 軸・sample・metric・horizon別の統計
+    event_unmatched.parquet  # 日足へ接続できなかったticker
+    report.json              # API／過去版比較用の軽量集計
+    report.md
+    report.html
+    manifest.json            # S3で世代ごとに最後に更新するcommit marker
 ```
 
 同じ内容ならS3 uploadは0件になる。成功時はmatched/tickerイベント数とupload件数だけを
 記録する。日足がまだ段階導入中のtickerは`event_unmatched.parquet`へ残り、
 後続の日足timerでpartitionが増えれば次回分析で自動的に接続される。
+JSTの日付ごとに成果物を残し、次回は直前の`report.json`を読み込んで件数と
+全体リターンの差分を生成する。サイトのヘッダーにある「分析レポート」は、
+認証済みの`/api/analysis/reports`からJSONだけを読む。APIプロセスはDuckDB／pyarrowや
+イベント明細Parquetを読み込まない。
 
 ローカルだけで確認する場合:
 

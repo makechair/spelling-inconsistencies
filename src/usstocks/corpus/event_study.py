@@ -14,8 +14,10 @@ import html
 import json
 import logging
 import os
+import shutil
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -28,11 +30,13 @@ from .daily import CorpusError, Uploader, aws_upload, corpus_s3_root, save_state
 log = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
+JST = ZoneInfo("Asia/Tokyo")
 HORIZONS = (0, 1, 2, 5, 20)
 OUTPUT_NAMES = (
     "event_returns.parquet",
     "event_summary.parquet",
     "event_unmatched.parquet",
+    "report.json",
     "report.md",
     "report.html",
 )
@@ -40,7 +44,11 @@ OUTPUT_NAMES = (
 
 def analysis_s3_root(settings: Settings) -> str:
     explicit = (settings.analysis_s3_uri or "").strip().rstrip("/")
-    return explicit or f"{corpus_s3_root(settings)}/analysis/latest"
+    # Before daily archives existed this setting was documented as the latest
+    # directory itself. Accept that old form during the transition.
+    if explicit.endswith("/latest"):
+        explicit = explicit.removesuffix("/latest")
+    return explicit or f"{corpus_s3_root(settings)}/analysis"
 
 
 def classify_event_time(
@@ -177,6 +185,13 @@ def _write_text(path: Path, content: str) -> None:
     os.replace(temporary, path)
 
 
+def _copy_file(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    shutil.copyfile(source, temporary)
+    os.replace(temporary, destination)
+
+
 def _digest(path: Path) -> str:
     hasher = hashlib.sha256()
     with path.open("rb") as handle:
@@ -187,14 +202,165 @@ def _digest(path: Path) -> str:
 
 def _load_analysis_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"version": 1, "files": {}}
+        return {"version": 2, "daily": {}, "latest": {}, "index_digest": None}
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise CorpusError(f"cannot read analysis state: {type(exc).__name__}") from exc
-    if state.get("version") != 1 or not isinstance(state.get("files"), dict):
+    if state.get("version") == 1 and isinstance(state.get("files"), dict):
+        return {
+            "version": 2,
+            "daily": {},
+            "latest": state["files"],
+            "index_digest": None,
+        }
+    if (
+        state.get("version") != 2
+        or not isinstance(state.get("daily"), dict)
+        or not isinstance(state.get("latest"), dict)
+    ):
         raise CorpusError("unsupported analysis state format")
     return state
+
+
+def _jsonable(value: object) -> object:
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _previous_report(analysis_root: Path, report_date: date) -> dict[str, Any] | None:
+    candidates: list[tuple[date, Path]] = []
+    for path in (analysis_root / "daily").glob("date=*/report.json"):
+        try:
+            candidate_date = date.fromisoformat(path.parent.name.removeprefix("date="))
+        except ValueError:
+            continue
+        if candidate_date < report_date:
+            candidates.append((candidate_date, path))
+    if not candidates:
+        return None
+    _, path = max(candidates)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CorpusError(f"cannot read previous analysis report: {type(exc).__name__}") from exc
+    return payload if isinstance(payload, dict) else None
+
+
+def _overall_comparison(
+    summary_rows: list[dict[str, object]],
+    previous: dict[str, Any] | None,
+) -> list[dict[str, object]]:
+    if previous is None:
+        return []
+    previous_rows = {
+        (row.get("metric"), row.get("horizon")): row
+        for row in previous.get("summary", [])
+        if row.get("sample") == "all"
+        and row.get("dimension") == "all"
+        and row.get("group_value") == "all"
+    }
+    comparison: list[dict[str, object]] = []
+    for row in summary_rows:
+        if not (
+            row["sample"] == "all"
+            and row["dimension"] == "all"
+            and row["group_value"] == "all"
+        ):
+            continue
+        previous_row = previous_rows.get((row["metric"], row["horizon"]))
+        current_value = row["weighted_mean_return"]
+        previous_value = previous_row.get("weighted_mean_return") if previous_row else None
+        comparison.append(
+            {
+                "metric": row["metric"],
+                "horizon": row["horizon"],
+                "current": current_value,
+                "previous": previous_value,
+                "delta": (
+                    float(current_value) - float(previous_value)
+                    if current_value is not None and previous_value is not None
+                    else None
+                ),
+            }
+        )
+    return comparison
+
+
+def _report_payload(
+    report_date: date,
+    metadata: dict[str, object],
+    summary_rows: list[dict[str, object]],
+    previous: dict[str, Any] | None,
+) -> dict[str, object]:
+    counts = {
+        "news_pages": metadata["news_pages"],
+        "ticker_events": metadata["ticker_events"],
+        "matched_events": metadata["matched_events"],
+        "unmatched_events": metadata["unmatched_events"],
+        "date_only_events": metadata["date_only_events"],
+        "overlapping_events": metadata["overlapping_events"],
+    }
+    previous_counts = previous.get("counts", {}) if previous else {}
+    return _jsonable(
+        {
+            "version": 1,
+            "report_date": report_date,
+            "daily_through": metadata["latest_daily_date"],
+            "notion_through": metadata["latest_news_edit"],
+            "min_peers": metadata["min_peers"],
+            "counts": counts,
+            "unmatched_symbols": metadata["unmatched_symbols"],
+            "previous_report_date": previous.get("report_date") if previous else None,
+            "comparison": {
+                "count_deltas": {
+                    key: (
+                        int(value) - int(previous_counts[key])
+                        if key in previous_counts
+                        else None
+                    )
+                    for key, value in counts.items()
+                },
+                "overall": _overall_comparison(summary_rows, previous),
+            },
+            # JSON is deliberately complete enough for the API and future
+            # historical comparisons, so the web process never imports
+            # DuckDB/pyarrow or holds the large event-level Parquet in memory.
+            "summary": summary_rows,
+        }
+    )  # type: ignore[return-value]
+
+
+def _history_index(analysis_root: Path) -> dict[str, object]:
+    reports: list[dict[str, object]] = []
+    for path in (analysis_root / "daily").glob("date=*/report.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            report_date = date.fromisoformat(str(payload["report_date"]))
+        except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
+            continue
+        reports.append(
+            {
+                "report_date": report_date.isoformat(),
+                "daily_through": payload.get("daily_through"),
+                "notion_through": payload.get("notion_through"),
+                "counts": payload.get("counts", {}),
+                "previous_report_date": payload.get("previous_report_date"),
+            }
+        )
+    reports.sort(key=lambda item: str(item["report_date"]), reverse=True)
+    return {
+        "version": 1,
+        "latest_report_date": reports[0]["report_date"] if reports else None,
+        "reports": reports,
+    }
 
 
 def _percent(value: object) -> str:
@@ -274,6 +440,7 @@ def _report_rows(summary_rows: list[dict[str, object]]) -> tuple[list[list[str]]
 def _render_reports(
     metadata: dict[str, object],
     summary_rows: list[dict[str, object]],
+    report_payload: dict[str, object],
 ) -> tuple[str, str]:
     overall, by_type = _report_rows(summary_rows)
     overall_headers = [
@@ -290,8 +457,20 @@ def _render_reports(
     unmatched = ", ".join(metadata["unmatched_symbols"]) or "なし"  # type: ignore[arg-type]
     latest_daily = html.escape(str(metadata["latest_daily_date"]))
     latest_news = html.escape(str(metadata["latest_news_edit"]))
+    report_date = str(report_payload["report_date"])
+    previous_date = report_payload["previous_report_date"]
+    comparison = report_payload["comparison"]  # type: ignore[assignment]
+    count_deltas = comparison["count_deltas"]  # type: ignore[index]
+    matched_delta = count_deltas["matched_events"]  # type: ignore[index]
+    previous_note = (
+        f"前回 `{previous_date}` から日足接続イベント "
+        f"{int(matched_delta):+d}件。"
+        if previous_date and matched_delta is not None
+        else "初回スナップショットのため、前回比較はありません。"
+    )
     markdown = f"""# Notionイベント × 株価変動レポート
 
+レポート日: `{report_date}`<br>
 データ版: 日足 `{metadata["latest_daily_date"]}` / Notion `{metadata["latest_news_edit"]}`
 
 ## カバレッジ
@@ -303,6 +482,13 @@ def _render_reports(
 - 時刻なしイベント: {metadata["date_only_events"]}
 - 20取引日窓が重なるイベント: {metadata["overlapping_events"]}
 - benchmark最低peer数: {metadata["min_peers"]}
+
+## 前回比較
+
+{previous_note}
+
+このレポートはその日時点の全日足・全Notionコーパスを再計算したスナップショットです。
+日付別に保持するため、分析母集団や統計値の変化を後から比較できます。
 
 ## 全イベント
 
@@ -352,7 +538,9 @@ def _render_reports(
 </head>
 <body><main>
   <h1>Notionイベント × 株価変動</h1>
-  <p class="meta">日足 {latest_daily} / Notion {latest_news}</p>
+  <p class="meta">
+    レポート {html.escape(report_date)} / 日足 {latest_daily} / Notion {latest_news}
+  </p>
   <section class="cards">
     <div class="card">Notionページ<strong>{metadata["news_pages"]}</strong></div>
     <div class="card">tickerイベント<strong>{metadata["ticker_events"]}</strong></div>
@@ -361,6 +549,12 @@ def _render_reports(
     <div class="card">時刻なし<strong>{metadata["date_only_events"]}</strong></div>
     <div class="card">重複窓あり<strong>{metadata["overlapping_events"]}</strong></div>
   </section>
+  <h2>前回比較</h2>
+  <p>{html.escape(previous_note)}</p>
+  <p class="note">
+    各日付のレポートは、その日時点の全日足・全Notionコーパスを再計算した
+    スナップショットです。
+  </p>
   <h2>全イベント</h2>
   {_html_table(overall_headers, overall)}
   <h2>イベント種別別・重複窓除外</h2>
@@ -422,8 +616,19 @@ def run(
     duckdb, pa, pq = _analysis_modules()
     local_root = settings.corpus_local_dir
     daily_paths, news_paths, sectors_path = _discover_inputs(local_root)
-    output_dir = settings.analysis_output_dir or local_root / "analysis" / "latest"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    run_at = now or datetime.now(tz=UTC)
+    if run_at.tzinfo is None:
+        run_at = run_at.replace(tzinfo=UTC)
+    report_date = run_at.astimezone(JST).date()
+    analysis_root = (
+        settings.analysis_output_dir.parent
+        if settings.analysis_output_dir is not None
+        else local_root / "analysis"
+    )
+    latest_dir = settings.analysis_output_dir or analysis_root / "latest"
+    daily_dir = analysis_root / "daily" / f"date={report_date.isoformat()}"
+    previous_report = _previous_report(analysis_root, report_date)
+    daily_dir.mkdir(parents=True, exist_ok=True)
 
     connection = duckdb.connect(":memory:")
     try:
@@ -471,17 +676,29 @@ def run(
     finally:
         connection.close()
 
-    paths = {name: output_dir / name for name in OUTPUT_NAMES}
+    paths = {name: daily_dir / name for name in OUTPUT_NAMES}
     _write_parquet(paths["event_returns.parquet"], event_returns, pq)
     _write_parquet(paths["event_summary.parquet"], event_summary, pq)
     _write_parquet(paths["event_unmatched.parquet"], event_unmatched, pq)
-    markdown, html_report = _render_reports(metadata, event_summary.to_pylist())
+    summary_rows = event_summary.to_pylist()
+    report_payload = _report_payload(
+        report_date,
+        metadata,
+        summary_rows,
+        previous_report,
+    )
+    _write_text(
+        paths["report.json"],
+        json.dumps(report_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    markdown, html_report = _render_reports(metadata, summary_rows, report_payload)
     _write_text(paths["report.md"], markdown)
     _write_text(paths["report.html"], html_report)
 
     content_digests = {name: _digest(path) for name, path in paths.items()}
     manifest = {
-        "version": 1,
+        "version": 2,
+        "report_date": report_date.isoformat(),
         "daily_through": str(metadata["latest_daily_date"]),
         "notion_through": str(metadata["latest_news_edit"]),
         "horizons": list(HORIZONS),
@@ -494,7 +711,7 @@ def run(
         },
         "files": content_digests,
     }
-    manifest_path = output_dir / "manifest.json"
+    manifest_path = daily_dir / "manifest.json"
     _write_text(
         manifest_path,
         json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -502,21 +719,53 @@ def run(
     paths["manifest.json"] = manifest_path
     all_digests = {name: _digest(path) for name, path in paths.items()}
 
+    latest_paths = {name: latest_dir / name for name in paths}
+    for name, path in paths.items():
+        _copy_file(path, latest_paths[name])
+
+    index_path = analysis_root / "index.json"
+    _write_text(
+        index_path,
+        json.dumps(
+            _history_index(analysis_root),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    index_digest = _digest(index_path)
+
     changed: list[str] = []
     state_path = local_root / "analysis-state.json"
     state = _load_analysis_state(state_path)
-    previous = state["files"]
     if upload:
         s3_root = analysis_s3_root(settings)
+        report_key = report_date.isoformat()
+        previous_daily = state["daily"].get(report_key, {})
         for name in (*OUTPUT_NAMES, "manifest.json"):
-            if previous.get(name) == all_digests[name]:
+            if previous_daily.get(name) == all_digests[name]:
                 continue
-            uploader(paths[name], f"{s3_root}/{name}")
-            changed.append(name)
+            uploader(paths[name], f"{s3_root}/daily/date={report_key}/{name}")
+            changed.append(f"daily/{name}")
+
+        previous_latest = state["latest"]
+        for name in (*OUTPUT_NAMES, "manifest.json"):
+            if previous_latest.get(name) == all_digests[name]:
+                continue
+            uploader(latest_paths[name], f"{s3_root}/latest/{name}")
+            changed.append(f"latest/{name}")
+
+        if state.get("index_digest") != index_digest:
+            uploader(index_path, f"{s3_root}/index.json")
+            changed.append("index.json")
+
+        state["daily"][report_key] = all_digests
         state.update(
             {
-                "files": all_digests,
-                "last_success_utc": (now or datetime.now(tz=UTC)).isoformat(),
+                "latest": all_digests,
+                "index_digest": index_digest,
+                "last_success_utc": run_at.isoformat(),
                 "matched_events": metadata["matched_events"],
                 "unmatched_events": metadata["unmatched_events"],
             }
@@ -524,7 +773,9 @@ def run(
         save_state(state_path, state)
 
     log.info(
-        "event study complete: %s/%s ticker event(s) matched, %d file(s) uploaded",
+        "event study complete: report=%s, %s/%s ticker event(s) matched, "
+        "%d file(s) uploaded",
+        report_date,
         metadata["matched_events"],
         metadata["ticker_events"],
         len(changed),

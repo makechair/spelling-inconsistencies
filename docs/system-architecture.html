@@ -987,7 +987,7 @@
             <thead><tr><th>Service</th><th>責務</th><th>Memory</th><th>Health</th></tr></thead>
             <tbody>
               <tr><td><code>usstocks-collector</code></td><td>RESTポーリング、bar集約、backfill、DB／live publish</td><td>320MB</td><td>15秒status heartbeat</td></tr>
-              <tr><td><code>usstocks-api</code></td><td>REST、SSE、static UI、Access JWT検証</td><td>320MB</td><td><code>/api/livez</code></td></tr>
+              <tr><td><code>usstocks-api</code></td><td>REST、SSE、static UI、日次分析JSON、Access JWT検証</td><td>320MB</td><td><code>/api/livez</code></td></tr>
               <tr><td><code>usstocks-cloudflared</code></td><td>外向きTunnel</td><td>128MB</td><td>systemd restart</td></tr>
             </tbody>
           </table>
@@ -1003,7 +1003,7 @@
               <tr><td><code>usstocks-backup.timer</code></td><td>日次 07:10 UTC</td><td>整合コピー → 検証 → gzip → S3</td></tr>
               <tr><td><code>usstocks-corpus.timer</code></td><td>Tue–Sat 03:30 UTC<br>12:30 JST</td><td>新規最大3・合計最大10銘柄の調整済み日足をParquet化してS3へ送る</td></tr>
               <tr><td><code>usstocks-news-corpus.timer</code></td><td>毎日 04:00 UTC<br>13:00 JST</td><td>Notion全ページを論理同期し、変更日partitionだけS3へ送る</td></tr>
-              <tr><td><code>usstocks-event-study.timer</code></td><td>毎日 04:30 UTC<br>13:30 JST</td><td>ローカルcorpusをDuckDBで分析し、manifestを最後にS3へ送る</td></tr>
+              <tr><td><code>usstocks-event-study.timer</code></td><td>毎日 04:30 UTC<br>13:30 JST</td><td>ローカルcorpusをDuckDBで分析し、日付別レポートとlatestをS3へ送る</td></tr>
             </tbody>
           </table>
         </div>
@@ -1552,8 +1552,8 @@
         <p>
           入力とS3配置は本番稼働まで完了している。Notionの各tickerを日足へ展開し、
           発表後0・1・2・5・20取引日の調整済みリターンをDuckDBで計算する。
-          SQL、境界テスト、Parquet／Markdown／HTMLレポート生成、systemd timer、
-          初回実データ実行とS3保存まで本番確認済み。
+          SQL、境界テスト、日付別Parquet／JSON／Markdown／HTMLレポート生成、
+          前回比較、認証付きAPI／閲覧UI、systemd timerを実装している。
         </p>
         <div class="steps" aria-label="イベントスタディ計算フロー">
           <div class="step"><span class="step-num">1</span><strong>取引日へ整列</strong><span>published_atをETへ変換。16:00以降・休場日は次の取引日。</span></div>
@@ -1574,11 +1574,13 @@
             </tbody>
           </table>
         </div>
-        <div class="callout warning">
-          <strong>チャートへのニュースmarkerは次段階</strong>
+        <div class="callout">
+          <strong>日次履歴と前回比較をサイトから参照</strong>
           <p>
-            Phase 3は再現可能な集計を先に作る。結果の妥当性を確認後にAPI／UIを追加し、
-            必要なイベントだけPhase 4で分足をオンデマンド取得する。
+            JSTの日付ごとに<code>analysis/daily/date=YYYY-MM-DD/</code>へ成果物を残し、
+            <code>report.json</code>へ全summaryと直前版との差分を保存する。
+            サイトヘッダーの「分析レポート」では日付を選び、カバレッジ、今回の読み取り、
+            前回比較、全体／イベント種別の統計を表示する。
           </p>
         </div>
         <div class="callout">
@@ -1586,8 +1588,9 @@
           <p>
             Phase 3は毎日13:30 JSTのoneshot。DuckDBは1 thread・256MB、
             systemdは512MB上限で、ローカルParquetだけを読む。
-            出力はevent明細・集計・未接続tickerのParquetとMarkdown／HTML。
-            S3では<code>manifest.json</code>を最後に更新し、同一digestは再送しない。
+            出力はevent明細・集計・未接続tickerのParquetとJSON／Markdown／HTML。
+            APIは軽量JSONだけを読み、DuckDB／pyarrowをimportしない。
+            S3では世代ごとの<code>manifest.json</code>を最後に更新し、同一digestは再送しない。
           </p>
         </div>
         <div class="callout">
