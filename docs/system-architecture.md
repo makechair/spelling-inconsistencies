@@ -8,7 +8,8 @@
 > 注意: Terraform 管理外の手動設定（Cloudflare Tunnel／Access／DNS）は未検証である。
 > 追記: 2026-07-31 に定量分析用の日足コーパス（Phase 1）とNotionニュースコーパス
 > （Phase 2）を実装し、本書19節へREST予算共有、差分同期、S3確定フローを追加した。
-> Phase 3のイベントスタディは入力基盤と初版仕様まで確定し、SQL／レポートは未実装。
+> Phase 3のイベントスタディはDuckDB SQL、Parquet、Markdown／HTML reportまで
+> ローカル実装・テスト済みで、本番反映前。
 
 > **2026-07-29 の前提変更:** 仕様書が構成全体の土台に置いていた「WebSocket で常時
 > 受信し1秒ごとに更新する」が、Tiingo・Alpaca いずれの無料枠でも成立しないことが
@@ -398,6 +399,9 @@ collector と API は同一releaseのvenvから別プロセスとして起動す
 | `usstocks-deploy.timer` | 2分 | `origin/main`をfetchし、変化があればrelease切替 |
 | `usstocks-catalog.timer` | 週次 日曜 08:30 UTC | ticker catalog を再構築。`Persistent=true` で停止中の回を取り戻し、`RandomizedDelaySec=3600` で配信元への集中を避ける。米国市場が閉じている時間帯を選び、collector の書込ロックと競合させない |
 | `usstocks-backup.timer` | 日次 07:10 UTC | 整合コピー → 検証 → gzip → S3 |
+| `usstocks-corpus.timer` | Tue–Sat 12:30 JST | 調整済み日足を段階取得しParquet／S3へ確定 |
+| `usstocks-news-corpus.timer` | 毎日13:00 JST | Notionを論理同期し、変更日partitionだけS3へ確定 |
+| `usstocks-event-study.timer` | 毎日13:30 JST | ローカルcorpusをDuckDBで分析し、manifestを最後にS3へ確定 |
 
 `deploy/systemd/*.service` や timer を変更した場合は、ホストの `/etc/systemd/system`
 へ反映するため `deploy/systemd/install.sh` の再実行が必要である。
@@ -1089,6 +1093,7 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 | S3／backup IAM | `infra/terraform/backup.tf` |
 | 日足コーパス／共有REST予算 | `corpus/daily.py`, `collector/ratelimit.py`, `data/universe.csv`, `deploy/systemd/usstocks-corpus.*` |
 | Notionニュースコーパス | `corpus/news.py`, `deploy/systemd/usstocks-news-corpus.*`, teitenのNotion DB／SSM |
+| イベントスタディ | `corpus/event_study.py`, `corpus/sql/event_study.sql`, `deploy/systemd/usstocks-event-study.*` |
 | budget／SNS／CloudWatch | `infra/terraform/monitoring.tf` |
 | GitHub OIDC権限 | `infra/terraform/github_oidc.tf` |
 | CI apply | `.github/workflows/deploy.yml` |
@@ -1190,11 +1195,12 @@ Parquetの内容ハッシュが同じ日付はPUTしない。全ページがア�
 teiten側のschema変更を分析結果へ混入する前に検知できる。oneshotは`MemoryMax=384M`、
 毎日13:00 JST実行で、常駐メモリとTiingo REST枠を消費しない。
 
-### 19.6 Notionイベントと株価変動の突合（Phase 3設計）
+### 19.6 Notionイベントと株価変動の突合（Phase 3実装）
 
 Phase 3では、ニュースの各`ticker`を日足の`symbol`へ展開し、発表後
-0/1/2/5/20取引日の調整済みリターンを計算する。入力とS3配置は本番稼働中だが、
-DuckDB SQL、テストfixture、Parquet／HTMLレポート生成は未実装である。
+0/1/2/5/20取引日の調整済みリターンを計算する。入力とS3配置は本番稼働中で、
+DuckDB SQL、テストfixture、Parquet／Markdown／HTMLレポート生成もローカル実装済み。
+systemd unitの本番配置と初回実データ実行は未実施。
 
 ```mermaid
 flowchart LR
@@ -1231,6 +1237,13 @@ SPY／QQQ／SMHは未知の月間ユニークシンボル枠を消費するた�
 「イベントと同日以降の変動の関連」であり、厳密な因果効果ではない。現在の
 1分足チャートへのニュースmarkerはPhase 3の妥当性確認後に別API/UIとして追加し、
 必要ならPhase 4で対象イベントだけ分足をオンデマンド取得する。
+
+実装は`corpus/event_study.py`が入出力・時刻正規化・atomic write・S3差分転送を担当し、
+`corpus/sql/event_study.sql`が取引日整列、subject/peer return、重複weight、
+集計統計を担当する。DuckDBは1 thread・256MBへ制限し、systemdは512MBで囲う。
+毎日13:30 JSTのoneshotでPhase 1/2のローカルParquetだけを読むため、
+ライブcollectorとREST予算を奪い合わない。S3では`manifest.json`を最後に更新し、
+途中までuploadされた世代を完成済みと誤認しない。
 
 ## 20. まとめ
 

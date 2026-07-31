@@ -75,7 +75,9 @@ for unit in \
   usstocks-corpus.service \
   usstocks-corpus.timer \
   usstocks-news-corpus.service \
-  usstocks-news-corpus.timer; do
+  usstocks-news-corpus.timer \
+  usstocks-event-study.service \
+  usstocks-event-study.timer; do
   install -m 0644 "${REPO_DIR}/deploy/systemd/${unit}" "${UNIT_DIR}/${unit}"
 done
 install -m 0644 \
@@ -104,12 +106,14 @@ systemctl enable \
   usstocks-catalog.timer \
   usstocks-corpus.timer \
   usstocks-news-corpus.timer \
+  usstocks-event-study.timer \
   usstocks-deploy.timer
 systemctl start \
   usstocks-backup.timer \
   usstocks-catalog.timer \
   usstocks-corpus.timer \
   usstocks-news-corpus.timer \
+  usstocks-event-study.timer \
   usstocks-deploy.timer
 
 # Populate the catalog now rather than waiting for Sunday. Search falls back to

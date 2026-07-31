@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the Notion event study after both corpus inputs
+
+[Timer]
+# News sync starts at 04:00 UTC with up to ten minutes of jitter. The study
+# starts at 04:30 UTC, reads local Parquet only, and uploads a manifest last.
+OnCalendar=*-*-* 04:30:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

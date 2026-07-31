@@ -181,6 +181,14 @@ class Settings(BaseSettings):
     news_s3_uri: str | None = None
     news_max_pages: int = Field(default=10_000, ge=1, le=100_000)
 
+    # ----------------------------------------------------------- event study
+    # Phase 3 reads the durable local corpus; no additional provider or Notion
+    # calls are made. Production keeps the generated reports beside the input
+    # partitions and uploads a version manifest last as the commit marker.
+    analysis_output_dir: Path | None = None
+    analysis_s3_uri: str | None = None
+    analysis_min_peers: int = Field(default=3, ge=1, le=49)
+
     # ------------------------------------------------------------------- auth
     auth_mode: AuthMode = "cloudflare_access"
     cf_access_team_domain: str | None = None  # e.g. "myteam.cloudflareaccess.com"

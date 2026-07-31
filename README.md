@@ -129,7 +129,10 @@ deploy/backup/restore.sh s3://bucket/... /tmp/x.db   # リストアと検証
 
 定量分析コーパスは、Tiingo調整済み日足とteitenのNotionニュースを日付／銘柄別Parquetへ
 正規化し、既存バックアップバケットの`corpus/`へ保存する。日足はTue–Sat 12:30 JST、
-Notion同期は毎日13:00 JSTのsystemd oneshotで、常駐サーバやDocker buildは増やさない。
+Notion同期は毎日13:00 JST、イベントスタディは13:30 JSTのsystemd oneshotで、
+常駐サーバやDocker buildは増やさない。Phase 3はDuckDBで0/1/2/5/20取引日の
+raw／subsector相対リターンを計算し、Parquet、Markdown、HTML、manifestを
+`corpus/analysis/latest/`へ出力する。
 詳細は[docs/analysis-spec.md](docs/analysis-spec.md)と
 [docs/system-architecture.md](docs/system-architecture.md) §19を参照。
 

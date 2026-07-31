@@ -1003,6 +1003,7 @@
               <tr><td><code>usstocks-backup.timer</code></td><td>日次 07:10 UTC</td><td>整合コピー → 検証 → gzip → S3</td></tr>
               <tr><td><code>usstocks-corpus.timer</code></td><td>Tue–Sat 03:30 UTC<br>12:30 JST</td><td>新規最大3・合計最大10銘柄の調整済み日足をParquet化してS3へ送る</td></tr>
               <tr><td><code>usstocks-news-corpus.timer</code></td><td>毎日 04:00 UTC<br>13:00 JST</td><td>Notion全ページを論理同期し、変更日partitionだけS3へ送る</td></tr>
+              <tr><td><code>usstocks-event-study.timer</code></td><td>毎日 04:30 UTC<br>13:30 JST</td><td>ローカルcorpusをDuckDBで分析し、manifestを最後にS3へ送る</td></tr>
             </tbody>
           </table>
         </div>
@@ -1547,11 +1548,12 @@
           </p>
         </div>
 
-        <h3>Notionイベント × 株価変動（Phase 3設計）</h3>
+        <h3>Notionイベント × 株価変動（Phase 3実装）</h3>
         <p>
           入力とS3配置は本番稼働まで完了している。次はNotionの各tickerを日足へ展開し、
           発表後0・1・2・5・20取引日の調整済みリターンをDuckDBで計算する。
-          SQL、境界テスト、Parquet／HTMLレポート生成はまだ未実装。
+          SQL、境界テスト、Parquet／Markdown／HTMLレポート生成はローカル実装済みで、
+          systemd unitの本番配置と初回実データ実行は未実施。
         </p>
         <div class="steps" aria-label="イベントスタディ計算フロー">
           <div class="step"><span class="step-num">1</span><strong>取引日へ整列</strong><span>published_atをETへ変換。16:00以降・休場日は次の取引日。</span></div>
@@ -1577,6 +1579,15 @@
           <p>
             Phase 3は再現可能な集計を先に作る。結果の妥当性を確認後にAPI／UIを追加し、
             必要なイベントだけPhase 4で分足をオンデマンド取得する。
+          </p>
+        </div>
+        <div class="callout">
+          <strong>常駐負荷と部分uploadを増やさない</strong>
+          <p>
+            Phase 3は毎日13:30 JSTのoneshot。DuckDBは1 thread・256MB、
+            systemdは512MB上限で、ローカルParquetだけを読む。
+            出力はevent明細・集計・未接続tickerのParquetとMarkdown／HTML。
+            S3では<code>manifest.json</code>を最後に更新し、同一digestは再送しない。
           </p>
         </div>
       </section>

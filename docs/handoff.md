@@ -89,6 +89,12 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
      revision `34c1ce8f99d3ec15ff5331309bad5f684f1b91f`へ更新
    - API/collector/日足corpus/Notion corpusの4 unitがactive、`/api/livez`正常、
      本番配置済みHTMLに1/7/30/365日の4ペインがあることを確認
+9. Phase 3イベントスタディをローカル実装:
+   - `corpus/event_study.py` + DuckDB SQLで0/1/2/5/20取引日returnを計算
+   - 同subsector最低3 peerの相対return、日またぎ重複weight、窓重複を実装
+   - event明細／集計／未接続tickerのParquet、Markdown／HTML、manifestを生成
+   - 毎日13:30 JSTのsystemd oneshot/timerを追加（本番配置は未実施）
+   - 全157テストとruffを通過
 
 コミット履歴（このセッション分、新しい順）:
 
@@ -141,10 +147,11 @@ Lightsail初回同期まで確認済み。初回同期は368ページを50日付
 
 ### 4-5. Phase 3（Notionイベント × 日足リターン）
 
-**設計確定、実装未着手。** `docs/analysis-spec.md` 6節に、反応取引日の決定、
+**ローカル実装完了、本番反映前。** `docs/analysis-spec.md` 6節に、反応取引日の決定、
 0/1/2/5/20取引日リターン、subsector相対リターン、日またぎ重複の重み付け、
-イベント窓の重なり、出力schemaと集計軸を実装可能な粒度で記録した。
-現時点ではDuckDB SQL、テストfixture、Parquet/HTMLレポート生成はまだ無い。
+イベント窓の重なり、出力schemaと集計軸を記録し、その仕様に沿ってDuckDB SQL、
+テストfixture、Parquet／Markdown／HTMLレポート生成を実装した。
+残るのはsystemd unitの本番配置と初回実データ実行。
 
 ## 5. 環境・運用上の注意
 
@@ -184,7 +191,7 @@ make install && make dev   # http://127.0.0.1:8000
 
 ## 7. 次に着手するならこの順で
 
-1. Phase 3のDuckDB SQL、境界テスト、Parquet/HTMLレポート生成を実装
+1. Phase 3を`[skip ci]`でmainへ反映し、systemd unitを配置して初回実データ結果を確認
 2. **次回timerで新規3銘柄追加と共有REST予算を確認**（4xxなら増加を止める）
 3. Alpaca APIキーを管理画面でローテーション
 4. 実測した通信量と空fetch警告を見ながらpoll間隔を調整

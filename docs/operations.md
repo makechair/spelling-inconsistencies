@@ -125,6 +125,7 @@ GROUP BY session;
 journalctl -u usstocks-collector -n 200 --no-pager
 journalctl -u usstocks-api -u usstocks-deploy.service --since today
 journalctl -u usstocks-news-corpus.service --since today
+journalctl -u usstocks-event-study.service --since today
 
 # Compose互換構成の場合
 docker compose -f deploy/docker-compose.yml logs --tail=200 collector
@@ -150,6 +151,38 @@ credentialは`/teiten/notion-token`と`/teiten/notion-db-id`をSSMから復号�
 値はログへ出さない。成功時はページ数・partition数・upload数だけを記録する。
 ローカル状態は`/var/lib/usstocks/corpus/news-state.json`、S3は
 `corpus/news/date=YYYY-MM-DD/part.parquet`。2回目の実行で変更がなければupload数0が正常。
+
+### Notionイベントスタディ
+
+```bash
+systemctl list-timers usstocks-event-study.timer
+sudo systemctl start usstocks-event-study.service
+journalctl -u usstocks-event-study.service -n 100 --no-pager
+```
+
+毎日13:30 JSTに、ローカルの`daily/`、`news/`、`universe/sectors.parquet`だけを
+DuckDBで読む。Tiingo／Notion APIは呼ばない。出力は次のとおり。
+
+```text
+/var/lib/usstocks/corpus/analysis/latest/
+  event_returns.parquet    # event × symbol、0/1/2/5/20取引日return
+  event_summary.parquet    # 軸・sample・metric・horizon別の統計
+  event_unmatched.parquet  # 日足へ接続できなかったticker
+  report.md
+  report.html
+  manifest.json            # S3で最後に更新するcommit marker
+```
+
+同じ内容ならS3 uploadは0件になる。成功時はmatched/tickerイベント数とupload件数だけを
+記録する。日足がまだ段階導入中のtickerは`event_unmatched.parquet`へ残り、
+後続の日足timerでpartitionが増えれば次回分析で自動的に接続される。
+
+ローカルだけで確認する場合:
+
+```bash
+USSTOCKS_CORPUS_LOCAL_DIR=/path/to/corpus \
+  .venv/bin/python -m usstocks.corpus.event_study --local-only
+```
 
 ## 3. バックアップとリストア
 

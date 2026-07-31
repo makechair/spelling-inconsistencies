@@ -1,7 +1,7 @@
 # 定量分析コーパス — 引き継ぎ仕様
 
 > 目的: ニュース・決算（Notion）と株価変動を突き合わせ、定量分析を可能にする。
-> 状態: **Phase 0〜2完了。Phase 2はLightsail初回同期とS3保存まで本番確認済み**。
+> 状態: **Phase 0〜2は本番稼働中。Phase 3はローカル実装・テスト完了、本番反映前**。
 > 2026-07-31 時点の確定事項をまとめたもの。
 > 読み方: 新しいセッションはこの1枚を読めば作業に入れる。**ここに書かれた事実を
 > 再調査しないこと** — いずれも実測で確定済みで、再検証にはAPI枠と時間がかかる。
@@ -295,7 +295,7 @@ schema driftを黙って分析データへ混ぜない。
 | 0 | **完了** | 日足エンドポイントの検証 | プローブ出力 | — |
 | 1 | **完了（本番稼働中）** | 日足コーパス | `universe.csv`, 取得スクリプト, systemd timer, S3 Parquet | 0 |
 | 2 | **完了（本番稼働中）** | Notion取り込み + 抽出統合 | `corpus/news.py`, systemd timer, S3 Parquet | 0 |
-| 3 | 未着手 | イベントスタディ | DuckDB クエリ / ノートブック | 1, 2 |
+| 3 | **実装済み（本番反映前）** | イベントスタディ | DuckDB SQL / Parquet / Markdown・HTML report | 1, 2 |
 | 4（任意） | 未着手 | イベント窓の分足オンデマンド取得 | 既存 backfill の再利用 | 3 |
 
 Phase 1 と Phase 2 は独立しており、どちらも本番稼働まで完了した。teiten 実装の
@@ -304,8 +304,8 @@ Phase 1 と Phase 2 は独立しており、どちらも本番稼働まで完了
 ### Phase 3 の設計到達点
 
 Phase 3は**日足によるイベントスタディを先に作る**。日足とニュースの入力schema、
-S3配置、実行基盤は確定済みで、以下を初版仕様とする。SQL・テスト・レポート生成は
-まだ未実装。
+S3配置、計算仕様、SQL、テスト、レポート生成までローカル実装済み。systemd unitの
+本番配置と初回実データ実行は未実施。
 
 #### 反応日の決め方
 
@@ -364,6 +364,28 @@ h = 0, 1, 2, 5, 20取引日
 Markdown/HTMLレポートとする。現在の1分足チャートへのニュースmarker表示は別機能であり、
 Phase 3の集計結果が妥当と確認できてからAPI/UIを追加する。Phase 4は必要なイベントだけ
 分足をオンデマンド取得し、日中の反応窓を細分化する任意拡張とする。
+
+#### Phase 3 実装（2026-07-31）
+
+| 成果物 | 実装 |
+|---|---|
+| 計算本体 | `src/usstocks/corpus/event_study.py` |
+| DuckDB SQL | `src/usstocks/corpus/sql/event_study.sql` |
+| event明細 | `analysis/latest/event_returns.parquet` |
+| 集計 | `analysis/latest/event_summary.parquet` |
+| 未接続ticker | `analysis/latest/event_unmatched.parquet` |
+| 人向け出力 | `analysis/latest/report.md`, `report.html` |
+| commit marker | `analysis/latest/manifest.json`（S3 uploadは常に最後） |
+| 定期実行 | `usstocks-event-study.service` / `.timer`（毎日13:30 JST） |
+
+DuckDBは1 thread、memory limit 256MB。systemd側は`MemoryMax=512M`で囲う。Phase 1/2の
+ローカルParquetだけを読み、Tiingo／Notion APIを呼ばない。同一内容の再実行はSHA-256で
+判定してS3 PUTを0件にする。manifestを最後に送るため、利用側はmanifestが指すdigestを
+完全な世代として扱える。
+
+fixtureでは、16:00 ET境界、週末、時刻なし、同一イベントの1/N重み、20取引日窓の
+重なり、未収録ticker、最低3 peerのsubsector benchmark、同一入力の再実行でupload 0を
+検証した。リポジトリ全体は157テストとruffを通過。
 
 ## 7. 未処理のTODO（本体側）
 
