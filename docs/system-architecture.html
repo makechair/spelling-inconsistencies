@@ -1161,7 +1161,8 @@
       <section id="api">
         <h2>8. API／SSE／ブラウザ</h2>
         <p class="section-intro">
-          初期画面はwatchlistとhistoryをRESTで取得し、その後は
+          初期画面はwatchlistと最新側の1年historyをRESTで1回取得し、同じ応答から
+          1D・7D・1M・1Yの4画面を描画する。その後は
           <strong>30秒ごとの差分取得</strong>と、EventSourceによるsnapshot／status受信を
           並行して回す。SSEは最大1時間で意図的にcycleし、ブラウザが自動再接続する。
         </p>
@@ -1170,9 +1171,10 @@
             <h3>初期表示</h3>
             <ol>
               <li><code>/api/symbols?watched_only=true</code></li>
-              <li><code>/api/bars/{symbol}?days=N</code></li>
-              <li>最大20,000 barsをcandle + volumeへ描画</li>
-              <li>保存済みのzoom（barSpacing / rightOffset）を復元</li>
+              <li><code>/api/bars/{symbol}?days=365</code>を<strong>1回だけ</strong>取得</li>
+              <li>最新側の最大20,000 barsを1D・7D・1M・1Yへ分配して4分割描画</li>
+              <li>チャート選択時は単一画面へ拡大し、保存済みzoomを復元</li>
+              <li>「4分割」でoverviewへ戻り、各期間をfitし直す</li>
               <li><code>/api/live?symbols=...</code>へEventSource接続</li>
             </ol>
           </div>
@@ -1203,8 +1205,8 @@
           <table>
             <thead><tr><th>File</th><th>役割</th></tr></thead>
             <tbody>
-              <tr><td><code>web/app.js</code></td><td>watchlist、検索、差分取得、SSE、再接続判定</td></tr>
-              <tr><td><code>web/chart.js</code></td><td>Lightweight Charts。軸フォーマット、legend、出来高、MA描画、zoom復元。provider帰属表示は無効化</td></tr>
+              <tr><td><code>web/app.js</code></td><td>watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、差分取得、SSE、再接続判定。4画面は1回のhistory応答を共有</td></tr>
+              <tr><td><code>web/chart.js</code></td><td>Lightweight Charts。軸フォーマット、legend、出来高、MA描画。4分割時はfitし、拡大時だけzoomを復元・保存。provider帰属表示は無効化</td></tr>
               <tr><td><code>web/timezone.js</code></td><td>表示タイムゾーンの単一の情報源。既定<code>America/New_York</code>、localStorage保存。軸とパネルが別々のzoneになる問題への対応</td></tr>
               <tr><td><code>web/viewstate.js</code></td><td><code>{days, extended, barSpacing, rightOffset, movingAverages}</code>を保存。読み込みや銘柄切替でzoomを失わない</td></tr>
               <tr><td><code>web/indicators.js</code></td><td>移動平均。窓が満たない間は点を出さない</td></tr>

@@ -91,6 +91,26 @@ def test_bars_endpoint(client: TestClient, settings: Settings):
     assert first["session"] == "regular"
 
 
+def test_truncated_bars_keep_the_newest_edge(settings: Settings):
+    limited = settings.model_copy(update={"max_bars_per_request": 3})
+    with Repository(limited.db_path) as repo:
+        seed_bars(repo, count=5)
+
+    with TestClient(create_app(limited)) as test_client:
+        payload = test_client.get(
+            "/api/bars/AAPL",
+            params={
+                "start": BASE.isoformat(),
+                "end": (BASE + timedelta(minutes=5)).isoformat(),
+            },
+        ).json()
+
+    assert payload["truncated"] is True
+    assert [bar["time"] for bar in payload["bars"]] == [
+        int((BASE + timedelta(minutes=minute)).timestamp()) for minute in (2, 3, 4)
+    ]
+
+
 def test_bars_report_the_last_fetch_even_when_the_range_is_empty(
     client: TestClient, settings: Settings
 ):
@@ -316,7 +336,9 @@ def test_index_is_served(client: TestClient):
     # The chart module, not the attribution text: the visible credit is a
     # presentation choice, while this is the page actually loading its chart.
     assert "lightweight-charts.standalone.production.js" in response.text
-    assert 'id="chart"' in response.text
+    assert 'id="chart-grid"' in response.text
+    assert response.text.count("data-chart-days=") == 4
+    assert 'data-chart-days="7"' in response.text
 
 
 def test_repeated_search_does_not_hit_the_provider_twice(client: TestClient, monkeypatch):

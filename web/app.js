@@ -17,13 +17,26 @@ import { PriceChart } from './chart.js';
 import { formatTime, onChange, selected, setZone, zoneLabel } from './timezone.js';
 import { save as saveView, view } from './viewstate.js';
 
+const PERIODS = [
+  { days: 1, label: '1D' },
+  { days: 7, label: '7D' },
+  { days: 30, label: '1M' },
+  { days: 365, label: '1Y' },
+];
+const PERIOD_DAYS = new Set(PERIODS.map(({ days }) => days));
+const MAX_PERIOD_DAYS = PERIODS.at(-1).days;
+const rememberedDays = Number(view().days);
+
 const state = {
   symbols: [],          // watchlist entries
   selected: null,       // active ticker
   // Period and the extended-hours toggle are restored, not defaulted: they are
   // part of "how I look at this", the same as the zoom.
-  days: view().days,
+  days: PERIOD_DAYS.has(rememberedDays) ? rememberedDays : 1,
+  chartMode: 'grid',
   extended: view().extended,
+  barsPayload: null,
+  periodNotes: new Map(),
   live: new Map(),      // ticker -> latest LiveOut
   names: new Map(),
   eventSource: null,
@@ -57,14 +70,33 @@ const el = {
   connDot: document.getElementById('conn-dot'),
   connLabel: document.getElementById('conn-label'),
   tz: document.getElementById('tz-select'),
+  chartGrid: document.getElementById('chart-grid'),
   chartNote: document.getElementById('chart-note'),
+  gridViewButton: document.getElementById('grid-view-button'),
   footerStatus: document.getElementById('footer-status'),
   exportLink: document.getElementById('export-link'),
   extendedToggle: document.getElementById('extended-toggle'),
   maToggle: document.getElementById('ma-toggle'),
 };
 
-const chart = new PriceChart(document.getElementById('chart'));
+const charts = new Map(
+  PERIODS.map(({ days }) => [
+    days,
+    new PriceChart(document.getElementById(`chart-${days}`), { persistView: false }),
+  ]),
+);
+const chartPanels = new Map(
+  PERIODS.map(({ days }) => [
+    days,
+    document.querySelector(`[data-chart-days="${days}"]`),
+  ]),
+);
+const chartSummaries = new Map(
+  PERIODS.map(({ days }) => [
+    days,
+    document.getElementById(`chart-summary-${days}`),
+  ]),
+);
 
 const SESSION_LABEL = {
   pre: 'プレマーケット',
@@ -122,7 +154,8 @@ async function loadWatchlist() {
     await select(state.symbols[0].symbol);
   } else if (!state.symbols.length) {
     state.selected = null;
-    chart.clear();
+    state.barsPayload = null;
+    for (const chart of charts.values()) chart.clear();
   }
   connectStream();
 }
@@ -259,6 +292,7 @@ async function addSymbol(entry) {
 
 async function select(symbol) {
   state.selected = symbol;
+  state.barsPayload = null;
   renderWatchlist();
   el.quoteSymbol.textContent = symbol;
   el.quoteName.textContent = state.names.get(symbol) || '';
@@ -270,37 +304,89 @@ async function select(symbol) {
 async function loadBars({ quiet = false } = {}) {
   if (!state.selected) return;
   if (!quiet) el.chartNote.textContent = '読み込み中…';
+  const symbol = state.selected;
   try {
-    const payload = await api(`/api/bars/${state.selected}?days=${state.days}`);
-    const bars = state.extended
-      ? payload.bars
-      : payload.bars.filter((bar) => bar.session === 'regular');
-    chart.setBars(bars);
-    if (bars.length) {
-      state.lastBar.set(state.selected, bars[bars.length - 1]);
-    } else {
-      state.lastBar.delete(state.selected);
-    }
-    state.checkedAt.set(state.selected, payload.checked_at || null);
+    // One widest-range read feeds all four panes. Four overlapping requests
+    // would roughly double the browser payload while returning the same bars.
+    const payload = await api(`/api/bars/${symbol}?days=${MAX_PERIOD_DAYS}`);
+    if (state.selected !== symbol) return;
+    state.barsPayload = payload;
+    state.checkedAt.set(symbol, payload.checked_at || null);
+    renderLoadedBars();
     renderQuote();
-
-    // The provider is named only when more than one appears in the range.
-    // Spec 5.2 forbids blending providers silently, and that is the case worth
-    // interrupting for -- IEX-only volume is not comparable with consolidated
-    // volume, so a mixed range has a step in it that needs explaining. Naming
-    // the single expected provider on every load says nothing and buries the
-    // one time it matters.
-    const sources = [...new Set(bars.map((bar) => bar.source))];
-    const notes = [`${bars.length.toLocaleString()} 本`];
-    if (sources.length > 1) {
-      notes.push(`提供元が混在: ${sources.join(' / ')}`);
-    }
-    if (payload.truncated) notes.push('件数上限で切り詰めました');
-    if (!bars.length) notes.push('この期間のデータがありません');
-    el.chartNote.textContent = notes.join(' · ');
   } catch (error) {
+    if (state.selected !== symbol) return;
     el.chartNote.textContent = `読み込みに失敗しました: ${error.message}`;
   }
+}
+
+function renderLoadedBars() {
+  const payload = state.barsPayload;
+  if (!payload || !state.selected) return;
+  const visible = state.extended
+    ? payload.bars
+    : payload.bars.filter((bar) => bar.session === 'regular');
+  const now = Math.floor(Date.now() / 1000);
+
+  state.periodNotes.clear();
+  for (const { days, label } of PERIODS) {
+    const cutoff = now - days * 86400;
+    const bars = visible.filter((bar) => bar.time >= cutoff);
+    charts.get(days).setBars(bars);
+
+    // The provider is named only when more than one appears in the period.
+    // IEX and SIP volume are not comparable, so a mixed range must not be
+    // blended silently (spec 5.2).
+    const sources = [...new Set(bars.map((bar) => bar.source))];
+    const notes = [`${bars.length.toLocaleString()} 本`];
+    if (sources.length > 1) notes.push(`提供元が混在: ${sources.join(' / ')}`);
+    const clipped =
+      payload.truncated && visible.length > 0 && visible[0].time > cutoff;
+    if (clipped) notes.push('件数上限で期間先頭を省略');
+    if (!bars.length) notes.push('データなし');
+    state.periodNotes.set(days, notes.join(' · '));
+    chartSummaries.get(days).textContent =
+      `${bars.length.toLocaleString()}本${clipped ? ' · 上限' : ''}`;
+    chartPanels.get(days).dataset.periodLabel = label;
+  }
+
+  if (visible.length) {
+    state.lastBar.set(state.selected, visible[visible.length - 1]);
+  } else {
+    state.lastBar.delete(state.selected);
+  }
+  renderChartNote();
+}
+
+function renderChartNote() {
+  if (state.chartMode === 'grid') {
+    el.chartNote.textContent = '1D・7D・1M・1Yを表示 · チャートを選択すると拡大します';
+    return;
+  }
+  el.chartNote.textContent = state.periodNotes.get(state.days) || '';
+}
+
+function setChartMode(mode, days = state.days) {
+  state.chartMode = mode;
+  if (mode === 'expanded') {
+    state.days = PERIOD_DAYS.has(days) ? days : 1;
+    saveView({ days: state.days });
+  }
+  el.chartGrid.classList.toggle('expanded', mode === 'expanded');
+  el.gridViewButton.hidden = mode !== 'expanded';
+  for (const [periodDays, panel] of chartPanels) {
+    const active = mode === 'expanded' && periodDays === state.days;
+    panel.classList.toggle('active', active);
+    charts.get(periodDays).setExpanded(active);
+  }
+  document.querySelectorAll('.range-bar button[data-days]').forEach((button) => {
+    button.classList.toggle(
+      'active',
+      mode === 'expanded' && Number(button.dataset.days) === state.days,
+    );
+  });
+  updateExportLink();
+  renderChartNote();
 }
 
 /**
@@ -324,6 +410,26 @@ async function loadBars({ quiet = false } = {}) {
  * back to the half-hourly sweep.
  */
 const TAIL_REFRESH_MS = 30_000;
+
+function upsertCachedBar(bar) {
+  const cached = state.barsPayload?.bars;
+  if (!cached || !bar) return;
+  const last = cached[cached.length - 1];
+  if (last?.time === bar.time) {
+    cached[cached.length - 1] = bar;
+  } else if (!last || bar.time > last.time) {
+    cached.push(bar);
+  }
+}
+
+function updateChartsWithBar(bar) {
+  upsertCachedBar(bar);
+  if (!bar || (!state.extended && bar.session !== 'regular')) return;
+  const now = Math.floor(Date.now() / 1000);
+  for (const { days } of PERIODS) {
+    if (bar.time >= now - days * 86400) charts.get(days).updateBar(bar);
+  }
+}
 
 async function refreshTail() {
   if (!state.selected) return;
@@ -352,15 +458,15 @@ async function refreshTail() {
     // Recorded before the early return below: a poll that found nothing is
     // exactly when this field has to move, since the bar timestamp cannot.
     state.checkedAt.set(symbol, payload.checked_at || null);
-    const bars = state.extended
+    for (const bar of payload.bars) updateChartsWithBar(bar);
+    const visibleBars = state.extended
       ? payload.bars
       : payload.bars.filter((bar) => bar.session === 'regular');
-    if (!bars.length) {
+    if (!visibleBars.length) {
       renderQuote();
       return;
     }
-    for (const bar of bars) chart.updateBar(bar);
-    state.lastBar.set(symbol, bars[bars.length - 1]);
+    state.lastBar.set(symbol, visibleBars[visibleBars.length - 1]);
     renderQuote();
   } catch {
     // Transient; the next tick retries. api() already handles an expired
@@ -379,38 +485,43 @@ document.addEventListener('visibilitychange', () => {
 });
 
 document.querySelectorAll('.range-bar button[data-days]').forEach((button) => {
-  button.addEventListener('click', async () => {
-    document.querySelectorAll('.range-bar button[data-days]')
-      .forEach((other) => other.classList.toggle('active', other === button));
-    state.days = Number(button.dataset.days);
-    saveView({ days: state.days });
-    updateExportLink();
-    await loadBars();
+  button.addEventListener('click', () => {
+    setChartMode('expanded', Number(button.dataset.days));
   });
 });
 
-el.extendedToggle.addEventListener('change', async () => {
+for (const [days, panel] of chartPanels) {
+  panel.addEventListener('click', () => {
+    if (state.chartMode === 'grid') setChartMode('expanded', days);
+  });
+}
+
+el.gridViewButton.addEventListener('click', () => setChartMode('grid'));
+
+el.extendedToggle.addEventListener('change', () => {
   state.extended = el.extendedToggle.checked;
   saveView({ extended: state.extended });
-  await loadBars();
+  renderLoadedBars();
+  renderQuote();
 });
 
-// Reflect the restored view in the controls before the first load, so the
-// highlighted period button and the checkbox match what is drawn.
-document.querySelectorAll('.range-bar button[data-days]').forEach((button) => {
-  button.classList.toggle('active', Number(button.dataset.days) === state.days);
-});
+// The remembered period is used on the first expansion, while the initial
+// screen itself is always the four-pane overview.
+setChartMode('grid');
 el.extendedToggle.checked = state.extended;
 
 el.maToggle.checked = view().movingAverages;
 el.maToggle.addEventListener('change', () => {
-  chart.setMovingAverages(el.maToggle.checked);
+  for (const chart of charts.values()) {
+    chart.setMovingAverages(el.maToggle.checked);
+  }
 });
 
 function updateExportLink() {
   if (!state.selected) return;
-  el.exportLink.href = `/api/export/csv?symbols=${state.selected}&days=${state.days}`;
-  el.exportLink.title = `${state.selected} の1分足をCSVで取得`;
+  const days = state.chartMode === 'grid' ? MAX_PERIOD_DAYS : state.days;
+  el.exportLink.href = `/api/export/csv?symbols=${state.selected}&days=${days}`;
+  el.exportLink.title = `${state.selected} の${state.chartMode === 'grid' ? '1Y' : `${days}日`}分足をCSVで取得`;
 }
 
 /* ------------------------------------------------------------------- live */
@@ -458,9 +569,7 @@ function applyUpdates(payload) {
   for (const entry of payload.symbols || []) {
     state.live.set(entry.symbol, entry);
     if (entry.symbol === state.selected && entry.bar) {
-      if (state.extended || entry.bar.session === 'regular') {
-        chart.updateBar(entry.bar);
-      }
+      updateChartsWithBar(entry.bar);
     }
   }
   renderWatchlist();

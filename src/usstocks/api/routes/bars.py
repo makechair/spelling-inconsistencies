@@ -60,10 +60,13 @@ def get_bars(
         end_dt,
         limit=limit + 1,
         sources=[source] if source else None,
+        newest_first=True,
     )
     truncated = len(bars) > limit
     if truncated:
-        bars = bars[:limit]
+        # The repository returns chronological order even though the SQL limit
+        # was applied from the newest edge. Drop the one oldest probe row.
+        bars = bars[-limit:]
 
     # Reported against the primary source, which is the one the collector is
     # actually polling. A standby provider's state would say nothing about

@@ -186,6 +186,10 @@ body {
 }
 
 .range-bar button.active { color: var(--text); border-color: var(--accent); }
+.range-bar .grid-view-button {
+  color: var(--text);
+  border-color: var(--accent);
+}
 .toggle { display: flex; align-items: center; gap: 5px; color: var(--muted);
           font-size: 12px; margin-left: 8px; cursor: pointer; }
 .export { margin-left: auto; color: var(--accent); font-size: 12px;
@@ -193,8 +197,83 @@ body {
 .export:hover { text-decoration: underline; }
 
 /* ----------------------------------------------------------------- chart */
-.chart { flex: 1; min-height: 320px; border: 1px solid var(--border);
-         border-radius: 8px; overflow: hidden; background: var(--panel);
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(230px, 1fr));
+  gap: 10px;
+  flex: 1;
+  min-height: 520px;
+}
+
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.chart-panel:hover {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+}
+
+.chart-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.chart-panel-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.chart-period { font-weight: 700; letter-spacing: .04em; }
+.chart-summary {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-expand-hint {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.chart-grid.expanded {
+  display: block;
+  min-height: 520px;
+}
+
+.chart-grid.expanded .chart-panel { display: none; }
+.chart-grid.expanded .chart-panel.active {
+  display: flex;
+  height: 100%;
+  min-height: 520px;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.chart-grid.expanded .chart-expand-hint { display: none; }
+
+.chart { flex: 1; min-height: 0; overflow: hidden; background: var(--panel);
          /* anchors .chart-legend */
          position: relative; }
 
@@ -259,7 +338,14 @@ body {
   .conn { margin-left: auto; }
   .last { font-size: 22px; }
   .content { padding: 10px 12px; }
-  .chart { min-height: 260px; }
+  .chart-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    min-height: 0;
+  }
+  .chart-panel { min-height: 260px; }
+  .chart-grid.expanded,
+  .chart-grid.expanded .chart-panel.active { min-height: 420px; }
 }
 
 /* Timezone selector in the top bar. Sits between search and the connection

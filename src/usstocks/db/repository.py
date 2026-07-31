@@ -142,8 +142,13 @@ class Repository:
         *,
         limit: int | None = None,
         sources: Sequence[str] | None = None,
+        newest_first: bool = False,
     ) -> list[Bar]:
-        """One bar per minute, resolved by source priority (spec-review B-1)."""
+        """One bar per minute, resolved by source priority (spec-review B-1).
+
+        ``newest_first`` applies the SQL limit from the newest edge, then
+        restores chronological order for chart consumers.
+        """
         clauses = ["b.symbol = :symbol"]
         params: dict[str, object] = {"symbol": symbol.upper()}
         if start is not None:
@@ -169,12 +174,14 @@ class Repository:
             FROM bars_1m AS b
             WHERE {" AND ".join(clauses)}
         )
-        SELECT * FROM ranked WHERE rank = 1 ORDER BY timestamp_utc ASC
+        SELECT * FROM ranked WHERE rank = 1
+        ORDER BY timestamp_utc {"DESC" if newest_first else "ASC"}
         """
         if limit is not None:
             sql += " LIMIT :limit"
             params["limit"] = int(limit)
-        return [_row_to_bar(row) for row in self.connection.execute(sql, params)]
+        bars = [_row_to_bar(row) for row in self.connection.execute(sql, params)]
+        return list(reversed(bars)) if newest_first else bars
 
     def iter_bars(
         self,

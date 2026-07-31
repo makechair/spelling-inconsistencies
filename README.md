@@ -8,7 +8,8 @@
 - **バックエンド:** Python 3.11 / FastAPI、収集プロセスは独立した asyncio プロセス
 - **データベース:** SQLite（WAL）
 - **ブラウザ配信:** SSE（最大1秒間隔）
-- **フロントエンド:** TradingView Lightweight Charts（ビルド不要・同梱）
+- **フロントエンド:** TradingView Lightweight Charts（ビルド不要・同梱）。
+  既定は1D・7D・1M・1Yの4分割で、各チャートを選ぶと単一画面へ拡大
 - **外部入口・認証:** Cloudflare Tunnel + Cloudflare Access（Google認証）
 - **想定インフラ:** Amazon Lightsail 2GB（systemd直接起動）
 

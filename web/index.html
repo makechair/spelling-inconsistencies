@@ -62,10 +62,10 @@
     </div>
 
     <div class="range-bar" role="group" aria-label="表示期間">
-      <button type="button" data-days="1" class="active">1D</button>
-      <button type="button" data-days="5">5D</button>
+      <button type="button" id="grid-view-button" class="grid-view-button" hidden>4分割</button>
+      <button type="button" data-days="1">1D</button>
+      <button type="button" data-days="7">7D</button>
       <button type="button" data-days="30">1M</button>
-      <button type="button" data-days="90">3M</button>
       <button type="button" data-days="365">1Y</button>
       <label class="toggle">
         <input type="checkbox" id="extended-toggle" checked>
@@ -78,7 +78,44 @@
       <a id="export-link" class="export" href="#" download>CSV</a>
     </div>
 
-    <div id="chart" class="chart"></div>
+    <div id="chart-grid" class="chart-grid" aria-label="1D・7D・1M・1Yチャート">
+      <article class="chart-panel" data-chart-days="1">
+        <button type="button" class="chart-panel-header" data-expand-days="1"
+                aria-label="1Dチャートを拡大表示">
+          <span class="chart-period">1D</span>
+          <span class="chart-summary" id="chart-summary-1"></span>
+          <span class="chart-expand-hint" aria-hidden="true">拡大</span>
+        </button>
+        <div id="chart-1" class="chart chart-compact"></div>
+      </article>
+      <article class="chart-panel" data-chart-days="7">
+        <button type="button" class="chart-panel-header" data-expand-days="7"
+                aria-label="7Dチャートを拡大表示">
+          <span class="chart-period">7D</span>
+          <span class="chart-summary" id="chart-summary-7"></span>
+          <span class="chart-expand-hint" aria-hidden="true">拡大</span>
+        </button>
+        <div id="chart-7" class="chart chart-compact"></div>
+      </article>
+      <article class="chart-panel" data-chart-days="30">
+        <button type="button" class="chart-panel-header" data-expand-days="30"
+                aria-label="1Mチャートを拡大表示">
+          <span class="chart-period">1M</span>
+          <span class="chart-summary" id="chart-summary-30"></span>
+          <span class="chart-expand-hint" aria-hidden="true">拡大</span>
+        </button>
+        <div id="chart-30" class="chart chart-compact"></div>
+      </article>
+      <article class="chart-panel" data-chart-days="365">
+        <button type="button" class="chart-panel-header" data-expand-days="365"
+                aria-label="1Yチャートを拡大表示">
+          <span class="chart-period">1Y</span>
+          <span class="chart-summary" id="chart-summary-365"></span>
+          <span class="chart-expand-hint" aria-hidden="true">拡大</span>
+        </button>
+        <div id="chart-365" class="chart chart-compact"></div>
+      </article>
+    </div>
     <p class="chart-note" id="chart-note"></p>
   </section>
 </main>

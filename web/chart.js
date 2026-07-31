@@ -42,8 +42,9 @@ const MOVING_AVERAGES = [
 ];
 
 export class PriceChart {
-  constructor(container) {
+  constructor(container, { persistView = true } = {}) {
     this.container = container;
+    this.persistView = persistView;
     this.chart = LightweightCharts.createChart(container, this.#options());
     this.candles = this.chart.addCandlestickSeries({
       upColor: UP,
@@ -104,6 +105,7 @@ export class PriceChart {
     // localStorage writes are synchronous.
     this.zoomSaveTimer = null;
     this.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      if (!this.persistView) return;
       clearTimeout(this.zoomSaveTimer);
       this.zoomSaveTimer = setTimeout(() => {
         const options = this.chart.timeScale().options();
@@ -130,6 +132,27 @@ export class PriceChart {
     // Re-applying the options rebuilds both formatters, so the axis follows a
     // zone change without reloading the series.
     onChange(() => this.chart.applyOptions(this.#options()));
+  }
+
+  /**
+   * Grid panes always fit their own period. The expanded pane restores and
+   * records the same zoom controls the former single-chart view used.
+   */
+  setExpanded(expanded) {
+    this.persistView = expanded;
+    if (expanded) {
+      const { barSpacing, rightOffset } = view();
+      if (barSpacing == null) {
+        this.chart.timeScale().fitContent();
+      } else {
+        this.chart.timeScale().applyOptions({
+          barSpacing,
+          ...(rightOffset == null ? {} : { rightOffset }),
+        });
+      }
+    } else {
+      this.chart.timeScale().fitContent();
+    }
   }
 
   #options() {
@@ -265,7 +288,7 @@ export class PriceChart {
     // symbol switch and period change. Fit only when there is nothing
     // remembered; otherwise put the bars back at the width they were left at.
     const { barSpacing, rightOffset } = view();
-    if (barSpacing == null) {
+    if (!this.persistView || barSpacing == null) {
       this.chart.timeScale().fitContent();
     } else {
       this.chart.timeScale().applyOptions({

@@ -128,7 +128,7 @@ s3://<既存バックアップバケット>/corpus/
 | 取得・Parquet化 | `src/usstocks/corpus/daily.py` |
 | systemd | `usstocks-corpus.service` / `.timer` |
 | S3権限 | 既存backup uploaderに `corpus/*` の `PutObject` を追加 |
-| 検証 | 全153テスト通過、ruff lint通過、本番初回3銘柄成功 |
+| 検証 | 全154テスト通過、ruff lint通過、本番初回3銘柄成功 |
 
 無人実行の既定値は、1回10銘柄まで、そのうち新規銘柄は3件まで。新規をCSV順に
 少数ずつ増やし、既存は `last_success_utc` が古い順に巡回する。APIがHTTPエラーを

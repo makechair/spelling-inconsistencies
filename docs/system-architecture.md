@@ -587,10 +587,13 @@ sequenceDiagram
     UI->>API: GET /api/symbols?watched_only=true
     API->>M: watchlist read
     API-->>UI: symbol list
-    UI->>API: GET /api/bars/{symbol}?days=N
-    API->>M: source優先でhistory read
-    API-->>UI: 最大20,000 bars
-    UI->>UI: candlestick + volume描画、保存済みzoomを復元
+    UI->>API: GET /api/bars/{symbol}?days=365
+    API->>M: source優先で最新側からhistory read
+    API-->>UI: 最大20,000 bars（時系列順）
+    UI->>UI: 1回の応答を1D / 7D / 1M / 1Yへ分配して4分割描画
+    opt chart選択
+        UI->>UI: 選択期間を拡大し、保存済みzoomを復元
+    end
     UI->>API: EventSource /api/live?symbols=...
     API->>L: full snapshot read
     API-->>UI: snapshot event
@@ -632,8 +635,8 @@ APIは1ワーカーで動作する。SQLiteコネクションはスレッドロ�
 
 | File | 役割 |
 |---|---|
-| `web/app.js` | watchlist、検索、30秒の差分取得（`refreshTail`）、SSE、再接続判定 |
-| `web/chart.js` | Lightweight Charts。軸フォーマット、legend、出来高、MA描画、zoom復元。provider帰属表示は無効化 |
+| `web/app.js` | watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、30秒の差分取得（`refreshTail`）、SSE、再接続判定。4画面は1回のhistory応答を共有 |
+| `web/chart.js` | Lightweight Charts。軸フォーマット、legend、出来高、MA描画。4分割時は各期間をfitし、拡大時だけzoomを復元・保存。provider帰属表示は無効化 |
 | `web/timezone.js` | 表示タイムゾーンの単一の情報源。既定 `America/New_York`、localStorage保存 |
 | `web/viewstate.js` | `{days, extended, barSpacing, rightOffset, movingAverages}` を保存 |
 | `web/indicators.js` | 移動平均。窓が満たない間は点を出さない |
