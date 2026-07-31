@@ -1,7 +1,7 @@
 # 定量分析コーパス — 引き継ぎ仕様
 
 > 目的: ニュース・決算（Notion）と株価変動を突き合わせ、定量分析を可能にする。
-> 状態: **Phase 0・Phase 1完了。Phase 2は実装・ローカル検証済み、本番接続確認中**。
+> 状態: **Phase 0〜2完了。Phase 2はLightsail初回同期とS3保存まで本番確認済み**。
 > 2026-07-31 時点の確定事項をまとめたもの。
 > 読み方: 新しいセッションはこの1枚を読めば作業に入れる。**ここに書かれた事実を
 > 再調査しないこと** — いずれも実測で確定済みで、再検証にはAPI枠と時間がかかる。
@@ -128,7 +128,7 @@ s3://<既存バックアップバケット>/corpus/
 | 取得・Parquet化 | `src/usstocks/corpus/daily.py` |
 | systemd | `usstocks-corpus.service` / `.timer` |
 | S3権限 | 既存backup uploaderに `corpus/*` の `PutObject` を追加 |
-| 検証 | 全141テスト通過、ruff lint通過、本番初回3銘柄成功 |
+| 検証 | 全153テスト通過、ruff lint通過、本番初回3銘柄成功 |
 
 無人実行の既定値は、1回10銘柄まで、そのうち新規銘柄は3件まで。新規をCSV順に
 少数ずつ増やし、既存は `last_success_utc` が古い順に巡回する。APIがHTTPエラーを
@@ -275,6 +275,9 @@ headline、category、importance、source、出典URL群、公開／作成／編
 正規化する。未知のEventType/Sentiment、範囲外Confidence、不正tickerは同期を失敗させ、
 schema driftを黙って分析データへ混ぜない。
 
+本番初回同期は終了コード0。Notion 368ページを50日付partitionへ正規化し、
+変更対象50 objectをS3へアップロードした。timerはenabled/active。
+
 ### 残課題
 
 - **日またぎの重複統合が無い。** `ids` によるクラスタリングは同一実行内限定
@@ -291,7 +294,7 @@ schema driftを黙って分析データへ混ぜない。
 |---|---|---|---|---|
 | 0 | **完了** | 日足エンドポイントの検証 | プローブ出力 | — |
 | 1 | **完了（本番稼働中）** | 日足コーパス | `universe.csv`, 取得スクリプト, systemd timer, S3 Parquet | 0 |
-| 2 | **実装・ローカル検証済み** | Notion取り込み + 抽出統合 | `corpus/news.py`, systemd timer, S3 Parquet | 本番接続確認 |
+| 2 | **完了（本番稼働中）** | Notion取り込み + 抽出統合 | `corpus/news.py`, systemd timer, S3 Parquet | 0 |
 | 3 | 未着手 | イベントスタディ | DuckDB クエリ / ノートブック | 1, 2 |
 | 4（任意） | 未着手 | イベント窓の分足オンデマンド取得 | 既存 backfill の再利用 | 3 |
 
@@ -304,8 +307,9 @@ Phase 1 と Phase 2 は独立しており、並行して進められる。teiten
 - [x] `background_poll_seconds` のコード既定値と `.env.example` を 1800 → 3600 に変更
       （本番envは未指定のため、デプロイ後は3600秒のコード既定値が有効）
 - [x] 本番 `AWS_DEFAULT_REGION` の誤記を `ap-northeast-1` へ修正
-- [ ] SKHY をウォッチリストから削除（空レスポンスを引き続けて枠を消費している）
-- [ ] `DELETE FROM bars_1m WHERE volume = 0`（出来高0の足の掃除、未実行）
+- [x] SKHYのwatch/holdを解除（空レスポンスによるREST枠消費を停止）
+- [x] 清掃直前のS3バックアップ成功後、`volume=0`を8,134行削除
+      （AAPL 2,966 / MU 2,263 / SKHY 2,905、削除後0行）
 - [ ] Alpaca APIキーのローテーション（チャットに露出済み）
 - [x] RESTポーリングを通常16:45 ET、短縮取引日は通常終了45分後に停止
       （市場カレンダーの時間外定義自体は変更しない）

@@ -70,14 +70,20 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
    - SHA-256が変わったpartitionだけS3へPUTし、アーカイブ日は空partitionで置換
    - SSMに必要な2パラメータが存在することを値の復号なしで確認
    - IAMはこの2項目の`GetParameter`だけを既存host userへ追加
+   - Lightsailで初回同期を実行し、368ページ・50日付partition・50 S3 objectを確認
+   - `usstocks-news-corpus.timer` はenabled/active（毎日13:00 JST、最大10分の遅延）
 7. 本体側の残件を実装:
    - REST pollingを通常16:45 ETで停止（短縮取引日対応）
    - 3回連続の成功空fetchをsymbol警告として表示し、復旧時に自動解除
    - SSE接続中のAPI停止を10秒で打ち切り、deploy停止時間を短縮
+   - 清掃直前のS3バックアップ成功後、`volume=0` の8,134行を削除
+     （AAPL 2,966 / MU 2,263 / SKHY 2,905）
+   - 誤登録SKHYのwatch/holdを解除
 
 コミット履歴（このセッション分、新しい順）:
 
 ```
+ee16839 Complete Notion corpus and data-quality hardening [skip ci]
 47a04ee Turn the teiten open questions into decisions
 9ee7c56 Replace the teiten integration guess with what the code actually does
 4822043 Write down what a fresh session needs so it does not re-derive it
@@ -111,20 +117,21 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
 
 ### 4-3. Phase 2（Notion取り込み + 統合）
 
-ローカル実装と153テストは完了。Notionの認証情報2項目がSSMに存在することも確認済み。
-残るのはLightsailで`usstocks-news-corpus.service`を初回実行し、ページ件数、
-日付partition、S3 objectを確認する本番接続テストだけ。
+**完了。** ローカル実装と153テスト、SSM/IAM最小権限、systemd timer導入、
+Lightsail初回同期まで確認済み。初回同期は368ページを50日付partitionへ正規化し、
+50 objectをS3へアップロードして終了コード0。タイマーはenabled/active。
 
 ### 4-4. 本体側の未処理TODO
 
-`docs/analysis-spec.md` 7節に既存の一覧あり（`background_poll_seconds` の変更、
-SKHY削除、`volume=0` の掃除、Alpacaキーのローテーション等）。コーパス作業とは独立に
-対応可能。
+`docs/analysis-spec.md` 7節に既存の一覧あり。SKHY解除と`volume=0`掃除は完了。
+残る主な運用作業は、実データを見ながらのpoll設定調整とAlpacaキーの
+ローテーション（Alpaca管理画面へのログインが必要）。
 
 ## 5. 環境・運用上の注意
 
-- テストは `pytest` で141件全通過（Codex引き継ぎ後）。`.venv/bin/pytest -q` で確認可能
-- 2026-07-31の本番反映後、collector/APIと`usstocks-corpus.timer`はactive。
+- テストは `pytest` で153件全通過（Codex引き継ぎ後）。`.venv/bin/pytest -q` で確認可能
+- 2026-07-31の本番反映後、collector/API、`usstocks-corpus.timer`、
+  `usstocks-news-corpus.timer`はactive。
   poll間隔3変数はenv未指定なので、背景pollはコード既定の3600秒で動く
 - 同じ本番確認で、物理メモリ1.9GiB中584MiB使用・available 1.3GiB、
   swap 52KiB、root disk 10%。collector約29.7MiB、API約43.8MiBで余力がある
@@ -158,9 +165,9 @@ make install && make dev   # http://127.0.0.1:8000
 
 ## 7. 次に着手するならこの順で
 
-1. **Phase 2の本番接続確認**（§4-3）
-2. **次回timerで新規3銘柄追加と共有REST予算を確認**（4xxなら増加を止める）
-3. Alpaca APIキーを管理画面でローテーション
+1. **次回timerで新規3銘柄追加と共有REST予算を確認**（4xxなら増加を止める）
+2. Alpaca APIキーを管理画面でローテーション
+3. 実測した通信量と空fetch警告を見ながらpoll間隔を調整
 
 新しい担当者・エージェントが作業を始める際は、まず `docs/analysis-spec.md` の
 「再調査してはいけない確定事項」を読み、同じ検証をやり直さないこと。作業後は
