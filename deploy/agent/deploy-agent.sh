@@ -105,7 +105,11 @@ systemd_release_is_current() {
   target="$(resolved_current)"
   [[ "${target}" == "${RELEASES_DIR}/${sha}" ]] &&
     [[ -x "${target}/venv/bin/python" ]] &&
-    [[ -d "${target}/web" ]]
+    [[ -d "${target}/web" ]] &&
+    [[ -f "${target}/data/universe.csv" ]] &&
+    [[ -x "${target}/backup.sh" ]] &&
+    [[ -f "${target}/REVISION" ]] &&
+    [[ "$(<"${target}/REVISION")" == "${sha}" ]]
 }
 
 compose_release_is_current() {
