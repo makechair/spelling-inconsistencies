@@ -35,32 +35,6 @@
   <p id="report-status" class="report-status" role="status">レポートを読み込んでいます…</p>
 
   <div id="report-content" hidden>
-    <section class="report-data-version" aria-label="データ版">
-      <div><span>レポート日</span><strong id="report-day">—</strong></div>
-      <div><span>日足データ</span><strong id="daily-through">—</strong></div>
-      <div><span>Notion更新</span><strong id="notion-through">—</strong></div>
-    </section>
-
-    <section>
-      <h2>カバレッジ</h2>
-      <div class="report-cards">
-        <article><span>Notionページ</span><strong id="count-pages">—</strong></article>
-        <article><span>tickerイベント</span><strong id="count-events">—</strong></article>
-        <article><span>日足へ接続</span><strong id="count-matched">—</strong></article>
-        <article><span>未接続</span><strong id="count-unmatched">—</strong></article>
-        <article><span>時刻なし</span><strong id="count-date-only">—</strong></article>
-        <article><span>重複窓あり</span><strong id="count-overlap">—</strong></article>
-      </div>
-    </section>
-
-    <section class="report-observation" aria-labelledby="observation-title">
-      <div>
-        <p class="report-eyebrow">TODAY'S READ</p>
-        <h2 id="observation-title">今回の読み取り</h2>
-      </div>
-      <div id="report-findings" class="report-findings"></div>
-    </section>
-
     <section class="report-focus" aria-labelledby="focus-title">
       <div class="report-section-heading">
         <div>
@@ -73,17 +47,27 @@
           <select id="focus-symbol"></select>
         </label>
       </div>
-      <p id="focus-summary" class="report-focus-summary"></p>
-      <div class="report-cards report-focus-cards">
-        <article><span>Notion記事</span><strong id="focus-events">—</strong></article>
-        <article><span>日足接続</span><strong id="focus-matched">—</strong></article>
-        <article><span>実効件数</span><strong id="focus-effective">—</strong></article>
-        <article><span>反応取引日</span><strong id="focus-dates">—</strong></article>
-        <article><span>ticker根拠</span><strong id="focus-origins">—</strong></article>
-        <article><span>カテゴリ</span><strong id="focus-categories">—</strong></article>
-        <article><span>イベント種別</span><strong id="focus-types">—</strong></article>
-      </div>
       <div class="report-focus-charts">
+        <article class="report-analog-chart">
+          <div class="report-chart-heading">
+            <div>
+              <h3>同規模変動後の上昇確率</h3>
+              <p class="report-chart-description">選択した反応日と同程度以上に動いた過去の日を探し、その後に株価が上がった割合を示します。</p>
+            </div>
+            <label class="report-analog-picker" for="analog-event">
+              基準にする反応日
+              <select id="analog-event"></select>
+            </label>
+          </div>
+          <p id="analog-summary" class="report-analog-summary"></p>
+          <svg id="analog-chart" viewBox="0 0 720 300" role="img"
+               aria-label="同規模変動後の1日、5日、20日上昇率"></svg>
+          <div class="report-chart-guide">
+            <strong>判断の読み方</strong>
+            <p>棒が50%より上なら過去は上昇優勢、下なら下落優勢です。平均・中央値が同じ方向か、過去事例が20件以上あるかも併せて確認します。</p>
+            <p id="analog-interpretation" class="report-chart-interpretation"></p>
+          </div>
+        </article>
         <article>
           <h3>期間別のリターン分布</h3>
           <p class="report-chart-description">ニュース反応日から各期間までの累計リターンについて、典型値・ばらつき・再現性を比較します。</p>
@@ -107,24 +91,64 @@
           </div>
         </article>
       </div>
-      <div class="report-table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>期間</th>
-              <th>記事観測</th>
-              <th>反応日数</th>
-              <th>実効件数</th>
-              <th>加重平均</th>
-              <th>反応日中央値</th>
-              <th>上昇率</th>
-              <th>peer差平均</th>
-            </tr>
-          </thead>
-          <tbody id="focus-body"></tbody>
-        </table>
-      </div>
+      <details class="report-focus-metadata">
+        <summary>記事件数・集計条件・数表を見る</summary>
+        <p id="focus-summary" class="report-focus-summary"></p>
+        <div class="report-cards report-focus-cards">
+          <article><span>Notion記事</span><strong id="focus-events">—</strong></article>
+          <article><span>日足接続</span><strong id="focus-matched">—</strong></article>
+          <article><span>実効件数</span><strong id="focus-effective">—</strong></article>
+          <article><span>反応取引日</span><strong id="focus-dates">—</strong></article>
+          <article><span>ticker根拠</span><strong id="focus-origins">—</strong></article>
+          <article><span>カテゴリ</span><strong id="focus-categories">—</strong></article>
+          <article><span>イベント種別</span><strong id="focus-types">—</strong></article>
+        </div>
+        <div class="report-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>期間</th>
+                <th>記事観測</th>
+                <th>反応日数</th>
+                <th>実効件数</th>
+                <th>加重平均</th>
+                <th>反応日中央値</th>
+                <th>上昇率</th>
+                <th>peer差平均</th>
+              </tr>
+            </thead>
+            <tbody id="focus-body"></tbody>
+          </table>
+        </div>
+      </details>
     </section>
+
+    <details class="report-supporting">
+      <summary>データ範囲と分析メモを見る</summary>
+      <section class="report-data-version" aria-label="データ版">
+        <div><span>レポート日</span><strong id="report-day">—</strong></div>
+        <div><span>日足データ</span><strong id="daily-through">—</strong></div>
+        <div><span>Notion更新</span><strong id="notion-through">—</strong></div>
+      </section>
+      <section>
+        <h2>カバレッジ</h2>
+        <div class="report-cards">
+          <article><span>Notionページ</span><strong id="count-pages">—</strong></article>
+          <article><span>tickerイベント</span><strong id="count-events">—</strong></article>
+          <article><span>日足へ接続</span><strong id="count-matched">—</strong></article>
+          <article><span>未接続</span><strong id="count-unmatched">—</strong></article>
+          <article><span>時刻なし</span><strong id="count-date-only">—</strong></article>
+          <article><span>重複窓あり</span><strong id="count-overlap">—</strong></article>
+        </div>
+      </section>
+      <section class="report-observation" aria-labelledby="observation-title">
+        <div>
+          <p class="report-eyebrow">TODAY'S READ</p>
+          <h2 id="observation-title">今回の読み取り</h2>
+        </div>
+        <div id="report-findings" class="report-findings"></div>
+      </section>
+    </details>
 
     <section>
       <div class="report-section-heading">

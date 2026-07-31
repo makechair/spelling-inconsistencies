@@ -13,6 +13,10 @@ const elements = {
   focusTimelineChart: document.querySelector("#focus-timeline-chart"),
   focusHorizonInterpretation: document.querySelector("#focus-horizon-interpretation"),
   focusTimelineInterpretation: document.querySelector("#focus-timeline-interpretation"),
+  analogEvent: document.querySelector("#analog-event"),
+  analogSummary: document.querySelector("#analog-summary"),
+  analogChart: document.querySelector("#analog-chart"),
+  analogInterpretation: document.querySelector("#analog-interpretation"),
   caseStudyBody: document.querySelector("#case-study-body"),
   caseStudyWrap: document.querySelector("#case-study-table-wrap"),
   caseStudyEmpty: document.querySelector("#case-study-empty"),
@@ -264,6 +268,148 @@ function drawChartGrid(svg, geometry) {
     y2: zeroY,
     class: "report-chart-zero",
   }));
+}
+
+function renderAnalogChart(studies, requestedDate = null) {
+  const byDate = new Map();
+  studies.forEach((study) => {
+    if (
+      study.raw_return_0d != null &&
+      study.historical_move_context &&
+      !byDate.has(study.reaction_date)
+    ) {
+      byDate.set(study.reaction_date, study);
+    }
+  });
+  const candidates = [...byDate.values()].sort((left, right) =>
+    right.reaction_date.localeCompare(left.reaction_date),
+  );
+  elements.analogEvent.replaceChildren();
+  elements.analogChart.replaceChildren();
+  elements.analogSummary.textContent = "";
+  elements.analogInterpretation.textContent = "同規模変動の過去統計がありません。";
+  elements.analogEvent.disabled = !candidates.length;
+  if (!candidates.length) return;
+
+  candidates.forEach((study) => {
+    const context = study.historical_move_context;
+    const option = document.createElement("option");
+    option.value = study.reaction_date;
+    option.textContent = `${study.reaction_date} ${percent(study.raw_return_0d, true)}` +
+      `（過去${number(context.similar_move_count, 0)}件）`;
+    elements.analogEvent.append(option);
+  });
+  const adequate = candidates.find(
+    (study) => Number(study.historical_move_context.similar_move_count || 0) >= 20,
+  );
+  const selected = candidates.find((study) => study.reaction_date === requestedDate) ||
+    adequate || candidates[0];
+  elements.analogEvent.value = selected.reaction_date;
+
+  const context = selected.historical_move_context;
+  const count = Number(context.similar_move_count || 0);
+  const move = Number(selected.raw_return_0d);
+  const moveLabel = context.move_direction === "down" ? "下落" : "上昇";
+  elements.analogSummary.textContent =
+    `${selected.reaction_date}の${percent(move, true)}を基準に、過去の同程度以上の` +
+    `${moveLabel}日${number(count, 0)}件を比較しています。`;
+
+  const horizons = [1, 5, 20].map((days) => ({
+    days,
+    winRate: context[`forward_win_rate_${days}d`],
+    mean: context[`forward_mean_${days}d`],
+    median: context[`forward_median_${days}d`],
+  })).filter((item) => item.winRate != null);
+  if (!horizons.length) return;
+
+  const left = 64;
+  const right = 18;
+  const top = 30;
+  const bottom = 94;
+  const width = 720 - left - right;
+  const height = 300 - top - bottom;
+  const y = (value) => top + (1 - value) * height;
+  [0, 0.25, 0.5, 0.75, 1].forEach((value) => {
+    const gridY = y(value);
+    elements.analogChart.append(
+      svgNode("line", {
+        x1: left,
+        y1: gridY,
+        x2: left + width,
+        y2: gridY,
+        class: value === 0.5 ? "report-chart-chance" : "report-chart-grid",
+      }),
+      svgNode("text", {
+        x: left - 9,
+        y: gridY + 4,
+        "text-anchor": "end",
+        class: "report-chart-label",
+      }, `${Math.round(value * 100)}%`),
+    );
+  });
+
+  const slot = width / horizons.length;
+  const barWidth = Math.min(96, slot * 0.48);
+  horizons.forEach((item, index) => {
+    const pointX = left + slot * (index + 0.5);
+    const pointY = y(Number(item.winRate));
+    const bar = svgNode("rect", {
+      x: pointX - barWidth / 2,
+      y: pointY,
+      width: barWidth,
+      height: y(0) - pointY,
+      rx: 5,
+      class: Number(item.winRate) >= 0.5
+        ? "report-chart-positive"
+        : "report-chart-negative",
+      opacity: count < 20 ? 0.42 : 0.82,
+    });
+    bar.append(svgNode("title", {},
+      `${item.days}日後 上昇率${percent(item.winRate)} / ` +
+      `平均${percent(item.mean, true)} / 中央値${percent(item.median, true)}`,
+    ));
+    elements.analogChart.append(
+      bar,
+      svgNode("text", {
+        x: pointX,
+        y: pointY - 9,
+        "text-anchor": "middle",
+        class: "report-chart-win-label",
+      }, percent(item.winRate)),
+      svgNode("text", {
+        x: pointX,
+        y: y(0) + 20,
+        "text-anchor": "middle",
+        class: "report-chart-label",
+      }, `${item.days}取引日後`),
+      svgNode("text", {
+        x: pointX,
+        y: y(0) + 39,
+        "text-anchor": "middle",
+        class: "report-chart-sample",
+      }, `平均 ${percent(item.mean, true)}`),
+      svgNode("text", {
+        x: pointX,
+        y: y(0) + 56,
+        "text-anchor": "middle",
+        class: "report-chart-sample",
+      }, `中央値 ${percent(item.median, true)}`),
+    );
+  });
+
+  const best = horizons.reduce((highest, item) =>
+    Number(item.winRate) > Number(highest.winRate) ? item : highest,
+  );
+  const day5 = horizons.find((item) => item.days === 5);
+  const sampleWarning = count < 20
+    ? `過去${count}件のみなので参考値です。`
+    : `過去${count}件を使っています。`;
+  const day5Read = day5
+    ? `5日後は上昇率${percent(day5.winRate)}、中央値${percent(day5.median, true)}です。`
+    : "";
+  elements.analogInterpretation.textContent =
+    `今回：${day5Read}最も上昇率が高いのは${best.days}日後の${percent(best.winRate)}です。` +
+    `${sampleWarning}これはニュース内容ではなく、値動きだけを条件にした統計です。`;
 }
 
 function renderHorizonChart(studies) {
@@ -536,6 +682,7 @@ function renderFocusSymbol(report, symbol) {
   });
   renderHorizonChart(studies);
   renderTimelineChart(studies);
+  renderAnalogChart(studies);
 }
 
 function renderTickerFocus(report) {
@@ -897,6 +1044,14 @@ elements.focusSymbol.addEventListener("change", () => {
   const url = new URL(window.location.href);
   url.searchParams.set("symbol", elements.focusSymbol.value);
   history.replaceState(null, "", url);
+});
+
+elements.analogEvent.addEventListener("change", () => {
+  if (!activeReport) return;
+  const studies = (activeReport.case_studies || []).filter(
+    (study) => study.symbol === elements.focusSymbol.value,
+  );
+  renderAnalogChart(studies, elements.analogEvent.value);
 });
 
 start();
