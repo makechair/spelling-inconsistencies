@@ -1471,7 +1471,7 @@
 
         <div class="steps" aria-label="日足コーパス取得フロー">
           <div class="step"><span class="step-num">1</span><strong>安全な時間帯</strong><span>Tue–Sat 12:30 JST。スクリプトも09:00–17:00 JST外を拒否。</span></div>
-          <div class="step"><span class="step-num">2</span><strong>段階的に選ぶ</strong><span><code>universe.csv</code>から新規3、合計10銘柄まで。</span></div>
+          <div class="step"><span class="step-num">2</span><strong>対象を安全に選ぶ</strong><span><code>universe.csv</code>の自動巡回か<code>--symbols</code>指定。新規3、合計10銘柄まで。</span></div>
           <div class="step"><span class="step-num">3</span><strong>REST予算を共有</strong><span><code>market.db.api_usage</code>をcollectorと共用。</span></div>
           <div class="step"><span class="step-num">4</span><strong>原子的Parquet</strong><span>直近14日をmergeし、分割・配当時だけ全期間を再取得。</span></div>
           <div class="step"><span class="step-num">5</span><strong>S3へ確定</strong><span><code>corpus/daily/...</code>へPutObject。</span></div>
@@ -1584,9 +1584,14 @@
             前回比較、全体／イベント種別の統計を表示する。母集団が小さい間も、反応前の
             長期日足内percentile、直前モメンタム、60日出来高比、同業差、同規模変動後の
             ベースレートを個別ケースとして示し、一般化できる集計と分離する。
+            接続済みNotion記事が多い銘柄を既定選択する「銘柄フォーカス」では、同一銘柄内の
+            記事数、実効件数、反応日数、イベント種別、各horizonの加重平均・中央値・
+            上昇率・peer差平均を表示し、URL queryから別銘柄も選べる。
             所見文はLLMではなく算出値をルールで文章化するため追加費用はない。
             各ケースには0／1／2／5／20日のreturn・percentile・観測数・peer比較と、
             類似変動後1／5／20日の全算出値を明細表示する。
+            分析対象を先行投入する場合は日足jobへ<code>--symbols</code>を渡す。指定先は
+            50銘柄universe内に限定し、共有REST予算、1実行の上限、安全時間帯を維持する。
           </p>
         </div>
         <div class="callout">

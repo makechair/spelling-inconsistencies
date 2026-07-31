@@ -61,6 +61,43 @@
       <div id="report-findings" class="report-findings"></div>
     </section>
 
+    <section class="report-focus" aria-labelledby="focus-title">
+      <div class="report-section-heading">
+        <div>
+          <p class="report-eyebrow">TICKER FOCUS</p>
+          <h2 id="focus-title">銘柄フォーカス</h2>
+          <p class="report-section-note">Notion記事が多い銘柄を優先し、同一銘柄内で集計</p>
+        </div>
+        <label class="report-focus-picker" for="focus-symbol">
+          対象銘柄
+          <select id="focus-symbol"></select>
+        </label>
+      </div>
+      <p id="focus-summary" class="report-focus-summary"></p>
+      <div class="report-cards report-focus-cards">
+        <article><span>記事イベント</span><strong id="focus-events">—</strong></article>
+        <article><span>実効件数</span><strong id="focus-effective">—</strong></article>
+        <article><span>反応取引日</span><strong id="focus-dates">—</strong></article>
+        <article><span>イベント種別</span><strong id="focus-types">—</strong></article>
+      </div>
+      <div class="report-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>期間</th>
+              <th>観測数</th>
+              <th>実効件数</th>
+              <th>加重平均</th>
+              <th>中央値</th>
+              <th>上昇率</th>
+              <th>peer差平均</th>
+            </tr>
+          </thead>
+          <tbody id="focus-body"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section>
       <div class="report-section-heading">
         <div>

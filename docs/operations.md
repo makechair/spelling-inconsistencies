@@ -139,6 +139,26 @@ REST fetchが成功しても3回連続で0本だった銘柄は、`symbols.suppo
 （短縮取引日は通常終了45分後）はproviderの既知の配信終了なので、REST pollを行わず
 このカウンタも増えない。
 
+### 日足コーパス
+
+通常は`usstocks-corpus.timer`に任せる。特定銘柄を分析へ先行投入する場合だけ、
+共有REST予算と安全時間帯を維持したまま対象を明示する。
+
+```bash
+sudo -u usstocks /bin/bash -lc \
+  'set -a; source /etc/usstocks/usstocks.env; set +a; \
+  USSTOCKS_DB_PATH=/var/lib/usstocks/market.db \
+  USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus \
+  USSTOCKS_CORPUS_UNIVERSE_PATH=/opt/usstocks/current/data/universe.csv \
+  /opt/usstocks/current/venv/bin/python -m usstocks.corpus.daily \
+  --max-symbols 3 --max-new-symbols 3 --symbols ARM,SNPS,CDNS'
+```
+
+`--symbols`は`data/universe.csv`内だけを許し、重複を除いて指定順に処理する。
+通常時間外に緊急実行するときだけ`--force`を追加する。ARM分析ではARM本体に加え、
+同subsectorのSNPS／CDNSを参考benchmark用に取得する。3社構成なので対象を除くpeerは
+最大2社であり、`analysis_min_peers=3`を満たす正式abnormal returnにはならない。
+
 ### Notionニュースコーパス
 
 ```bash
@@ -188,6 +208,9 @@ JSTの日付ごとに成果物を残し、次回は直前の`report.json`を読�
 母集団が小さい間は、画面の「個別ケース分析」を先に読む。長期日足内の希少性、
 イベント前モメンタム、60日出来高比、同業平均との差、同規模変動後の履歴を表示する。
 同業が`analysis_min_peers`未満の場合は参考値であり、正式なabnormal returnではない。
+「銘柄フォーカス」は接続済みNotion記事イベント数が最多の銘柄を既定選択し、
+記事数、実効件数、反応取引日数、イベント種別、0／1／2／5／20日の加重平均・中央値・
+上昇率・peer差平均を同一銘柄内で表示する。URLの`symbol` queryで別銘柄も選択できる。
 「今回の読み取り」はLLM呼び出しではなく、同じ数値を標本数付きで文章化したルールベース出力。
 根拠は各ケース下の全期間明細で検算でき、0／1／2／5／20日の未観測値も`—`として残す。
 

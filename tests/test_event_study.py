@@ -243,6 +243,8 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     report_markdown = (output / "report.md").read_text()
     assert "Notionイベント × 株価変動" in report_markdown
     assert "算出値の全期間明細" in report_markdown
+    assert "銘柄フォーカス" in report_markdown
+    assert "NVDA の期間別集計" in report_markdown
     assert "直前5取引日" in report_markdown
     assert "累積分位" in report_markdown
     assert "同程度以上の過去変動後" in report_markdown
@@ -253,6 +255,14 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert report["counts"]["matched_events"] == 4
     assert report["summary"]
     assert len(report["case_studies"]) == 4
+    assert report["focus_symbol"] == "NVDA"
+    assert [focus["symbol"] for focus in report["symbol_focus"]] == ["NVDA", "AMD"]
+    nvda_focus = report["symbol_focus"][0]
+    assert nvda_focus["article_events"] == 3
+    assert nvda_focus["effective_events"] == 2.0
+    assert nvda_focus["reaction_date_count"] == 2
+    assert nvda_focus["event_types"] == {"guidance": 1, "product": 2}
+    assert [row["horizon"] for row in nvda_focus["horizons"]] == [0, 1, 2, 5, 20]
     assert report["findings"][0]["title"] == "結論の強さ"
     nvda_case = next(
         study for study in report["case_studies"] if study["page_id"] == "page-nvda-1"

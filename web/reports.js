@@ -6,6 +6,9 @@ const elements = {
   comparisonWrap: document.querySelector("#comparison-table-wrap"),
   comparisonEmpty: document.querySelector("#comparison-empty"),
   findings: document.querySelector("#report-findings"),
+  focusSymbol: document.querySelector("#focus-symbol"),
+  focusSummary: document.querySelector("#focus-summary"),
+  focusBody: document.querySelector("#focus-body"),
   caseStudyBody: document.querySelector("#case-study-body"),
   caseStudyWrap: document.querySelector("#case-study-table-wrap"),
   caseStudyEmpty: document.querySelector("#case-study-empty"),
@@ -15,6 +18,7 @@ const elements = {
 };
 
 const HORIZONS = [0, 1, 2, 5, 20];
+let activeReport = null;
 
 const countIds = {
   news_pages: "count-pages",
@@ -129,6 +133,124 @@ function eventCell(tr, study) {
   headline.textContent = study.headline || "見出しなし";
   td.append(symbol, headline);
   tr.append(td);
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function focusStatistics(studies, horizon) {
+  const raw = studies.filter((study) => study[`raw_return_${horizon}d`] != null);
+  const weight = (study) => Number(study.event_weight ?? 1);
+  const effective = raw.reduce((total, study) => total + weight(study), 0);
+  const peer = raw.filter(
+    (study) => study[`exploratory_relative_return_${horizon}d`] != null,
+  );
+  const peerWeight = peer.reduce((total, study) => total + weight(study), 0);
+  return {
+    events: raw.length,
+    effective,
+    mean: effective
+      ? raw.reduce(
+          (total, study) =>
+            total + weight(study) * Number(study[`raw_return_${horizon}d`]),
+          0,
+        ) / effective
+      : null,
+    median: median(raw.map((study) => Number(study[`raw_return_${horizon}d`]))),
+    winRate: effective
+      ? raw.reduce(
+          (total, study) =>
+            total + weight(study) * (Number(study[`raw_return_${horizon}d`]) > 0 ? 1 : 0),
+          0,
+        ) / effective
+      : null,
+    peerMean: peerWeight
+      ? peer.reduce(
+          (total, study) =>
+            total +
+            weight(study) * Number(study[`exploratory_relative_return_${horizon}d`]),
+          0,
+        ) / peerWeight
+      : null,
+  };
+}
+
+function renderFocusSymbol(report, symbol) {
+  const studies = (report.case_studies || []).filter(
+    (study) => study.symbol === symbol,
+  );
+  const reactionDates = [...new Set(studies.map((study) => study.reaction_date))].sort();
+  const eventTypes = new Map();
+  studies.forEach((study) => {
+    const type = study.event_type || "unknown";
+    eventTypes.set(type, (eventTypes.get(type) || 0) + 1);
+  });
+  const effective = studies.reduce(
+    (total, study) => total + Number(study.event_weight ?? 1),
+    0,
+  );
+  text("focus-events", number(studies.length, 0));
+  text("focus-effective", number(effective, 1));
+  text("focus-dates", number(reactionDates.length, 0));
+  text(
+    "focus-types",
+    [...eventTypes.entries()].map(([type, count]) => `${type} ${count}`).join(" / "),
+  );
+
+  const day0 = focusStatistics(studies, 0);
+  const day2 = focusStatistics(studies, 2);
+  const dateRange = reactionDates.length
+    ? `${reactionDates[0]}〜${reactionDates.at(-1)}`
+    : "反応日なし";
+  elements.focusSummary.textContent =
+    `${symbol}は${studies.length}記事イベント（${dateRange}）。` +
+    `反応日の加重平均は${percent(day0.mean, true)}` +
+    `、2日後までの加重平均は${percent(day2.mean, true)}` +
+    `（${day2.events}件観測）です。記事数が少ないため、因果効果ではなく` +
+    "同一銘柄のケース集積として読みます。";
+
+  elements.focusBody.replaceChildren();
+  HORIZONS.forEach((horizon) => {
+    const stats = focusStatistics(studies, horizon);
+    row(elements.focusBody, [
+      horizonLabel(horizon),
+      number(stats.events, 0),
+      number(stats.effective, 1),
+      percent(stats.mean, true),
+      percent(stats.median, true),
+      percent(stats.winRate),
+      percent(stats.peerMean, true),
+    ]);
+  });
+}
+
+function renderTickerFocus(report) {
+  const counts = new Map();
+  (report.case_studies || []).forEach((study) => {
+    counts.set(study.symbol, (counts.get(study.symbol) || 0) + 1);
+  });
+  const symbols = [...counts].sort(
+    ([leftSymbol, leftCount], [rightSymbol, rightCount]) =>
+      rightCount - leftCount || leftSymbol.localeCompare(rightSymbol),
+  );
+  elements.focusSymbol.replaceChildren();
+  symbols.forEach(([symbol, count]) => {
+    const option = document.createElement("option");
+    option.value = symbol;
+    option.textContent = `${symbol}（${count}件）`;
+    elements.focusSymbol.append(option);
+  });
+  const requested = new URL(window.location.href).searchParams.get("symbol");
+  const selected = counts.has(requested) ? requested : symbols[0]?.[0];
+  if (!selected) return;
+  elements.focusSymbol.value = selected;
+  renderFocusSymbol(report, selected);
 }
 
 function horizonLabel(horizon) {
@@ -364,6 +486,7 @@ function renderTables(report) {
 }
 
 function renderReport(report) {
+  activeReport = report;
   text("report-day", report.report_date);
   text("daily-through", report.daily_through);
   text("notion-through", report.notion_through);
@@ -374,6 +497,7 @@ function renderReport(report) {
       `benchmark最低peer数: ${report.min_peers}`,
   );
   renderObservation(report);
+  renderTickerFocus(report);
   renderCaseStudies(report);
   renderComparison(report);
   renderTables(report);
@@ -435,6 +559,14 @@ elements.picker.addEventListener("change", () => {
     elements.status.hidden = false;
     elements.status.textContent = "選択したレポートを読み込めませんでした。";
   });
+});
+
+elements.focusSymbol.addEventListener("change", () => {
+  if (!activeReport) return;
+  renderFocusSymbol(activeReport, elements.focusSymbol.value);
+  const url = new URL(window.location.href);
+  url.searchParams.set("symbol", elements.focusSymbol.value);
+  history.replaceState(null, "", url);
 });
 
 start();

@@ -1116,7 +1116,7 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 ```mermaid
 flowchart LR
     TIMER["usstocks-corpus.timer<br/>Tue–Sat 03:30 UTC<br/>12:30 JST"] --> GUARD["時間帯guard<br/>09:00–17:00 JST"]
-    GUARD --> SELECT["universe.csv<br/>新規 最大3<br/>合計 最大10"]
+    GUARD --> SELECT["universe.csv<br/>自動巡回または --symbols<br/>新規 最大3 / 合計 最大10"]
     SELECT --> BUDGET["RestBudget<br/>market.db / api_usage<br/>collectorと共有"]
     BUDGET --> DAILY["Tiingo daily REST<br/>直近14日を重ねて取得"]
     DAILY --> ACTION{"新しい分割／配当?"}
@@ -1252,7 +1252,9 @@ SPY／QQQ／SMHは未知の月間ユニークシンボル枠を消費するた�
 含め、`analysis/index.json`が閲覧可能な日付を列挙する。認証済みAPIはJSONだけを読み、
 DuckDB／pyarrowやイベント明細Parquetを常駐プロセスへimportしない。サイトヘッダーの
 「分析レポート」から日付を選び、カバレッジ、今回の読み取り、前回比較、全体／種別別の
-統計を参照できる。
+統計を参照できる。接続済みNotion記事が多い銘柄を既定選択する「銘柄フォーカス」では、
+同一銘柄内の記事数、実効件数、反応日数、イベント種別、各horizonの加重平均・中央値・
+上昇率・peer差平均を表示し、URL queryから別銘柄も選べる。
 
 イベント数が少ない導入期は集計値を無理に一般化せず、イベントごとのケース分析を出す。
 反応前だけの同銘柄日足からreturn percentileと同規模変動後のベースレートを計算し、
@@ -1260,6 +1262,8 @@ DuckDB／pyarrowやイベント明細Parquetを常駐プロセスへimportしな
 peerが3社未満の相対returnは参考値として残すが、正式なabnormal returnには昇格させない。
 所見文はLLMではなく算出値をルールで文章化するため追加費用はない。Webと日次MD／HTMLには、
 全horizonのraw return・percentile・観測数・peer比較と、類似変動後の全算出値を明細表示する。
+分析対象を先行投入する場合は日足jobへ`--symbols`を渡す。指定先は50銘柄universe内に限定し、
+共有REST予算、1実行の上限、安全時間帯を維持するため、ライブ取得のquotaを迂回しない。
 
 2026-07-31の本番初回実行では、Notion 368ページからticker付き17イベントを展開し、
 現時点の日足corpusへ1件を接続、16件を未接続として明示した。初回は6ファイルをS3へ

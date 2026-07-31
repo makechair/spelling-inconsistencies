@@ -307,6 +307,99 @@ def _case_studies(
     return studies
 
 
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def _symbol_focus(case_studies: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Aggregate matched Notion pages within each ticker.
+
+    The event-study summary deliberately remains the cross-sectional research
+    table. This smaller view answers a different question: which ticker has the
+    richest Notion history, and what do its observed event windows look like?
+    """
+
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for study in case_studies:
+        grouped.setdefault(str(study["symbol"]), []).append(study)
+
+    focus: list[dict[str, object]] = []
+    for symbol, studies in sorted(
+        grouped.items(), key=lambda item: (-len(item[1]), item[0])
+    ):
+        reaction_dates = sorted({str(study["reaction_date"]) for study in studies})
+        event_types: dict[str, int] = {}
+        for study in studies:
+            event_type = str(study.get("event_type") or "unknown")
+            event_types[event_type] = event_types.get(event_type, 0) + 1
+
+        horizon_rows: list[dict[str, object]] = []
+        for horizon in HORIZONS:
+            field = f"raw_return_{horizon}d"
+            observed = [study for study in studies if study.get(field) is not None]
+            effective = sum(float(study.get("event_weight") or 1) for study in observed)
+            weighted_total = sum(
+                float(study.get("event_weight") or 1) * float(study[field])
+                for study in observed
+            )
+            wins = sum(
+                float(study.get("event_weight") or 1)
+                for study in observed
+                if float(study[field]) > 0
+            )
+            peer_field = f"exploratory_relative_return_{horizon}d"
+            peer_observed = [
+                study for study in observed if study.get(peer_field) is not None
+            ]
+            peer_effective = sum(
+                float(study.get("event_weight") or 1) for study in peer_observed
+            )
+            peer_total = sum(
+                float(study.get("event_weight") or 1) * float(study[peer_field])
+                for study in peer_observed
+            )
+            horizon_rows.append(
+                {
+                    "horizon": horizon,
+                    "events": len(observed),
+                    "effective_events": effective,
+                    "weighted_mean_return": (
+                        weighted_total / effective if effective else None
+                    ),
+                    "median_return": _median(
+                        [float(study[field]) for study in observed]
+                    ),
+                    "weighted_win_rate": wins / effective if effective else None,
+                    "peer_events": len(peer_observed),
+                    "peer_effective_events": peer_effective,
+                    "weighted_mean_peer_relative_return": (
+                        peer_total / peer_effective if peer_effective else None
+                    ),
+                }
+            )
+
+        focus.append(
+            {
+                "symbol": symbol,
+                "article_events": len(studies),
+                "effective_events": sum(
+                    float(study.get("event_weight") or 1) for study in studies
+                ),
+                "reaction_dates": reaction_dates,
+                "reaction_date_count": len(reaction_dates),
+                "event_types": dict(sorted(event_types.items())),
+                "horizons": horizon_rows,
+            }
+        )
+    return focus
+
+
 def _finding(
     title: str,
     body: str,
@@ -450,6 +543,7 @@ def _report_payload(
     }
     previous_counts = previous.get("counts", {}) if previous else {}
     case_studies = _case_studies(event_rows, context_rows)
+    symbol_focus = _symbol_focus(case_studies)
     return _jsonable(
         {
             "version": 2,
@@ -472,6 +566,8 @@ def _report_payload(
                 "overall": _overall_comparison(summary_rows, previous),
             },
             "findings": _analysis_findings(metadata, case_studies),
+            "focus_symbol": symbol_focus[0]["symbol"] if symbol_focus else None,
+            "symbol_focus": symbol_focus,
             "case_studies": case_studies,
             # JSON is deliberately complete enough for the API and future
             # historical comparisons, so the web process never imports
@@ -631,6 +727,54 @@ def _case_report_rows(case_studies: list[dict[str, object]]) -> list[list[str]]:
             ]
         )
     return rows
+
+
+def _focus_report_rows(
+    symbol_focus: list[dict[str, object]],
+) -> tuple[list[list[str]], list[list[str]], str | None]:
+    overview: list[list[str]] = []
+    for focus in symbol_focus:
+        horizons = {
+            int(row["horizon"]): row
+            for row in focus.get("horizons", [])  # type: ignore[union-attr]
+        }
+        event_types = " / ".join(
+            f"{event_type} {count}"
+            for event_type, count in focus.get("event_types", {}).items()  # type: ignore[union-attr]
+        )
+        overview.append(
+            [
+                str(focus["symbol"]),
+                str(focus["article_events"]),
+                _number(focus["effective_events"]),
+                str(focus["reaction_date_count"]),
+                event_types or "—",
+                _percent(horizons.get(0, {}).get("weighted_mean_return")),
+                _percent(horizons.get(2, {}).get("weighted_mean_return")),
+                _percent(horizons.get(20, {}).get("weighted_mean_return")),
+            ]
+        )
+
+    if not symbol_focus:
+        return overview, [], None
+    primary = symbol_focus[0]
+    primary_rows = [
+        [
+            (
+                "反応日（1取引日累計）"
+                if int(row["horizon"]) == 0
+                else f"+{row['horizon']}日（{int(row['horizon']) + 1}取引日累計）"
+            ),
+            str(row["events"]),
+            _number(row["effective_events"]),
+            _percent(row["weighted_mean_return"]),
+            _percent(row["median_return"]),
+            _percent(row["weighted_win_rate"]),
+            _percent(row["weighted_mean_peer_relative_return"]),
+        ]
+        for row in primary.get("horizons", [])  # type: ignore[union-attr]
+    ]
+    return overview, primary_rows, str(primary["symbol"])
 
 
 def _case_rarity(study: dict[str, object], horizon: int) -> str:
@@ -798,6 +942,29 @@ def _render_reports(
         "同規模変動後5日",
     ]
     findings = report_payload.get("findings", [])
+    symbol_focus = report_payload.get("symbol_focus", [])  # type: ignore[assignment]
+    focus_overview, focus_primary, primary_symbol = _focus_report_rows(
+        symbol_focus  # type: ignore[arg-type]
+    )
+    focus_overview_headers = [
+        "銘柄",
+        "記事イベント",
+        "実効件数",
+        "反応取引日",
+        "イベント種別",
+        "反応日平均",
+        "+2日平均",
+        "+20日平均",
+    ]
+    focus_primary_headers = [
+        "期間",
+        "観測数",
+        "実効件数",
+        "加重平均",
+        "中央値",
+        "上昇率",
+        "peer差平均",
+    ]
     case_studies = report_payload.get("case_studies", [])  # type: ignore[assignment]
     case_rows = _case_report_rows(case_studies)  # type: ignore[arg-type]
     case_details_markdown, case_details_html = _case_detail_reports(
@@ -851,6 +1018,17 @@ def _render_reports(
 ## 実データからの所見
 
 {findings_markdown}
+
+## 銘柄フォーカス
+
+接続できたNotion記事イベント数が多い順です。最多の `{primary_symbol or "—"}` を
+この版の主対象とし、同一銘柄内のケース集積として期間別に集計します。
+
+{_markdown_table(focus_overview_headers, focus_overview)}
+
+### {primary_symbol or "対象なし"} の期間別集計
+
+{_markdown_table(focus_primary_headers, focus_primary)}
 
 ## 個別ケース分析
 
@@ -929,6 +1107,15 @@ def _render_reports(
   </p>
   <h2>実データからの所見</h2>
   <ul>{findings_html}</ul>
+  <h2>銘柄フォーカス</h2>
+  <p class="note">
+    接続できたNotion記事イベント数が多い順です。最多の
+    <code>{html.escape(primary_symbol or "—")}</code>をこの版の主対象とし、
+    同一銘柄内のケース集積として期間別に集計します。
+  </p>
+  {_html_table(focus_overview_headers, focus_overview)}
+  <h3>{html.escape(primary_symbol or "対象なし")} の期間別集計</h3>
+  {_html_table(focus_primary_headers, focus_primary)}
   <h2>個別ケース分析</h2>
   {_html_table(case_headers, case_rows)}
   <h2>算出値の全期間明細</h2>

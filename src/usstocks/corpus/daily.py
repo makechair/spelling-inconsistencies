@@ -360,6 +360,30 @@ def select_entries(
     return new_selected + due[: max(0, max_symbols - len(new_selected))]
 
 
+def select_target_entries(
+    entries: Sequence[UniverseEntry],
+    symbols: Sequence[str],
+    *,
+    max_symbols: int,
+    max_new_symbols: int,
+    existing_symbols: set[str],
+) -> list[UniverseEntry]:
+    """Resolve an explicit, budgeted one-off selection from the fixed universe."""
+    requested = list(dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip()))
+    if not requested:
+        raise CorpusError("--symbols must contain at least one symbol")
+    if len(requested) > max_symbols:
+        raise CorpusError("--symbols exceeds max symbols per run")
+    by_symbol = {entry.symbol: entry for entry in entries}
+    unknown = [symbol for symbol in requested if symbol not in by_symbol]
+    if unknown:
+        raise CorpusError(f"target symbol is not in universe: {', '.join(unknown)}")
+    new = [symbol for symbol in requested if symbol not in existing_symbols]
+    if len(new) > max_new_symbols:
+        raise CorpusError("--symbols exceeds max new symbols per run")
+    return [by_symbol[symbol] for symbol in requested]
+
+
 def _upload_pending(
     entries: Sequence[UniverseEntry],
     state: dict[str, Any],
@@ -397,6 +421,7 @@ def run(
     force: bool = False,
     max_symbols: int | None = None,
     max_new_symbols: int | None = None,
+    symbols: Sequence[str] | None = None,
     uploader: Uploader = aws_upload,
     client: httpx.Client | None = None,
 ) -> int:
@@ -441,14 +466,33 @@ def run(
     if pending_count:
         log.info("uploaded %d previously staged partition(s)", pending_count)
 
-    selected = select_entries(
-        entries,
-        state,
-        local_root,
-        now=moment,
-        max_symbols=symbol_limit,
-        max_new_symbols=new_symbol_limit,
-        refresh_hours=settings.corpus_refresh_hours,
+    selected = (
+        select_target_entries(
+            entries,
+            symbols,
+            max_symbols=symbol_limit,
+            max_new_symbols=new_symbol_limit,
+            existing_symbols={
+                entry.symbol
+                for entry in entries
+                if (
+                    local_root
+                    / "daily"
+                    / f"symbol={entry.symbol}"
+                    / "part.parquet"
+                ).exists()
+            },
+        )
+        if symbols is not None
+        else select_entries(
+            entries,
+            state,
+            local_root,
+            now=moment,
+            max_symbols=symbol_limit,
+            max_new_symbols=new_symbol_limit,
+            refresh_hours=settings.corpus_refresh_hours,
+        )
     )
     if not selected:
         log.info("all daily corpus partitions are fresh")
@@ -566,6 +610,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="ignore the JST safety window")
     parser.add_argument("--max-symbols", type=int, default=None)
     parser.add_argument("--max-new-symbols", type=int, default=None)
+    parser.add_argument(
+        "--symbols",
+        help="comma-separated universe symbols for a manual targeted run",
+    )
     args = parser.parse_args(argv)
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -575,6 +623,7 @@ def main(argv: list[str] | None = None) -> int:
             force=args.force,
             max_symbols=args.max_symbols,
             max_new_symbols=args.max_new_symbols,
+            symbols=(args.symbols.split(",") if args.symbols is not None else None),
         )
     except CorpusError as exc:
         log.error("%s", exc)

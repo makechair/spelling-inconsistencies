@@ -24,6 +24,7 @@ from usstocks.corpus.daily import (
     read_parquet_rows,
     run,
     select_entries,
+    select_target_entries,
 )
 
 
@@ -97,6 +98,48 @@ def test_new_symbols_are_capped_and_existing_symbols_rotate(tmp_path: Path):
     )
 
     assert [entry.symbol for entry in selected] == ["NEW1", "OLD2", "OLD1"]
+
+
+def test_target_symbols_preserve_request_order_and_require_universe_membership():
+    entries = [
+        UniverseEntry("NVDA", "logic"),
+        UniverseEntry("ARM", "eda_ip"),
+    ]
+
+    selected = select_target_entries(
+        entries,
+        ["arm", "ARM"],
+        max_symbols=1,
+        max_new_symbols=1,
+        existing_symbols=set(),
+    )
+
+    assert selected == [UniverseEntry("ARM", "eda_ip")]
+    for symbols, expected in ((["TSM"], "not in universe"), (["ARM", "NVDA"], "exceeds")):
+        try:
+            select_target_entries(
+                entries,
+                symbols,
+                max_symbols=1,
+                max_new_symbols=1,
+                existing_symbols=set(),
+            )
+        except CorpusError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("invalid explicit target should fail")
+    try:
+        select_target_entries(
+            entries,
+            ["ARM", "NVDA"],
+            max_symbols=2,
+            max_new_symbols=1,
+            existing_symbols=set(),
+        )
+    except CorpusError as exc:
+        assert "max new symbols" in str(exc)
+    else:
+        raise AssertionError("explicit targets must keep the new-symbol cap")
 
 
 def test_new_corporate_action_requires_full_adjustment_refresh():
