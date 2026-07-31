@@ -1546,6 +1546,39 @@
             3 partitionすべてをParquet化してS3へ送信した。
           </p>
         </div>
+
+        <h3>Notionイベント × 株価変動（Phase 3設計）</h3>
+        <p>
+          入力とS3配置は本番稼働まで完了している。次はNotionの各tickerを日足へ展開し、
+          発表後0・1・2・5・20取引日の調整済みリターンをDuckDBで計算する。
+          SQL、境界テスト、Parquet／HTMLレポート生成はまだ未実装。
+        </p>
+        <div class="steps" aria-label="イベントスタディ計算フロー">
+          <div class="step"><span class="step-num">1</span><strong>取引日へ整列</strong><span>published_atをETへ変換。16:00以降・休場日は次の取引日。</span></div>
+          <div class="step"><span class="step-num">2</span><strong>日足return</strong><span><code>adjClose[t+h] / adjClose[t-1] - 1</code>、h=0/1/2/5/20。</span></div>
+          <div class="step"><span class="step-num">3</span><strong>相対化</strong><span>対象を除く同subsector最低3銘柄の等ウェイトreturnを差し引く。</span></div>
+          <div class="step"><span class="step-num">4</span><strong>重複制御</strong><span>同一symbol・反応日・event typeは1/Nで重み付けし、窓の重なりも記録。</span></div>
+          <div class="step"><span class="step-num">5</span><strong>集計</strong><span>平均・中央値・勝率・四分位・95%信頼区間を切り口別に出力。</span></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>設計項目</th><th>初版の判断</th><th>理由／制約</th></tr></thead>
+            <tbody>
+              <tr><td>発表時刻が無い</td><td><code>timing_quality=date_only</code>で保持</td><td>時刻精度が必要な検定とは分離</td></tr>
+              <tr><td>取引日</td><td>銘柄の日足に存在する日付順を使用</td><td>週末・休場日をcalendar加算しない</td></tr>
+              <tr><td>benchmark</td><td>同subsector等ウェイト</td><td>SPY/QQQ/SMH追加による未知のsymbol枠消費を避ける</td></tr>
+              <tr><td>類似記事</td><td>Notionページを残し集計weightで補正</td><td>正本を破壊的に自動マージしない</td></tr>
+              <tr><td>日中反応</td><td>関連分析として明記</td><td>日足では発表前後を分離できない</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout warning">
+          <strong>チャートへのニュースmarkerは次段階</strong>
+          <p>
+            Phase 3は再現可能な集計を先に作る。結果の妥当性を確認後にAPI／UIを追加し、
+            必要なイベントだけPhase 4で分足をオンデマンド取得する。
+          </p>
+        </div>
       </section>
 
       <section id="map">

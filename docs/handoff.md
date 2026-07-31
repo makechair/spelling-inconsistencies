@@ -79,16 +79,21 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
    - 清掃直前のS3バックアップ成功後、`volume=0` の8,134行を削除
      （AAPL 2,966 / MU 2,263 / SKHY 2,905）
    - 誤登録SKHYのwatch/holdを解除
-8. チャートUIをローカル実装・検証:
+8. チャートUIを実装・本番反映:
    - 既定画面を1D・7D・1M・1Yの4分割へ変更
    - 各チャートまたは期間ボタンで拡大し、「4分割」でoverviewへ復帰
    - 4画面は1回の`days=365`応答を共有し、通信の4重化を回避
    - 上限超過時も古い側ではなく最新20,000本を返すようAPIを修正
    - 全154テスト、ruff、実ブラウザで4分割／拡大／期間切替／復帰を確認
+   - `[skip ci]`付きでmainへ反映し、GitHub Actionsを使わずLightsail pull agentで
+     revision `34c1ce8f99d3ec15ff5331309bad5f684f1b91f`へ更新
+   - API/collector/日足corpus/Notion corpusの4 unitがactive、`/api/livez`正常、
+     本番配置済みHTMLに1/7/30/365日の4ペインがあることを確認
 
 コミット履歴（このセッション分、新しい順）:
 
 ```
+34c1ce8 Add iSPEED-style four-pane charts [skip ci]
 ee16839 Complete Notion corpus and data-quality hardening [skip ci]
 47a04ee Turn the teiten open questions into decisions
 9ee7c56 Replace the teiten integration guess with what the code actually does
@@ -131,8 +136,15 @@ Lightsail初回同期まで確認済み。初回同期は368ページを50日付
 
 `docs/analysis-spec.md` 7節に既存の一覧あり。SKHY解除と`volume=0`掃除は完了。
 残る主な運用作業は、実データを見ながらのpoll設定調整とAlpacaキーの
-ローテーション（Alpaca管理画面へのログインが必要）。4分割チャートはローカル検証済みで、
-本番反映は未実施。
+ローテーション（Alpaca管理画面へのログインが必要）。4分割チャートは
+ローカル検証と本番反映まで完了。
+
+### 4-5. Phase 3（Notionイベント × 日足リターン）
+
+**設計確定、実装未着手。** `docs/analysis-spec.md` 6節に、反応取引日の決定、
+0/1/2/5/20取引日リターン、subsector相対リターン、日またぎ重複の重み付け、
+イベント窓の重なり、出力schemaと集計軸を実装可能な粒度で記録した。
+現時点ではDuckDB SQL、テストfixture、Parquet/HTMLレポート生成はまだ無い。
 
 ## 5. 環境・運用上の注意
 
@@ -172,7 +184,7 @@ make install && make dev   # http://127.0.0.1:8000
 
 ## 7. 次に着手するならこの順で
 
-1. 4分割チャート変更を`[skip ci]`でmainへ反映し、Lightsailで表示確認
+1. Phase 3のDuckDB SQL、境界テスト、Parquet/HTMLレポート生成を実装
 2. **次回timerで新規3銘柄追加と共有REST予算を確認**（4xxなら増加を止める）
 3. Alpaca APIキーを管理画面でローテーション
 4. 実測した通信量と空fetch警告を見ながらpoll間隔を調整

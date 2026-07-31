@@ -283,10 +283,10 @@ schema driftを黙って分析データへ混ぜない。
 - **日またぎの重複統合が無い。** `ids` によるクラスタリングは同一実行内限定
   （Notion側の `Sources` 照合による重複排除はあるが、統合ではなくスキップ）。
   母数を増やした結果、日をまたいで同一イベントの記事が複数ページに分散する
-  ケースが増える可能性がある。corpus 側の集計で吸収できるか、Phase 2 着手時に
-  再検討する。
-- 上記1〜4の実装完了後、実際のカバレッジ（`ai_platform`/`eda_ip` の記事が
-  上位4件に入るようになったか）を運用データで確認してから Phase 2 に進む。
+  ケースが増える可能性がある。Phase 3ではページを破壊的に統合せず、
+  同一銘柄・反応取引日・イベント種別ごとの重複数と重みを持たせて集計する。
+- 実際のカバレッジ（`ai_platform`/`eda_ip` の記事が上位4件に入るようになったか）は
+  運用データで継続確認する。これはPhase 2の導入ブロッカーではない。
 
 ## 6. フェーズ
 
@@ -298,9 +298,72 @@ schema driftを黙って分析データへ混ぜない。
 | 3 | 未着手 | イベントスタディ | DuckDB クエリ / ノートブック | 1, 2 |
 | 4（任意） | 未着手 | イベント窓の分足オンデマンド取得 | 既存 backfill の再利用 | 3 |
 
-Phase 1 と Phase 2 は独立しており、並行して進められる。teiten 実装の実態確認は
-完了した（5節）。Phase 2 着手前に残る判断は5節末の「新たに判明したブロッカー」
-3点（永続化方式／処理量の十分性／ニュース対象範囲のカバレッジ）。
+Phase 1 と Phase 2 は独立しており、どちらも本番稼働まで完了した。teiten 実装の
+実態確認も完了している（5節）。次の実装対象はPhase 3。
+
+### Phase 3 の設計到達点
+
+Phase 3は**日足によるイベントスタディを先に作る**。日足とニュースの入力schema、
+S3配置、実行基盤は確定済みで、以下を初版仕様とする。SQL・テスト・レポート生成は
+まだ未実装。
+
+#### 反応日の決め方
+
+1. `published_at` に時刻とoffsetがあれば `America/New_York` に変換する。
+2. 米国取引日の16:00 ETより前ならその日、16:00 ET以降なら次の取引日を
+   `reaction_date` とする。週末・休場日も次の取引日へ送る。
+3. `published_at` が日付だけ、または欠落して `event_date` にフォールバックした行は
+   `timing_quality=date_only` とする。結果には残すが、時刻精度が必要な検定とは分ける。
+4. 取引日判定はカレンダー日加算ではなく、各銘柄の日足に存在する日付列を使う。
+
+日中発表は発表前の値動きを日足から分離できない。この初版は因果推定ではなく
+「そのニュースと同日以降の値動きの関連」を測るものと明記する。
+
+#### リターン
+
+銘柄ごとに`reaction_date`を`t=0`とし、直前取引日の調整済み終値を基準にする。
+
+```text
+raw_return_h = adjClose[t+h] / adjClose[t-1] - 1
+h = 0, 1, 2, 5, 20取引日
+```
+
+- 分割・配当をまたぐため、必ず`adjClose`を使う
+- 欠損した取引日を0で補間しない。必要な端点が無いhorizonは`NULL`とする
+- 初版の比較対象は、同じ`subsector`に属する銘柄の等ウェイトリターン
+  （対象銘柄を除外、最低3銘柄）とする
+- `abnormal_return_h = raw_return_h - subsector_return_h`
+- SPY/QQQ/SMH等の外部benchmarkは、Tiingoの未知の月間ユニークシンボル枠を
+  新たに消費するため初版の必須条件にしない
+
+#### 重複・重なり
+
+- Notionページは正本なので削除・自動マージしない
+- `symbol + reaction_date + event_type`単位の`event_group_size`を出し、
+  集計時の既定ウェイトを`1 / event_group_size`とする
+- 同じ銘柄で20取引日窓が重なる別イベントには`overlap_count`を付ける
+- 記述統計には全件を残し、信頼区間・有意性を見る集計では重複窓を除外した結果も併記する
+
+#### 出力と切り口
+
+`event_returns.parquet`は最低限、`page_id`, `symbol`, `reaction_date`,
+`timing_quality`, `event_type`, `sentiment`, `confidence`, `importance`,
+`subsector`, 各horizonの`raw_return`/`abnormal_return`,
+`event_group_size`, `event_weight`, `overlap_count`を持つ。
+
+集計は件数だけでなく中央値、平均、勝率、四分位、95%信頼区間を出し、次の軸で切る。
+
+- `event_type`
+- `sentiment`
+- `subsector`
+- `confidence`帯
+- `importance`
+- 発表タイミング（pre-market / regular / after-hours / date-only）
+
+初版の成果物はDuckDB SQL、fixtureを使った境界テスト、Parquet出力、
+Markdown/HTMLレポートとする。現在の1分足チャートへのニュースmarker表示は別機能であり、
+Phase 3の集計結果が妥当と確認できてからAPI/UIを追加する。Phase 4は必要なイベントだけ
+分足をオンデマンド取得し、日中の反応窓を細分化する任意拡張とする。
 
 ## 7. 未処理のTODO（本体側）
 

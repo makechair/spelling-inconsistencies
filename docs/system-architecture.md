@@ -8,6 +8,7 @@
 > 注意: Terraform 管理外の手動設定（Cloudflare Tunnel／Access／DNS）は未検証である。
 > 追記: 2026-07-31 に定量分析用の日足コーパス（Phase 1）とNotionニュースコーパス
 > （Phase 2）を実装し、本書19節へREST予算共有、差分同期、S3確定フローを追加した。
+> Phase 3のイベントスタディは入力基盤と初版仕様まで確定し、SQL／レポートは未実装。
 
 > **2026-07-29 の前提変更:** 仕様書が構成全体の土台に置いていた「WebSocket で常時
 > 受信し1秒ごとに更新する」が、Tiingo・Alpaca いずれの無料枠でも成立しないことが
@@ -1188,6 +1189,48 @@ Parquetの内容ハッシュが同じ日付はPUTしない。全ページがア�
 未知のenumや範囲外confidenceは黙ってnullへ落とさず同期全体を失敗させるため、
 teiten側のschema変更を分析結果へ混入する前に検知できる。oneshotは`MemoryMax=384M`、
 毎日13:00 JST実行で、常駐メモリとTiingo REST枠を消費しない。
+
+### 19.6 Notionイベントと株価変動の突合（Phase 3設計）
+
+Phase 3では、ニュースの各`ticker`を日足の`symbol`へ展開し、発表後
+0/1/2/5/20取引日の調整済みリターンを計算する。入力とS3配置は本番稼働中だが、
+DuckDB SQL、テストfixture、Parquet／HTMLレポート生成は未実装である。
+
+```mermaid
+flowchart LR
+    NEWS["news Parquet<br/>page_id / published_at / tickers<br/>event_type / sentiment"] --> EXPLODE["tickerを1行ずつ展開"]
+    DAILY["daily Parquet<br/>symbol / date / adjClose"] --> CAL["銘柄ごとの取引日列"]
+    EXPLODE --> ALIGN["16:00 ET境界で<br/>reaction_dateへ整列"]
+    CAL --> ALIGN
+    ALIGN --> RETURN["t-1を基準に<br/>0/1/2/5/20日return"]
+    SECTOR["sectors Parquet"] --> BENCH["同subsector等ウェイト<br/>対象銘柄は除外"]
+    RETURN --> ABNORMAL["raw - subsector<br/>abnormal return"]
+    BENCH --> ABNORMAL
+    ABNORMAL --> DEDUP["同一symbol/date/typeを<br/>1/Nで重み付け"]
+    DEDUP --> REPORT["event_returns.parquet<br/>Markdown / HTML report"]
+```
+
+発表時刻をNew York時間へ直し、取引日の16:00より前は当日、以後・週末・休場日は
+次の取引日を`reaction_date`とする。時刻が無いイベントは`timing_quality=date_only`
+として残すが、時刻精度が必要な検定から分ける。カレンダー日を単純加算せず、
+銘柄ごとの日足に存在する日付順で`t+h`を決める。
+
+`raw_return_h = adjClose[t+h] / adjClose[t-1] - 1`とし、同じsubsectorの他銘柄
+（最低3銘柄）の等ウェイトリターンを引いて`abnormal_return_h`を得る。
+SPY／QQQ／SMHは未知の月間ユニークシンボル枠を消費するため初版の必須条件にしない。
+必要な終値が無いhorizonは補間せず`NULL`にする。
+
+日またぎの類似記事はNotionの正本を破壊的に統合しない。同一
+`symbol + reaction_date + event_type`のページ数を`event_group_size`とし、
+既定集計ウェイトを`1 / event_group_size`にする。20取引日窓が別イベントと重なる
+場合は`overlap_count`を付け、全件の記述統計と重複窓を除いた検定を併記する。
+集計軸はevent type、sentiment、subsector、confidence帯、importance、発表時間帯。
+平均だけでなく中央値、勝率、四分位、95%信頼区間を出す。
+
+日中発表前後を日足だけで分離することはできないため、この段階で測れるのは
+「イベントと同日以降の変動の関連」であり、厳密な因果効果ではない。現在の
+1分足チャートへのニュースmarkerはPhase 3の妥当性確認後に別API/UIとして追加し、
+必要ならPhase 4で対象イベントだけ分足をオンデマンド取得する。
 
 ## 20. まとめ
 
