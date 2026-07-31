@@ -540,7 +540,7 @@ body {
   font-size: 13px;
 }
 .report-focus-summary { margin: 0 0 16px; line-height: 1.7; }
-.report-focus-cards { grid-template-columns: repeat(4, minmax(130px, 1fr)); margin-bottom: 18px; }
+.report-focus-cards { grid-template-columns: repeat(5, minmax(120px, 1fr)); margin-bottom: 18px; }
 .report-focus-cards article { background: var(--bg); }
 .report-focus-cards strong { font-size: 18px; overflow-wrap: anywhere; }
 

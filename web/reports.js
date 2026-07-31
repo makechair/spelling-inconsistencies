@@ -187,9 +187,12 @@ function renderFocusSymbol(report, symbol) {
   );
   const reactionDates = [...new Set(studies.map((study) => study.reaction_date))].sort();
   const eventTypes = new Map();
+  const tickerOrigins = new Map();
   studies.forEach((study) => {
     const type = study.event_type || "unknown";
     eventTypes.set(type, (eventTypes.get(type) || 0) + 1);
+    const origin = study.ticker_origin || "unknown";
+    tickerOrigins.set(origin, (tickerOrigins.get(origin) || 0) + 1);
   });
   const effective = studies.reduce(
     (total, study) => total + Number(study.event_weight ?? 1),
@@ -198,6 +201,12 @@ function renderFocusSymbol(report, symbol) {
   text("focus-events", number(studies.length, 0));
   text("focus-effective", number(effective, 1));
   text("focus-dates", number(reactionDates.length, 0));
+  text(
+    "focus-origins",
+    [...tickerOrigins.entries()]
+      .map(([origin, count]) => `${origin} ${count}`)
+      .join(" / "),
+  );
   text(
     "focus-types",
     [...eventTypes.entries()].map(([type, count]) => `${type} ${count}`).join(" / "),
@@ -290,6 +299,10 @@ function metricGrid(study, context) {
     ["イベント日", study.event_date],
     ["反応候補日", study.candidate_date],
     ["反応取引日", study.reaction_date],
+    [
+      "ticker根拠",
+      `${study.ticker_origin || "unknown"} / ${study.ticker_evidence || "—"}`,
+    ],
     ["時刻品質", `${study.timing_quality || "—"} / ${study.timing_bucket || "—"}`],
     ["センチメント", study.sentiment || "—"],
     ["分類信頼度", number(study.confidence, 2)],

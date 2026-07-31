@@ -151,12 +151,12 @@ sudo -u usstocks /bin/bash -lc \
   USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus \
   USSTOCKS_CORPUS_UNIVERSE_PATH=/opt/usstocks/current/data/universe.csv \
   /opt/usstocks/current/venv/bin/python -m usstocks.corpus.daily \
-  --max-symbols 3 --max-new-symbols 3 --symbols ARM,SNPS,CDNS'
+  --max-symbols 3 --max-new-symbols 3 --symbols MU,WDC,STX'
 ```
 
 `--symbols`は`data/universe.csv`内だけを許し、重複を除いて指定順に処理する。
-通常時間外に緊急実行するときだけ`--force`を追加する。ARM分析ではARM本体に加え、
-同subsectorのSNPS／CDNSを参考benchmark用に取得する。3社構成なので対象を除くpeerは
+通常時間外に緊急実行するときだけ`--force`を追加する。MU分析ではMU本体に加え、
+同subsectorのWDC／STXを参考benchmark用に取得する。3社構成なので対象を除くpeerは
 最大2社であり、`analysis_min_peers=3`を満たす正式abnormal returnにはならない。
 
 ### Notionニュースコーパス
@@ -211,6 +211,9 @@ JSTの日付ごとに成果物を残し、次回は直前の`report.json`を読�
 「銘柄フォーカス」は接続済みNotion記事イベント数が最多の銘柄を既定選択し、
 記事数、実効件数、反応取引日数、イベント種別、0／1／2／5／20日の加重平均・中央値・
 上昇率・peer差平均を同一銘柄内で表示する。URLの`symbol` queryで別銘柄も選択できる。
+ニュース正本の`ticker`は変更せず、Micron／マイクロン、Western Digital、Seagateの
+明示的な企業名を分析時だけ補完する。各ケースへ`explicit`または`inferred_alias`と
+一致語を保存するため、記事数の選定根拠を監査できる。
 「今回の読み取り」はLLM呼び出しではなく、同じ数値を標本数付きで文章化したルールベース出力。
 根拠は各ケース下の全期間明細で検算でき、0／1／2／5／20日の未観測値も`—`として残す。
 

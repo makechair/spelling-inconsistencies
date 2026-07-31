@@ -14,7 +14,7 @@ from usstocks.corpus.daily import (
     write_daily_parquet,
     write_universe_parquet,
 )
-from usstocks.corpus.event_study import classify_event_time, run
+from usstocks.corpus.event_study import _event_symbols, classify_event_time, run
 from usstocks.corpus.news import write_partition
 
 
@@ -185,6 +185,20 @@ def test_event_time_uses_new_york_close_boundary():
     ) == (date(2026, 7, 13), "date_only", "date_only")
 
 
+def test_event_symbols_preserve_explicit_tags_and_audit_memory_aliases():
+    assert _event_symbols([], "MicronとマイクロンのHBM供給") == [
+        ("MU", "inferred_alias", "Micron")
+    ]
+    assert _event_symbols(["mu"], "Micron Technology") == [
+        ("MU", "explicit", "notion_ticker")
+    ]
+    assert _event_symbols([], "Western Digital and Seagate") == [
+        ("WDC", "inferred_alias", "Western Digital"),
+        ("STX", "inferred_alias", "Seagate"),
+    ]
+    assert _event_symbols([], "compute unit and armature") == []
+
+
 def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path):
     _write_inputs(tmp_path)
     settings = _settings(tmp_path)
@@ -268,6 +282,8 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
         study for study in report["case_studies"] if study["page_id"] == "page-nvda-1"
     )
     assert nvda_case["historical_percentile_0d"] is not None
+    assert nvda_case["ticker_origin"] == "explicit"
+    assert nvda_case["ticker_evidence"] == "notion_ticker"
     assert nvda_case["historical_observations_0d"] > 0
     assert nvda_case["reaction_volume_ratio_60d"] == 1.0
     assert nvda_case["exploratory_relative_return_0d"] == nvda_case["abnormal_return_0d"]

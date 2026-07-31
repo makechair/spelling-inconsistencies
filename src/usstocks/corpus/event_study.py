@@ -14,6 +14,7 @@ import html
 import json
 import logging
 import os
+import re
 import shutil
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
@@ -40,6 +41,37 @@ OUTPUT_NAMES = (
     "report.md",
     "report.html",
 )
+EVENT_TICKER_ALIASES = {
+    "MU": (
+        (re.compile(r"(?<![A-Z0-9])MU(?![A-Z0-9])", re.IGNORECASE), "MU"),
+        (
+            re.compile(
+                r"(?<![A-Z0-9])Micron(?: Technology)?(?![A-Z0-9])",
+                re.IGNORECASE,
+            ),
+            "Micron",
+        ),
+        (re.compile("マイクロン"), "マイクロン"),
+    ),
+    "WDC": (
+        (re.compile(r"(?<![A-Z0-9])WDC(?![A-Z0-9])", re.IGNORECASE), "WDC"),
+        (
+            re.compile(
+                r"(?<![A-Z0-9])Western Digital(?![A-Z0-9])", re.IGNORECASE
+            ),
+            "Western Digital",
+        ),
+        (re.compile("ウエスタンデジタル"), "ウエスタンデジタル"),
+    ),
+    "STX": (
+        (re.compile(r"(?<![A-Z0-9])STX(?![A-Z0-9])", re.IGNORECASE), "STX"),
+        (
+            re.compile(r"(?<![A-Z0-9])Seagate(?![A-Z0-9])", re.IGNORECASE),
+            "Seagate",
+        ),
+        (re.compile("シーゲイト"), "シーゲイト"),
+    ),
+}
 
 
 def analysis_s3_root(settings: Settings) -> str:
@@ -116,6 +148,8 @@ def _timed_event_schema(pa: Any) -> Any:
             ("event_key", pa.string()),
             ("page_id", pa.string()),
             ("symbol", pa.string()),
+            ("ticker_origin", pa.string()),
+            ("ticker_evidence", pa.string()),
             ("event_date", pa.date32()),
             ("published_at", pa.string()),
             ("headline", pa.string()),
@@ -134,16 +168,41 @@ def _timed_event_schema(pa: Any) -> Any:
     )
 
 
+def _event_symbols(
+    explicit_symbols: Sequence[str],
+    text: str,
+) -> list[tuple[str, str, str]]:
+    """Return symbol, origin and evidence without changing the source news row."""
+
+    resolved: dict[str, tuple[str, str]] = {}
+    for symbol in explicit_symbols:
+        normalized = symbol.strip().upper()
+        if normalized:
+            resolved[normalized] = ("explicit", "notion_ticker")
+    for symbol, aliases in EVENT_TICKER_ALIASES.items():
+        if symbol in resolved:
+            continue
+        for pattern, label in aliases:
+            if pattern.search(text):
+                resolved[symbol] = ("inferred_alias", label)
+                break
+    return [
+        (symbol, origin, evidence)
+        for symbol, (origin, evidence) in resolved.items()
+    ]
+
+
 def _build_timed_events(connection: Any, pa: Any) -> Any:
-    exploded = connection.execute(
+    news_rows = connection.execute(
         """
         SELECT
-            page_id || ':' || ticker AS event_key,
             page_id,
-            ticker AS symbol,
             event_date,
             published_at,
             headline,
+            summary_ja,
+            my_take,
+            tickers,
             event_type,
             sentiment,
             confidence,
@@ -153,21 +212,35 @@ def _build_timed_events(connection: Any, pa: Any) -> Any:
             url,
             notion_url
         FROM news_input
-        CROSS JOIN unnest(tickers) AS ticker_rows(ticker)
-        WHERE ticker IS NOT NULL AND ticker <> ''
-        ORDER BY page_id, ticker
+        ORDER BY page_id
         """
     ).to_arrow_table()
     rows: list[dict[str, object]] = []
-    for row in exploded.to_pylist():
+    for news_row in news_rows.to_pylist():
         candidate, quality, bucket = classify_event_time(
-            row["published_at"],
-            row["event_date"],
+            news_row["published_at"],
+            news_row["event_date"],
         )
-        row["candidate_date"] = candidate
-        row["timing_quality"] = quality
-        row["timing_bucket"] = bucket
-        rows.append(row)
+        article_text = " ".join(
+            str(news_row.get(field) or "")
+            for field in ("headline", "summary_ja", "my_take")
+        )
+        for symbol, origin, evidence in _event_symbols(
+            news_row.get("tickers") or [], article_text
+        ):
+            row = {
+                key: value
+                for key, value in news_row.items()
+                if key not in {"summary_ja", "my_take", "tickers"}
+            }
+            row["event_key"] = f"{news_row['page_id']}:{symbol}"
+            row["symbol"] = symbol
+            row["ticker_origin"] = origin
+            row["ticker_evidence"] = evidence
+            row["candidate_date"] = candidate
+            row["timing_quality"] = quality
+            row["timing_bucket"] = bucket
+            rows.append(row)
     return pa.Table.from_pylist(rows, schema=_timed_event_schema(pa))
 
 
@@ -335,9 +408,12 @@ def _symbol_focus(case_studies: list[dict[str, object]]) -> list[dict[str, objec
     ):
         reaction_dates = sorted({str(study["reaction_date"]) for study in studies})
         event_types: dict[str, int] = {}
+        ticker_origins: dict[str, int] = {}
         for study in studies:
             event_type = str(study.get("event_type") or "unknown")
             event_types[event_type] = event_types.get(event_type, 0) + 1
+            origin = str(study.get("ticker_origin") or "unknown")
+            ticker_origins[origin] = ticker_origins.get(origin, 0) + 1
 
         horizon_rows: list[dict[str, object]] = []
         for horizon in HORIZONS:
@@ -394,6 +470,7 @@ def _symbol_focus(case_studies: list[dict[str, object]]) -> list[dict[str, objec
                 "reaction_dates": reaction_dates,
                 "reaction_date_count": len(reaction_dates),
                 "event_types": dict(sorted(event_types.items())),
+                "ticker_origins": dict(sorted(ticker_origins.items())),
                 "horizons": horizon_rows,
             }
         )
@@ -742,12 +819,17 @@ def _focus_report_rows(
             f"{event_type} {count}"
             for event_type, count in focus.get("event_types", {}).items()  # type: ignore[union-attr]
         )
+        ticker_origins = " / ".join(
+            f"{origin} {count}"
+            for origin, count in focus.get("ticker_origins", {}).items()  # type: ignore[union-attr]
+        )
         overview.append(
             [
                 str(focus["symbol"]),
                 str(focus["article_events"]),
                 _number(focus["effective_events"]),
                 str(focus["reaction_date_count"]),
+                ticker_origins or "—",
                 event_types or "—",
                 _percent(horizons.get(0, {}).get("weighted_mean_return")),
                 _percent(horizons.get(2, {}).get("weighted_mean_return")),
@@ -813,6 +895,11 @@ def _case_detail_reports(
             ["イベント日", str(study.get("event_date") or "—")],
             ["反応候補日", str(study.get("candidate_date") or "—")],
             ["反応取引日", reaction_date],
+            [
+                "ticker根拠",
+                f"{study.get('ticker_origin') or 'unknown'} / "
+                f"{study.get('ticker_evidence') or '—'}",
+            ],
             [
                 "時刻品質",
                 f"{study.get('timing_quality') or '—'} / "
@@ -951,6 +1038,7 @@ def _render_reports(
         "記事イベント",
         "実効件数",
         "反応取引日",
+        "ticker根拠",
         "イベント種別",
         "反応日平均",
         "+2日平均",
