@@ -86,15 +86,25 @@
       <div class="report-focus-charts">
         <article>
           <h3>期間別の株価反応</h3>
-          <p>0／1／2／5／20日を実際の日数間隔で配置</p>
+          <p class="report-chart-description">ニュース反応日から各期間までの累計リターンを、独立した集計点として比較します。点の間は未観測のため結びません。</p>
           <svg id="focus-horizon-chart" viewBox="0 0 720 300" role="img"
                aria-label="期間別の加重平均、反応日中央値、peer差"></svg>
+          <div class="report-chart-guide">
+            <strong>判断の読み方</strong>
+            <p>0%より上は上昇、下は下落です。平均より外れ値に強い「反応日中央値」を重視し、紫のpeer差で同業株にも共通する動きかを確認します。</p>
+            <p id="focus-horizon-interpretation" class="report-chart-interpretation"></p>
+          </div>
         </article>
         <article>
           <h3>反応日の時系列</h3>
-          <p>記事が対応した取引日の1日リターン。点の大きさは出来高比</p>
+          <p class="report-chart-description">各ニュース反応日の1日リターンです。株価そのものの連続チャートではありません。</p>
           <svg id="focus-timeline-chart" viewBox="0 0 720 300" role="img"
                aria-label="反応取引日ごとの1日リターン"></svg>
+          <div class="report-chart-guide">
+            <strong>判断の読み方</strong>
+            <p>緑は上昇、赤は下落です。点が大きいほど出来高が過去60日中央値より多く、市場参加者を伴った反応と読めます。</p>
+            <p id="focus-timeline-interpretation" class="report-chart-interpretation"></p>
+          </div>
         </article>
       </div>
       <div class="report-table-wrap">

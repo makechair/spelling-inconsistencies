@@ -11,6 +11,8 @@ const elements = {
   focusBody: document.querySelector("#focus-body"),
   focusHorizonChart: document.querySelector("#focus-horizon-chart"),
   focusTimelineChart: document.querySelector("#focus-timeline-chart"),
+  focusHorizonInterpretation: document.querySelector("#focus-horizon-interpretation"),
+  focusTimelineInterpretation: document.querySelector("#focus-timeline-interpretation"),
   caseStudyBody: document.querySelector("#case-study-body"),
   caseStudyWrap: document.querySelector("#case-study-table-wrap"),
   caseStudyEmpty: document.querySelector("#case-study-empty"),
@@ -252,6 +254,7 @@ function drawChartGrid(svg, geometry) {
 function renderHorizonChart(studies) {
   const svg = elements.focusHorizonChart;
   svg.replaceChildren();
+  elements.focusHorizonInterpretation.textContent = "算出可能な観測がありません。";
   const points = HORIZONS.map((horizon) => ({
     horizon,
     ...focusStatistics(studies, horizon),
@@ -267,38 +270,56 @@ function renderHorizonChart(studies) {
   if (!values.length) return;
   const geometry = chartGeometry(values);
   drawChartGrid(svg, geometry);
-  const x = (horizon) => geometry.left + (horizon / 20) * geometry.width;
+  const x = (horizon) => {
+    const index = HORIZONS.indexOf(horizon);
+    return geometry.left + (index / (HORIZONS.length - 1)) * geometry.width;
+  };
 
   series.forEach((item, index) => {
     const available = points.filter((point) => point[item.key] != null);
     if (!available.length) return;
-    const d = available
-      .map((point, pointIndex) =>
-        `${pointIndex ? "L" : "M"}${x(point.horizon)},${geometry.y(point[item.key])}`,
-      )
-      .join(" ");
-    svg.append(svgNode("path", { d, class: item.className }));
     available.forEach((point) => {
+      const pointX = x(point.horizon) + (index - 1) * 9;
+      const pointY = geometry.y(point[item.key]);
+      svg.append(svgNode("line", {
+        x1: pointX,
+        y1: geometry.y(0),
+        x2: pointX,
+        y2: pointY,
+        class: item.className,
+        opacity: 0.55,
+      }));
       const circle = svgNode("circle", {
-        cx: x(point.horizon),
-        cy: geometry.y(point[item.key]),
-        r: 4,
+        cx: pointX,
+        cy: pointY,
+        r: 5,
         fill: item.color,
         class: "report-chart-point",
       });
       circle.append(svgNode("title", {}, `${item.label} ${percent(point[item.key], true)}`));
       svg.append(circle);
+      if (item.key === "median") {
+        svg.append(svgNode(
+          "text",
+          {
+            x: pointX,
+            y: pointY + (point[item.key] >= 0 ? -10 : 17),
+            "text-anchor": "middle",
+            class: "report-chart-value",
+          },
+          percent(point[item.key], true),
+        ));
+      }
     });
     const legendX = geometry.left + index * 142;
     svg.append(
-      svgNode("line", {
-        x1: legendX,
-        y1: 18,
-        x2: legendX + 22,
-        y2: 18,
-        class: item.className,
+      svgNode("circle", {
+        cx: legendX + 5,
+        cy: 18,
+        r: 5,
+        fill: item.color,
       }),
-      svgNode("text", { x: legendX + 28, y: 22, class: "report-chart-label" }, item.label),
+      svgNode("text", { x: legendX + 16, y: 22, class: "report-chart-label" }, item.label),
     );
   });
 
@@ -314,11 +335,29 @@ function renderHorizonChart(studies) {
       horizon === 0 ? "反応日" : `+${horizon}日`,
     ));
   });
+
+  const day0 = points.find((point) => point.horizon === 0);
+  const day5 = points.find((point) => point.horizon === 5);
+  const day20 = points.find((point) => point.horizon === 20);
+  const trend = day5?.median == null
+    ? "5日後までの方向はまだ判定できません。"
+    : day5.median < 0
+      ? `5日後中央値は${percent(day5.median, true)}で、過去事例は短期的に下落側へ偏っています。`
+      : `5日後中央値は${percent(day5.median, true)}で、過去事例は短期的に上昇側へ偏っています。`;
+  const movement = day0?.median != null && day5?.median != null
+    ? `反応日${percent(day0.median, true)}から5日後${percent(day5.median, true)}へ変化しました。`
+    : "";
+  const longTerm = !day20 || day20.dateEvents < 5
+    ? `20日後は${day20?.dateEvents || 0}反応日しかなく、長期判断には使えません。`
+    : `20日後は${day20.dateEvents}反応日の観測があります。`;
+  elements.focusHorizonInterpretation.textContent =
+    `今回：${movement}${trend}${longTerm} 単独の売買シグナルではなく、価格トレンドと合わせて使います。`;
 }
 
 function renderTimelineChart(studies) {
   const svg = elements.focusTimelineChart;
   svg.replaceChildren();
+  elements.focusTimelineInterpretation.textContent = "算出可能な反応日がありません。";
   const byDate = new Map();
   studies.forEach((study) => {
     if (study.raw_return_0d == null || byDate.has(study.reaction_date)) return;
@@ -382,6 +421,16 @@ function renderTimelineChart(studies) {
       ));
     }
   });
+
+  const strongest = points.reduce((best, point) =>
+    Math.abs(point.value) > Math.abs(best.value) ? point : best,
+  );
+  const highVolume = points.filter((point) => point.volume >= 1.5).length;
+  const positive = points.filter((point) => point.value > 0).length;
+  elements.focusTimelineInterpretation.textContent =
+    `今回：最大変動は${strongest.date}の${percent(strongest.value, true)}です。` +
+    `${points.length}反応日のうち上昇は${positive}日、出来高1.5倍以上は${highVolume}日でした。` +
+    "大きな棒が一方向に継続するかを確認し、単発なら個別ケースとして扱います。";
 }
 
 function renderFocusSymbol(report, symbol) {
