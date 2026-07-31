@@ -1,7 +1,7 @@
 # 定量分析コーパス — 引き継ぎ仕様
 
 > 目的: ニュース・決算（Notion）と株価変動を突き合わせ、定量分析を可能にする。
-> 状態: **Phase 0 完了、Phase 1 実装・ローカル検証完了（本番導入前）**。
+> 状態: **Phase 0・Phase 1とも完了。Phase 1は本番systemd導入・初回3銘柄検証済み**。
 > 2026-07-31 時点の確定事項をまとめたもの。
 > 読み方: 新しいセッションはこの1枚を読めば作業に入れる。**ここに書かれた事実を
 > 再調査しないこと** — いずれも実測で確定済みで、再検証にはAPI枠と時間がかかる。
@@ -128,7 +128,7 @@ s3://<既存バックアップバケット>/corpus/
 | 取得・Parquet化 | `src/usstocks/corpus/daily.py` |
 | systemd | `usstocks-corpus.service` / `.timer` |
 | S3権限 | 既存backup uploaderに `corpus/*` の `PutObject` を追加 |
-| 検証 | 全139テスト通過、ruff lint通過 |
+| 検証 | 全141テスト通過、ruff lint通過、本番初回3銘柄成功 |
 
 無人実行の既定値は、1回10銘柄まで、そのうち新規銘柄は3件まで。新規をCSV順に
 少数ずつ増やし、既存は `last_success_utc` が古い順に巡回する。APIがHTTPエラーを
@@ -147,14 +147,17 @@ timerは **Tue–Sat 03:30 UTC（12:30 JST）**。これは直前のMon–Fri米
 合意済みの09:00–17:00 JST内に収まる。`Persistent=true` による時間外のcatch-upは
 スクリプト自身が拒否し、次の定刻まで待つ。
 
-初回本番導入は、Terraformでbackup uploaderの `corpus/*` 権限を反映した後、
-systemd unitを再導入する。
+本番導入は2026-07-31に完了した。backup uploaderには `daily/*` に加えて
+`corpus/*` だけを許可し、unitを個別配置してAPIを余分に再起動せずtimerを有効化した。
+初回実行はNVDA 6,922行、AMD 9,211行、INTC 9,211行（いずれも2026-07-30まで）を
+取得・Parquet化・S3 uploadし、`daily corpus run complete: 3/3` で正常終了した。
+本番envの `AWS_DEFAULT_REGION` に `p-northeast-1` という誤記が見つかったため、
+`ap-northeast-1` へ修正済み。S3送信はAWS CLIではなくrevision venv内のboto3を使う。
 
 ```bash
-sudo /opt/usstocks/app/deploy/systemd/install.sh /opt/usstocks/app
 systemctl list-timers usstocks-corpus.timer
 
-# 09:00–17:00 JST内で、既定の新規3銘柄だけを初回取得
+# 09:00–17:00 JST内で手動実行する場合
 sudo systemctl start usstocks-corpus.service
 journalctl -u usstocks-corpus.service --since today
 ```
@@ -261,7 +264,7 @@ Mac ローカル、コードは GitHub に無い）。GitHub上の別セッシ�
 | # | 状態 | 内容 | 成果物 | 依存 |
 |---|---|---|---|---|
 | 0 | **完了** | 日足エンドポイントの検証 | プローブ出力 | — |
-| 1 | **実装・ローカル検証完了／本番導入前** | 日足コーパス | `universe.csv`, 取得スクリプト, systemd timer, S3 Parquet | 0 |
+| 1 | **完了（本番稼働中）** | 日足コーパス | `universe.csv`, 取得スクリプト, systemd timer, S3 Parquet | 0 |
 | 2 | 未着手 | Notion取り込み + 抽出統合 | teiten スキーマ拡張, corpus への書き出し | 永続化方式の決定、カバレッジ確認 |
 | 3 | 未着手 | イベントスタディ | DuckDB クエリ / ノートブック | 1, 2 |
 | 4（任意） | 未着手 | イベント窓の分足オンデマンド取得 | 既存 backfill の再利用 | 3 |
@@ -273,7 +276,8 @@ Phase 1 と Phase 2 は独立しており、並行して進められる。teiten
 ## 7. 未処理のTODO（本体側）
 
 - [x] `background_poll_seconds` のコード既定値と `.env.example` を 1800 → 3600 に変更
-      （本番 `/etc/usstocks/usstocks.env` の値確認・反映は本番導入時に行う）
+      （本番envは未指定のため、デプロイ後は3600秒のコード既定値が有効）
+- [x] 本番 `AWS_DEFAULT_REGION` の誤記を `ap-northeast-1` へ修正
 - [ ] SKHY をウォッチリストから削除（空レスポンスを引き続けて枠を消費している）
 - [ ] `DELETE FROM bars_1m WHERE volume = 0`（出来高0の足の掃除、未実行）
 - [ ] Alpaca APIキーのローテーション（チャットに露出済み）

@@ -1513,12 +1513,12 @@
           </table>
         </div>
 
-        <div class="callout warning">
-          <strong>本番導入には2段階必要</strong>
+        <div class="callout">
+          <strong>本番導入・初回検証済み（2026-07-31）</strong>
           <p>
-            Terraformでbackup uploaderの<code>corpus/*</code>権限を反映し、その後
-            <code>deploy/systemd/install.sh</code>を再実行して新しいservice／timerを
-            <code>/etc/systemd/system</code>へ導入する。通常のpull deployだけではunitは増えない。
+            backup uploaderへ<code>corpus/*</code>だけを追加許可し、service／timerを導入済み。
+            初回はNVDA 6,922行、AMD 9,211行、INTC 9,211行を2026-07-30まで取得し、
+            3 partitionすべてをParquet化してS3へ送信した。
           </p>
         </div>
       </section>

@@ -53,14 +53,18 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
 3. Phase 0をLightsailで実行済み。AAPLはHTTP 200、2,344,266 bytes、9,211行、
    1990-01-02〜2026-07-30、`adjClose`/`splitFactor`/`divCash`あり。50銘柄外挿は
    約117.2 MB（1 GB枠の11.7%）。詳細は `docs/analysis-spec.md` 2節
-4. Phase 1を実装し、全139テストとruff lintが通過:
+4. Phase 1を実装し、全141テストとruff lintが通過:
    - `data/universe.csv`（50銘柄）
    - `src/usstocks/corpus/daily.py`（共有REST予算、Parquet、S3 upload）
    - `deploy/systemd/usstocks-corpus.service` / `.timer`
    - `infra/terraform/backup.tf` の `corpus/*` 書き込み権限
    - 新規銘柄は1回3件、全体10件まで。HTTPエラーで残りを停止
-5. **Phase 1 はまだ main への反映・本番導入前。** Terraform権限反映と
-   systemd installer再実行後に、最初の3銘柄を取得する
+5. Phase 1を`main`へ反映し、GitHub Actionsを使わずLightsailのpull agentで本番導入済み:
+   - `usstocks-corpus.timer` はenabled/active（Tue–Sat 12:30 JST）
+   - IAMは既存bucketの `daily/*` と `corpus/*` へのPutObject/Listだけ
+   - 初回はNVDA 6,922行、AMD 9,211行、INTC 9,211行をS3へ送信し3/3成功
+   - 本番envの誤記 `AWS_DEFAULT_REGION=p-northeast-1` は
+     `ap-northeast-1` へ修正済み
 
 コミット履歴（このセッション分、新しい順）:
 
@@ -76,8 +80,8 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
 
 - remoteは **`origin = git@github.com:makechair/us-stock-realtime-chart.git`** の1つだけ。
   旧 `spelling-inconsistencies` remoteや`newrepo` remoteは現在の `.git/config` に無い。
-- 現在地は `main`、HEADは`8b13532`で、`origin/main`と一致している。
-- Phase 1の変更はこの作業ツリーに未コミットで、まだpush・本番反映していない。
+- 現在地は `main`。Phase 1と本番検証中に判明した修正はコミット・push済み。
+- Lightsailも同じ`main`のsystemd revisionで稼働し、API healthを確認済み。
 - `main`をpushすると、GitHub Actionsの結果を待たずLightsailのpull agentが検知して
   collector/APIを再起動する。Actions枠を使い切っている月は特に、ローカルテスト完了を
   確認してからpushする。
@@ -92,13 +96,9 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
 
 ### 4-2. Phase 1（日足コーパス構築）
 
-実装・ローカル検証済み、本番導入前。次の順で進める。
-
-1. 変更をレビューして正しいリポジトリの `main` へ反映
-2. Terraformでbackup uploaderの `corpus/*` PutObject権限を反映
-3. Lightsailで `deploy/systemd/install.sh` を再実行してunitを導入
-4. 09:00–17:00 JST内に `usstocks-corpus.service` を起動
-5. 最初の3銘柄のHTTP結果、Parquet、S3 object、共有REST予算を確認
+**完了。** main反映、IAM最小権限、unit/timer導入、初回3銘柄、S3 object、
+共有REST予算まで本番確認済み。次の定刻実行では新規3銘柄を追加し、既存銘柄は
+20時間以上経過したものを古い順に更新する。
 
 ### 4-3. Phase 2（Notion取り込み + 統合）
 
@@ -117,10 +117,9 @@ SKHY削除、`volume=0` の掃除、Alpacaキーのローテーション等）�
 
 ## 5. 環境・運用上の注意
 
-- テストは `pytest` で139件全通過（Codex引き継ぎ後）。`.venv/bin/pytest -q` で確認可能
-- 2026-07-31の本番確認ではcollector/APIはactive、`usstocks-corpus.timer`は未導入。
-  poll間隔3変数はenv未指定なので、現行revisionの既定値（背景1800秒）で動いている。
-  Phase 1反映後はコード既定の3600秒になる
+- テストは `pytest` で141件全通過（Codex引き継ぎ後）。`.venv/bin/pytest -q` で確認可能
+- 2026-07-31の本番反映後、collector/APIと`usstocks-corpus.timer`はactive。
+  poll間隔3変数はenv未指定なので、背景pollはコード既定の3600秒で動く
 - 同じ本番確認で、物理メモリ1.9GiB中584MiB使用・available 1.3GiB、
   swap 52KiB、root disk 10%。collector約29.7MiB、API約43.8MiBで余力がある
 - 本体は systemd で常時稼働中の想定（`docs/systemd-deployment.md`）。コーパス関連の
@@ -153,10 +152,9 @@ make install && make dev   # http://127.0.0.1:8000
 
 ## 7. 次に着手するならこの順で
 
-1. **Phase 1のレビュー・main反映・本番導入**（§4-2）
-2. **最初の3銘柄でユニークシンボル上限を観測**（4xxなら増加を止める）
-3. **teiten側とのNotion API接続確認**（§4-3）
-4. 本体側の未処理TODO（§4-4）— コーパス作業と並行可能
+1. **次回timerで新規3銘柄追加と共有REST予算を確認**（4xxなら増加を止める）
+2. **teiten側とのNotion API接続確認**（§4-3）
+3. 本体側の未処理TODO（§4-4）— コーパス作業と並行可能
 
 新しい担当者・エージェントが作業を始める際は、まず `docs/analysis-spec.md` の
 「再調査してはいけない確定事項」を読み、同じ検証をやり直さないこと。作業後は

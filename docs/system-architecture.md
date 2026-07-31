@@ -1133,18 +1133,23 @@ collectorとoneshot timerが別プロセスでも、同じ `market.db.api_usage`
 ローカル確定後にS3 uploadが失敗した場合、`state.json` の `pending_upload` を残し、
 次回はAPIを再消費せずS3送信だけを再試行する。Lightsail上の既存backup uploaderは
 `daily/*` と `corpus/*` だけへ `PutObject` でき、削除や他prefixの読取りは許可しない。
+S3送信はrevision venvのboto3から行い、SSE-S3（AES256）を明示する。
 
 ### 19.4 ランタイムへの影響
 
 `pyarrow` はrevision venvへ入るが、collector/APIはimportしないため常駐メモリは増えない。
 コーパス処理はoneshotで `MemoryMax=512M`、`TimeoutStartSec=1800`。2GB Lightsail上で
 collector/APIと併存できる上限を設け、米国市場が閉じた時間だけ動かす。systemd unitを
-追加する変更なので、pull deploy後にinstallerの再実行が必要である。
+追加する変更なので、初回だけunitの配置とtimerのenableが必要である。
 
 2026-07-31の本番実測では、物理メモリ1.9GiBのうち使用584MiB、available 1.3GiB、
 swap使用52KiB、root disk使用5.6GiB / 58GiB（10%）だった。`systemctl show` の
 `MemoryCurrent` はcollector約29.7MiB、API約43.8MiBで、常駐2プロセス合計は約73.5MiB。
 日足処理を市場休場中のoneshotかつ512MiB上限にする限り、現在の2GBプランには十分な余白がある。
+
+2026-07-31に本番導入済み。timerはenabled/activeで、初回はNVDA 6,922行、
+AMD 9,211行、INTC 9,211行を2026-07-30まで取得し、3 partitionすべてをS3へ送信した。
+処理時間は約6秒、systemd計測のCPU時間は約1.3秒だった。
 
 ## 20. まとめ
 
