@@ -14,13 +14,12 @@ import hashlib
 import json
 import logging
 import os
-import shutil
-import subprocess
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -297,28 +296,32 @@ def write_universe_parquet(path: Path, entries: Sequence[UniverseEntry]) -> None
     os.replace(temporary, path)
 
 
+def _parse_s3_destination(destination: str) -> tuple[str, str]:
+    parsed = urlparse(destination)
+    key = parsed.path.lstrip("/")
+    if parsed.scheme != "s3" or not parsed.netloc or not key:
+        raise CorpusError("corpus upload destination must be s3://bucket/key")
+    return parsed.netloc, key
+
+
 def aws_upload(local_path: Path, destination: str) -> None:
-    executable = shutil.which("aws")
-    if executable is None:
-        raise CorpusError("aws CLI is required to upload corpus Parquet")
     try:
-        subprocess.run(
-            [
-                executable,
-                "s3",
-                "cp",
-                str(local_path),
-                destination,
-                "--sse",
-                "AES256",
-                "--only-show-errors",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise CorpusError(f"S3 upload failed with exit code {exc.returncode}") from exc
+        import boto3
+    except ImportError as exc:
+        raise CorpusError("daily corpus requires the 'parquet' package extra") from exc
+    bucket, key = _parse_s3_destination(destination)
+    try:
+        with local_path.open("rb") as body:
+            boto3.client("s3").put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=body,
+                ServerSideEncryption="AES256",
+            )
+    except Exception as exc:
+        # SDK exception messages can contain request metadata. Keep logs stable
+        # and secret-free while preserving the original exception for tracing.
+        raise CorpusError(f"S3 upload failed: {type(exc).__name__}") from exc
 
 
 def _last_success(entry_state: dict[str, Any]) -> datetime:

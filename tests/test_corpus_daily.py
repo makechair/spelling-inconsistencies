@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import csv
+import sys
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
@@ -12,6 +14,8 @@ from usstocks.config import Settings
 from usstocks.corpus.daily import (
     CorpusError,
     UniverseEntry,
+    _parse_s3_destination,
+    aws_upload,
     in_closed_market_window,
     load_state,
     load_universe,
@@ -130,6 +134,43 @@ def test_merge_replaces_overlapping_dates():
         {"date": date(2026, 7, 30), "close": 3.0},
     ]
     assert merge_rows(existing, incoming) == incoming
+
+
+def test_s3_destination_requires_bucket_and_key():
+    assert _parse_s3_destination("s3://example/corpus/a.parquet") == (
+        "example",
+        "corpus/a.parquet",
+    )
+    for invalid in ("https://example/corpus/a.parquet", "s3://example", "s3:///a.parquet"):
+        try:
+            _parse_s3_destination(invalid)
+        except CorpusError:
+            pass
+        else:
+            raise AssertionError(f"destination should fail: {invalid}")
+
+
+def test_aws_upload_uses_boto3_and_sse(tmp_path: Path, monkeypatch):
+    local_path = tmp_path / "part.parquet"
+    local_path.write_bytes(b"parquet")
+    calls: list[dict[str, object]] = []
+
+    class FakeS3:
+        def put_object(self, **kwargs):
+            kwargs["Body"] = kwargs["Body"].read()
+            calls.append(kwargs)
+
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda service: FakeS3()))
+    aws_upload(local_path, "s3://example/corpus/daily/symbol=NVDA/part.parquet")
+
+    assert calls == [
+        {
+            "Bucket": "example",
+            "Key": "corpus/daily/symbol=NVDA/part.parquet",
+            "Body": b"parquet",
+            "ServerSideEncryption": "AES256",
+        }
+    ]
 
 
 def test_run_writes_partition_and_uploads_without_real_network(tmp_path: Path):
