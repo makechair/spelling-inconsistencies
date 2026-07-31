@@ -546,6 +546,32 @@ body {
 }
 .report-focus-cards article { background: var(--bg); }
 .report-focus-cards strong { font-size: 18px; overflow-wrap: anywhere; }
+.report-focus-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0 0 18px;
+}
+.report-focus-charts article {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+}
+.report-focus-charts h3 { margin: 0; font-size: 14px; }
+.report-focus-charts p { margin: 4px 0 8px; color: var(--muted); font-size: 11px; }
+.report-focus-charts svg { display: block; width: 100%; height: auto; overflow: visible; }
+.report-chart-grid { stroke: var(--border); stroke-width: 1; }
+.report-chart-zero { stroke: var(--muted); stroke-width: 1.2; }
+.report-chart-label { fill: var(--muted); font-size: 11px; }
+.report-chart-value { fill: var(--text); font-size: 10px; }
+.report-chart-mean { fill: none; stroke: var(--accent); stroke-width: 3; }
+.report-chart-median { fill: none; stroke: #f8c36a; stroke-width: 2.5; }
+.report-chart-peer { fill: none; stroke: #a78bfa; stroke-width: 2; stroke-dasharray: 6 5; }
+.report-chart-point { stroke: var(--bg); stroke-width: 2; }
+.report-chart-positive { fill: #22c55e; }
+.report-chart-negative { fill: #ef4444; }
 
 .report-section-heading {
   display: flex;
@@ -587,6 +613,12 @@ body {
   border-radius: 12px;
   background: var(--panel);
 }
+.case-detail > summary {
+  cursor: pointer;
+  font-weight: 650;
+  line-height: 1.5;
+}
+.case-detail[open] > summary { margin-bottom: 18px; }
 .case-detail > header { margin-bottom: 18px; }
 .case-detail > header h3 { margin: 0; font-size: 18px; }
 .case-detail > header p {
@@ -636,6 +668,7 @@ body {
   .report-cards { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
   .report-focus-cards { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
   .case-metric-grid { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
+  .report-focus-charts { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 620px) {

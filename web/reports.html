@@ -83,6 +83,20 @@
         <article><span>カテゴリ</span><strong id="focus-categories">—</strong></article>
         <article><span>イベント種別</span><strong id="focus-types">—</strong></article>
       </div>
+      <div class="report-focus-charts">
+        <article>
+          <h3>期間別の株価反応</h3>
+          <p>0／1／2／5／20日を実際の日数間隔で配置</p>
+          <svg id="focus-horizon-chart" viewBox="0 0 720 300" role="img"
+               aria-label="期間別の加重平均、反応日中央値、peer差"></svg>
+        </article>
+        <article>
+          <h3>反応日の時系列</h3>
+          <p>記事が対応した取引日の1日リターン。点の大きさは出来高比</p>
+          <svg id="focus-timeline-chart" viewBox="0 0 720 300" role="img"
+               aria-label="反応取引日ごとの1日リターン"></svg>
+        </article>
+      </div>
       <div class="report-table-wrap">
         <table>
           <thead>

@@ -9,6 +9,8 @@ const elements = {
   focusSymbol: document.querySelector("#focus-symbol"),
   focusSummary: document.querySelector("#focus-summary"),
   focusBody: document.querySelector("#focus-body"),
+  focusHorizonChart: document.querySelector("#focus-horizon-chart"),
+  focusTimelineChart: document.querySelector("#focus-timeline-chart"),
   caseStudyBody: document.querySelector("#case-study-body"),
   caseStudyWrap: document.querySelector("#case-study-table-wrap"),
   caseStudyEmpty: document.querySelector("#case-study-empty"),
@@ -185,6 +187,203 @@ function focusStatistics(studies, horizon) {
   };
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgNode(name, attributes = {}, content = null) {
+  const node = document.createElementNS(SVG_NS, name);
+  Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, value));
+  if (content !== null) node.textContent = content;
+  return node;
+}
+
+function chartGeometry(values) {
+  const left = 58;
+  const right = 18;
+  const top = 42;
+  const bottom = 45;
+  const width = 720 - left - right;
+  const height = 300 - top - bottom;
+  let minimum = Math.min(0, ...values);
+  let maximum = Math.max(0, ...values);
+  const span = maximum - minimum || 0.02;
+  minimum -= span * 0.12;
+  maximum += span * 0.12;
+  return {
+    left,
+    top,
+    width,
+    height,
+    minimum,
+    maximum,
+    y: (value) => top + ((maximum - value) / (maximum - minimum)) * height,
+  };
+}
+
+function drawChartGrid(svg, geometry) {
+  for (let index = 0; index <= 4; index += 1) {
+    const value = geometry.maximum -
+      ((geometry.maximum - geometry.minimum) * index) / 4;
+    const y = geometry.y(value);
+    svg.append(
+      svgNode("line", {
+        x1: geometry.left,
+        y1: y,
+        x2: geometry.left + geometry.width,
+        y2: y,
+        class: Math.abs(value) < 0.00001 ? "report-chart-zero" : "report-chart-grid",
+      }),
+      svgNode(
+        "text",
+        { x: geometry.left - 8, y: y + 4, "text-anchor": "end", class: "report-chart-label" },
+        `${(value * 100).toFixed(1)}%`,
+      ),
+    );
+  }
+  const zeroY = geometry.y(0);
+  svg.append(svgNode("line", {
+    x1: geometry.left,
+    y1: zeroY,
+    x2: geometry.left + geometry.width,
+    y2: zeroY,
+    class: "report-chart-zero",
+  }));
+}
+
+function renderHorizonChart(studies) {
+  const svg = elements.focusHorizonChart;
+  svg.replaceChildren();
+  const points = HORIZONS.map((horizon) => ({
+    horizon,
+    ...focusStatistics(studies, horizon),
+  }));
+  const series = [
+    { label: "加重平均", key: "mean", className: "report-chart-mean", color: "#38bdf8" },
+    { label: "反応日中央値", key: "median", className: "report-chart-median", color: "#f8c36a" },
+    { label: "peer差", key: "peerMean", className: "report-chart-peer", color: "#a78bfa" },
+  ];
+  const values = series.flatMap((item) =>
+    points.map((point) => point[item.key]).filter((value) => value != null),
+  );
+  if (!values.length) return;
+  const geometry = chartGeometry(values);
+  drawChartGrid(svg, geometry);
+  const x = (horizon) => geometry.left + (horizon / 20) * geometry.width;
+
+  series.forEach((item, index) => {
+    const available = points.filter((point) => point[item.key] != null);
+    if (!available.length) return;
+    const d = available
+      .map((point, pointIndex) =>
+        `${pointIndex ? "L" : "M"}${x(point.horizon)},${geometry.y(point[item.key])}`,
+      )
+      .join(" ");
+    svg.append(svgNode("path", { d, class: item.className }));
+    available.forEach((point) => {
+      const circle = svgNode("circle", {
+        cx: x(point.horizon),
+        cy: geometry.y(point[item.key]),
+        r: 4,
+        fill: item.color,
+        class: "report-chart-point",
+      });
+      circle.append(svgNode("title", {}, `${item.label} ${percent(point[item.key], true)}`));
+      svg.append(circle);
+    });
+    const legendX = geometry.left + index * 142;
+    svg.append(
+      svgNode("line", {
+        x1: legendX,
+        y1: 18,
+        x2: legendX + 22,
+        y2: 18,
+        class: item.className,
+      }),
+      svgNode("text", { x: legendX + 28, y: 22, class: "report-chart-label" }, item.label),
+    );
+  });
+
+  HORIZONS.forEach((horizon) => {
+    svg.append(svgNode(
+      "text",
+      {
+        x: x(horizon),
+        y: geometry.top + geometry.height + 25,
+        "text-anchor": "middle",
+        class: "report-chart-label",
+      },
+      horizon === 0 ? "反応日" : `+${horizon}日`,
+    ));
+  });
+}
+
+function renderTimelineChart(studies) {
+  const svg = elements.focusTimelineChart;
+  svg.replaceChildren();
+  const byDate = new Map();
+  studies.forEach((study) => {
+    if (study.raw_return_0d == null || byDate.has(study.reaction_date)) return;
+    byDate.set(study.reaction_date, {
+      date: study.reaction_date,
+      value: Number(study.raw_return_0d),
+      volume: Number(study.reaction_volume_ratio_60d || 0),
+      articles: studies.filter((item) => item.reaction_date === study.reaction_date).length,
+    });
+  });
+  const points = [...byDate.values()].sort((left, right) =>
+    left.date.localeCompare(right.date),
+  );
+  if (!points.length) return;
+  const geometry = chartGeometry(points.map((point) => point.value));
+  drawChartGrid(svg, geometry);
+  const times = points.map((point) => Date.parse(`${point.date}T00:00:00Z`));
+  const minTime = Math.min(...times);
+  const maxTime = Math.max(...times);
+  const x = (time) => maxTime === minTime
+    ? geometry.left + geometry.width / 2
+    : geometry.left + ((time - minTime) / (maxTime - minTime)) * geometry.width;
+  const zeroY = geometry.y(0);
+  const barWidth = Math.min(24, geometry.width / Math.max(points.length * 1.8, 1));
+  const labelEvery = Math.max(1, Math.ceil(points.length / 6));
+
+  points.forEach((point, index) => {
+    const pointX = x(times[index]);
+    const pointY = geometry.y(point.value);
+    const bar = svgNode("rect", {
+      x: pointX - barWidth / 2,
+      y: Math.min(zeroY, pointY),
+      width: barWidth,
+      height: Math.max(Math.abs(zeroY - pointY), 1),
+      rx: 2,
+      class: point.value >= 0 ? "report-chart-positive" : "report-chart-negative",
+      opacity: 0.82,
+    });
+    const description = `${point.date} ${percent(point.value, true)} / ` +
+      `${point.articles}記事 / 出来高比${number(point.volume, 2)}倍`;
+    bar.append(svgNode("title", {}, description));
+    const volumePoint = svgNode("circle", {
+      cx: pointX,
+      cy: pointY,
+      r: Math.max(2.5, Math.min(6, point.volume * 3)),
+      fill: point.value >= 0 ? "#86efac" : "#fca5a5",
+      class: "report-chart-point",
+    });
+    volumePoint.append(svgNode("title", {}, description));
+    svg.append(bar, volumePoint);
+    if (index % labelEvery === 0 || index === points.length - 1) {
+      svg.append(svgNode(
+        "text",
+        {
+          x: pointX,
+          y: geometry.top + geometry.height + 25,
+          "text-anchor": "middle",
+          class: "report-chart-label",
+        },
+        point.date.slice(5),
+      ));
+    }
+  });
+}
+
 function renderFocusSymbol(report, symbol) {
   const focus = (report.symbol_focus || []).find((item) => item.symbol === symbol) || {};
   const studies = (report.case_studies || []).filter(
@@ -249,6 +448,8 @@ function renderFocusSymbol(report, symbol) {
       percent(stats.peerMean, true),
     ]);
   });
+  renderHorizonChart(studies);
+  renderTimelineChart(studies);
 }
 
 function renderTickerFocus(report) {
@@ -257,8 +458,10 @@ function renderTickerFocus(report) {
   symbols.forEach((focus) => {
     const option = document.createElement("option");
     option.value = focus.symbol;
+    const notionEvents = focus.notion_article_events ?? focus.article_events ?? 0;
+    const matchedEvents = focus.matched_events ?? focus.article_events ?? 0;
     option.textContent =
-      `${focus.symbol}（Notion ${focus.notion_article_events} / 接続 ${focus.matched_events}）`;
+      `${focus.symbol}（Notion ${notionEvents} / 接続 ${matchedEvents}）`;
     elements.focusSymbol.append(option);
   });
   const requested = new URL(window.location.href).searchParams.get("symbol");
@@ -344,8 +547,11 @@ function metricGrid(study, context) {
 function renderCaseDetails(report, studies) {
   elements.caseDetailList.replaceChildren();
   studies.forEach((study) => {
-    const article = document.createElement("article");
+    const article = document.createElement("details");
     article.className = "case-detail";
+    const toggle = document.createElement("summary");
+    toggle.textContent =
+      `${study.symbol} · ${study.reaction_date} · ${study.headline || "見出しなし"}`;
     const header = document.createElement("header");
     const title = document.createElement("h3");
     title.textContent = `${study.symbol} · ${study.reaction_date}`;
@@ -404,20 +610,22 @@ function renderCaseDetails(report, studies) {
         ),
       );
     }
-    article.append(header, metricGrid(study, context), ...sections);
+    article.append(toggle, header, metricGrid(study, context), ...sections);
     elements.caseDetailList.append(article);
   });
 }
 
-function renderCaseStudies(report) {
-  const studies = report.case_studies || [];
+function renderCaseStudies(report, symbol = null) {
+  const studies = (report.case_studies || []).filter(
+    (study) => !symbol || study.symbol === symbol,
+  );
   elements.caseStudyBody.replaceChildren();
   elements.caseDetailList.replaceChildren();
   if (!studies.length) {
     elements.caseStudyWrap.hidden = true;
     elements.caseStudyEmpty.hidden = false;
     elements.caseStudyEmpty.textContent =
-      "日足とニュースの両方へ接続できたイベントはまだありません。";
+      `${symbol || "選択中の銘柄"}で日足へ接続できたイベントはまだありません。`;
     return;
   }
   elements.caseStudyWrap.hidden = false;
@@ -533,7 +741,7 @@ function renderReport(report) {
   );
   renderObservation(report);
   renderTickerFocus(report);
-  renderCaseStudies(report);
+  renderCaseStudies(report, elements.focusSymbol.value);
   renderComparison(report);
   renderTables(report);
   elements.status.hidden = true;
@@ -599,6 +807,7 @@ elements.picker.addEventListener("change", () => {
 elements.focusSymbol.addEventListener("change", () => {
   if (!activeReport) return;
   renderFocusSymbol(activeReport, elements.focusSymbol.value);
+  renderCaseStudies(activeReport, elements.focusSymbol.value);
   const url = new URL(window.location.href);
   url.searchParams.set("symbol", elements.focusSymbol.value);
   history.replaceState(null, "", url);
