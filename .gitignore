@@ -6,11 +6,13 @@
 .deployed-compose-sha
 
 # Data
-data/
+data/*
+!data/universe.csv
 *.db
 *.db-wal
 *.db-shm
 *.csv
+!data/universe.csv
 *.parquet
 backups/
 

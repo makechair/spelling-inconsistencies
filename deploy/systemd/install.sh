@@ -58,6 +58,7 @@ fi
 install -d -o root -g root -m 0755 "/opt/${PROJECT}/releases"
 install -d -o "${PROJECT}" -g "${PROJECT}" -m 0750 \
   "/var/lib/${PROJECT}" \
+  "/var/lib/${PROJECT}/corpus" \
   "/var/backups/${PROJECT}" \
   "/var/cache/${PROJECT}/pip"
 chown root:"${PROJECT}" "${ENV_FILE}"
@@ -70,7 +71,9 @@ for unit in \
   usstocks-backup.service \
   usstocks-backup.timer \
   usstocks-catalog.service \
-  usstocks-catalog.timer; do
+  usstocks-catalog.timer \
+  usstocks-corpus.service \
+  usstocks-corpus.timer; do
   install -m 0644 "${REPO_DIR}/deploy/systemd/${unit}" "${UNIT_DIR}/${unit}"
 done
 install -m 0644 \
@@ -97,8 +100,13 @@ systemctl enable \
   usstocks-api.service \
   usstocks-backup.timer \
   usstocks-catalog.timer \
+  usstocks-corpus.timer \
   usstocks-deploy.timer
-systemctl start usstocks-backup.timer usstocks-catalog.timer usstocks-deploy.timer
+systemctl start \
+  usstocks-backup.timer \
+  usstocks-catalog.timer \
+  usstocks-corpus.timer \
+  usstocks-deploy.timer
 
 # Populate the catalog now rather than waiting for Sunday. Search falls back to
 # the provider until this lands, so a failure here costs REST budget, not

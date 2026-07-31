@@ -449,7 +449,7 @@
     <aside class="sidebar">
       <div class="brand">
         US Stock Realtime Chart
-        <small>ARCHITECTURE 2026-07-30</small>
+        <small>ARCHITECTURE 2026-07-31</small>
       </div>
       <nav aria-label="目次">
         <a href="#summary">概要</a>
@@ -465,6 +465,7 @@
         <a href="#backup">バックアップ</a>
         <a href="#operations">監視／障害対応</a>
         <a href="#findings">実装上の注意点</a>
+        <a href="#corpus">日足分析コーパス</a>
         <a href="#map">コードマップ</a>
       </nav>
     </aside>
@@ -481,7 +482,7 @@
           RESTの50回/時をどう配分するかが構成全体を決めている。
         </p>
         <div class="meta">
-          <span class="pill">2026-07-30 REST polling live path</span>
+          <span class="pill">2026-07-31 REST polling + daily corpus</span>
           <span class="pill">systemd direct runtime</span>
           <span class="pill">Python 3.11 / FastAPI</span>
           <span class="pill">SQLite WAL</span>
@@ -543,6 +544,7 @@
               <tr><td>公開</td><td>Cloudflare Tunnel + Access</td><td>origin web portをインターネットへ出さない</td></tr>
               <tr><td>IaC</td><td>Terraform</td><td>Lightsailを含むAWS footprintを一元管理</td></tr>
               <tr><td>CD</td><td>ホスト側pull agent</td><td>GitHub runner向けにSSHを全開放しない</td></tr>
+              <tr><td>分析コーパス</td><td>Tiingo調整済み日足 → Parquet → S3</td><td>50銘柄を段階投入し、イベントスタディの正本を作る</td></tr>
             </tbody>
           </table>
         </div>
@@ -616,8 +618,8 @@
 
             <rect class="node-blue" x="800" y="168" width="260" height="112" rx="12"/>
             <text x="930" y="198" text-anchor="middle">残り9銘柄</text>
-            <text class="small" x="930" y="224" text-anchor="middle">30分ごとの保険sweepのみ</text>
-            <text class="small" x="930" y="244" text-anchor="middle">= 18 calls/hour</text>
+            <text class="small" x="930" y="224" text-anchor="middle">1時間ごとの保険sweepのみ</text>
+            <text class="small" x="930" y="244" text-anchor="middle">= 9 calls/hour</text>
             <text class="small" x="930" y="264" text-anchor="middle">開けば1回で追いつく</text>
 
             <rect class="node" x="800" y="296" width="260" height="112" rx="12"/>
@@ -651,21 +653,20 @@
             <thead><tr><th>用途</th><th>設定</th><th>実効間隔</th><th>calls / hour</th></tr></thead>
             <tbody>
               <tr><td>前景（表示中の1銘柄）</td><td><code>foreground_poll_seconds=90</code></td><td>約2分（min_gap 120秒に律速）</td><td>約30</td></tr>
-              <tr><td>保険sweep（残り9銘柄）</td><td><code>background_poll_seconds=1800</code></td><td>30分</td><td>18</td></tr>
+              <tr><td>保険sweep（残り9銘柄）</td><td><code>background_poll_seconds=3600</code></td><td>1時間</td><td>9</td></tr>
               <tr><td>再接続／起動時backfill</td><td>都度</td><td>—</td><td>数回</td></tr>
               <tr><td>銘柄検索</td><td>catalogに無い語のみ</td><td>—</td><td>ほぼ0</td></tr>
-              <tr><td><strong>合計</strong></td><td></td><td></td><td><strong>約48 / 上限50</strong></td></tr>
+              <tr><td><strong>合計</strong></td><td></td><td></td><td><strong>約39 / 上限50</strong></td></tr>
             </tbody>
           </table>
         </div>
-        <div class="callout warning">
-          <strong>余裕は小さい</strong>
+        <div class="callout">
+          <strong>履歴取得用の余白を確保</strong>
           <p>
             <code>min_gap</code> を下げて前景を本当に90秒間隔にすると40 calls/hourとなり、
-            保険sweepと合わせて58 calls/hourで<strong>上限を超える</strong>。
-            鮮度を上げるなら <code>background_poll_seconds</code> を1時間へ伸ばすか、
-            銘柄数を減らすか、有料枠へ移るかの選択になる。
-            現在の値は「実効2分・約48回」で意図せず均衡している状態である。
+            保険sweepと合わせて49 calls/hourで、起動時backfillや検索を含める余地が
+            ほぼなくなる。現在は通常時を約39 calls/hourに抑え、日足コーパス、
+            再接続backfill、検索のために約11 calls/hourの余白を確保している。
           </p>
         </div>
 
@@ -690,7 +691,7 @@
 
             <rect class="node-accent" x="235" y="30" width="185" height="112" rx="12"/>
             <text x="327" y="60" text-anchor="middle">poll loop</text>
-            <text class="small" x="327" y="84" text-anchor="middle">前景 90秒 / 背景 30分</text>
+            <text class="small" x="327" y="84" text-anchor="middle">前景 90秒 / 背景 1時間</text>
             <text class="small" x="327" y="103" text-anchor="middle">休場中は停止</text>
             <text class="small" x="327" y="122" text-anchor="middle">出来高0の足を除外</text>
 
@@ -756,7 +757,7 @@
             ブラウザの30秒更新はローカルDBの読み出しなので無料枠を消費せず、
             同時に <code>last_viewed_at</code> を打ち直して「この銘柄をまだ見ている」ことを
             collectorへ伝え続ける。この打刻が止まると、5分後に前景から外れて
-            30分間隔のsweepへ落ちる。
+            1時間間隔のsweepへ落ちる。
           </p>
         </div>
       </section>
@@ -1000,6 +1001,7 @@
               <tr><td><code>usstocks-deploy.timer</code></td><td>2分</td><td><code>origin/main</code>をfetchし、変化があればrelease切替</td></tr>
               <tr><td><code>usstocks-catalog.timer</code></td><td>週次 日曜 08:30 UTC<br><code>Persistent=true</code> / <code>RandomizedDelaySec=3600</code></td><td>ticker catalogのzipを取得して<code>symbol_catalog</code>を再構築。米国市場が閉じている時間帯を選び、collectorの書込ロックと競合させない</td></tr>
               <tr><td><code>usstocks-backup.timer</code></td><td>日次 07:10 UTC</td><td>整合コピー → 検証 → gzip → S3</td></tr>
+              <tr><td><code>usstocks-corpus.timer</code></td><td>Tue–Sat 03:30 UTC<br>12:30 JST</td><td>新規最大3・合計最大10銘柄の調整済み日足をParquet化してS3へ送る</td></tr>
             </tbody>
           </table>
         </div>
@@ -1136,7 +1138,7 @@
               <tr><td>1</td><td>15秒ごとに起床</td><td>購読銘柄が0本</td></tr>
               <tr><td>2</td><td><code>has_open_window(now-2分, now)</code></td><td><strong>市場が閉じていれば何もしない</strong>——休場中に枠を消費しない</td></tr>
               <tr><td>3</td><td><code>recently_viewed(300秒)</code>から前景銘柄を1つ選ぶ</td><td>5分以内に誰も見ていなければ前景なし</td></tr>
-              <tr><td>4</td><td>前景は90秒経過で対象、他は1800秒経過で対象</td><td>まだ間隔に達していない</td></tr>
+              <tr><td>4</td><td>前景は90秒経過で対象、他は3600秒経過で対象</td><td>まだ間隔に達していない</td></tr>
               <tr><td>5</td><td><code>request_gap_since_last_bar()</code></td><td>gapが120秒未満（=前景の実効間隔が約2分になる理由）</td></tr>
               <tr><td>6</td><td>backfill loopが5秒後にdrain、tokenを1つ消費</td><td>tokenが無ければ最大300秒待って再queue</td></tr>
             </tbody>
@@ -1191,7 +1193,7 @@
             この要求はSQLiteの読み出しであってproviderへは届かないため、頻度は無料枠ではなく
             「確定した1分足をどれだけ早く見せたいか」だけで決まる。同時に、これが
             <code>viewer_idle_seconds=300</code>を満たし続ける唯一の仕組みでもある——
-            打刻が止まれば5分後に前景から外れ、30分間隔のsweepへ落ちる。
+            打刻が止まれば5分後に前景から外れ、1時間間隔のsweepへ落ちる。
           </p>
         </div>
 
@@ -1392,11 +1394,11 @@
             </p>
           </article>
           <article class="card">
-            <h3>枠は上限に近い</h3>
+            <h3>履歴取得用の余白を確保</h3>
             <p>
-              前景+保険sweepで約48 calls/hour（上限50）。鮮度を上げるなら
-              <code>background_poll_seconds</code>を伸ばすか銘柄を減らす必要がある。
-              healthの<code>rest_calls_hour</code>を見ておく価値がある値域。
+              前景+保険sweepは通常約39 calls/hour（上限50）。残りを日足コーパス、
+              起動時backfill、検索へ回せる。前景を実効90秒へ縮めると通常分だけで
+              49 calls/hourになるため、healthの<code>rest_calls_hour</code>は継続監視する。
             </p>
           </article>
           <article class="card">
@@ -1453,12 +1455,81 @@
         </div>
       </section>
 
+      <section id="corpus">
+        <h2>14. 日足分析コーパス</h2>
+        <p class="section-intro">
+          ニュースと株価反応を突き合わせるため、AI・半導体50銘柄の調整済み日足を
+          銘柄別ParquetとしてS3へ蓄積する。分足履歴は翌日に同じ内容を再取得できない
+          実例があるため、長期分析の正本には使わない。
+        </p>
+
+        <div class="steps" aria-label="日足コーパス取得フロー">
+          <div class="step"><span class="step-num">1</span><strong>安全な時間帯</strong><span>Tue–Sat 12:30 JST。スクリプトも09:00–17:00 JST外を拒否。</span></div>
+          <div class="step"><span class="step-num">2</span><strong>段階的に選ぶ</strong><span><code>universe.csv</code>から新規3、合計10銘柄まで。</span></div>
+          <div class="step"><span class="step-num">3</span><strong>REST予算を共有</strong><span><code>market.db.api_usage</code>をcollectorと共用。</span></div>
+          <div class="step"><span class="step-num">4</span><strong>原子的Parquet</strong><span>直近14日をmergeし、分割・配当時だけ全期間を再取得。</span></div>
+          <div class="step"><span class="step-num">5</span><strong>S3へ確定</strong><span><code>corpus/daily/...</code>へPutObject。</span></div>
+        </div>
+
+        <div class="flow-split">
+          <article class="lane">
+            <h3>Quota／provider側</h3>
+            <ol>
+              <li>Phase 0実測: AAPL 9,211行、2,344,266 bytes、全期間1コール。</li>
+              <li>50銘柄外挿は約117.2 MB、月間1 GB枠の11.7%。</li>
+              <li>月間ユニークシンボル上限は不明。HTTPエラー時点で残りを停止。</li>
+              <li><code>BEGIN IMMEDIATE</code>でcollectorとの最後のREST token競合を防止。</li>
+            </ol>
+          </article>
+          <article class="lane">
+            <h3>Storage／再送側</h3>
+            <ol>
+              <li><code>/var/lib/usstocks/corpus</code>にpartitionと<code>state.json</code>。</li>
+              <li>一時ファイル完成後だけ<code>os.replace</code>して正本化。</li>
+              <li>S3失敗時は<code>pending_upload</code>を残し、次回はAPIを使わず再送。</li>
+              <li>host IAMは<code>daily/*</code>と<code>corpus/*</code>へのPutObjectだけ。</li>
+            </ol>
+          </article>
+        </div>
+
+        <div class="callout">
+          <strong>本番リソース余力（2026-07-31実測）</strong>
+          <p>
+            2 GB Lightsailは物理メモリ1.9 GiB中584 MiB使用、available 1.3 GiB、
+            swap使用52 KiB、root disk使用10%。collectorは約29.7 MiB、APIは約43.8 MiBだった。
+            日足処理は休場中のoneshotかつ<code>MemoryMax=512M</code>なので、
+            常駐API／collectorの性能を圧迫しない境界を設けている。
+          </p>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>S3 key</th><th>内容</th><th>更新単位</th></tr></thead>
+            <tbody>
+              <tr><td><code>corpus/daily/symbol=NVDA/part.parquet</code></td><td>raw OHLCV + adjusted OHLCV + split/dividend</td><td>1銘柄ずつ置換</td></tr>
+              <tr><td><code>corpus/universe/sectors.parquet</code></td><td>symbol → subsector</td><td>CSV digest変更時</td></tr>
+              <tr><td>ローカルのみ <code>state.json</code></td><td>最終成功、最終bar、upload再送状態</td><td>各partition確定時</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout warning">
+          <strong>本番導入には2段階必要</strong>
+          <p>
+            Terraformでbackup uploaderの<code>corpus/*</code>権限を反映し、その後
+            <code>deploy/systemd/install.sh</code>を再実行して新しいservice／timerを
+            <code>/etc/systemd/system</code>へ導入する。通常のpull deployだけではunitは増えない。
+          </p>
+        </div>
+      </section>
+
       <section id="map">
-        <h2>14. コードマップ／トレーサビリティ</h2>
+        <h2>15. コードマップ／トレーサビリティ</h2>
         <pre class="repo-tree">.
 ├── src/usstocks/
 │   ├── adapters/          provider REST/WS → domain model（tiingo / alpaca / mock）
 │   ├── collector/         aggregation / reconnect / backfill / poll / quota
+│   ├── corpus/            adjusted daily / Parquet / S3 / staged universe
 │   ├── api/               FastAPI / auth / REST / SSE
 │   ├── db/                schema / repository / live store / migration ×3
 │   ├── calendar_us.py     market calendar / session
@@ -1472,13 +1543,15 @@
 │   ├── viewstate.js       期間・zoom・MAの永続化
 │   ├── indicators.js      移動平均
 │   └── vendor/            vendored chart library
+├── data/
+│   └── universe.csv       AI・半導体50銘柄 + subsector
 ├── deploy/
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   ├── agent/             pull deployment
 │   ├── backup/            backup / restore
 │   ├── cloudflared/       reference config
-│   └── systemd/           direct runtime / installer / deploy・backup・catalog timers
+│   └── systemd/           direct runtime / deploy・backup・catalog・corpus timers
 ├── infra/
 │   ├── terraform/         Lightsail / S3 / IAM / SNS / Budgets
 │   └── iam/               first-apply operator policy
@@ -1505,6 +1578,7 @@
               <tr><td>Schema / ownership</td><td><code>db/migrations/</code>, <code>repository.py</code></td></tr>
               <tr><td>Browser 差分取得 / reconnect</td><td><code>web/app.js</code>（<code>refreshTail()</code>）</td></tr>
               <tr><td>A-6の一次証拠</td><td><code>scripts/probe_tiingo_ws.py</code>, <code>scripts/probe_alpaca_ws.py</code>, <code>docs/spec-review.md</code> A-6</td></tr>
+              <tr><td>日足コーパス</td><td><code>data/universe.csv</code>, <code>corpus/daily.py</code>, <code>usstocks-corpus.*</code>, <code>infra/terraform/backup.tf</code></td></tr>
             </tbody>
           </table>
         </div>
@@ -1512,7 +1586,7 @@
 
       <footer class="foot">
         <p>
-          本書は2026-07-30時点のコードと、2026-07-29〜30に本番インスタンスで得た実測
+          本書は2026-07-31時点のコードと、2026-07-29〜31に本番インスタンスで得た実測
           （WebSocket無配信、被覆率、価格差、REST消費）を突き合わせて作成。
           AWS／Cloudflareの構成そのものは<code>terraform apply</code>の結果を根拠としており、
           Terraform管理外の手動設定（Tunnel、Access、DNS）は未検証。

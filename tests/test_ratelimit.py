@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 from usstocks.collector.ratelimit import BandwidthMeter, RestBudget
@@ -54,6 +55,16 @@ def test_consumption_survives_a_restart(db_path):
         second = budget(repo)
         assert second.try_acquire(now=now) is False
         assert second.snapshot(now).calls_hour == 5
+
+
+def test_separate_process_buckets_cannot_spend_the_same_final_token(repo):
+    """SQLite serialises the check-and-bump across process-like connections."""
+    now = datetime(2026, 7, 27, 14, 0, tzinfo=UTC)
+    buckets = [budget(repo, per_hour=1, per_day=1) for _ in range(8)]
+    with ThreadPoolExecutor(max_workers=len(buckets)) as pool:
+        results = list(pool.map(lambda bucket: bucket.try_acquire(now=now), buckets))
+
+    assert sum(results) == 1
 
 
 def test_bandwidth_accumulates_month_to_date(repo: Repository):

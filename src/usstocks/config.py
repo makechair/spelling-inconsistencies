@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     # the moment it is opened. This sweep exists because backfill reaches back
     # only max_lookback_days -- without it, a symbol left unopened past that
     # window would lose history for good.
-    background_poll_seconds: float = 1800.0
+    background_poll_seconds: float = 3600.0
     # How long after a request a symbol still counts as being watched.
     viewer_idle_seconds: float = 300.0
     # Spec 10.2 offers three options for second-level data with no decision.
@@ -141,6 +141,19 @@ class Settings(BaseSettings):
     sse_max_stream_seconds: float = 3600.0
     max_bars_per_request: int = 20_000
     web_dir: Path = REPO_ROOT / "web"
+
+    # ---------------------------------------------------------- daily corpus
+    # The timer overrides these paths to release-independent durable locations.
+    corpus_local_dir: Path = REPO_ROOT / "data" / "corpus"
+    corpus_universe_path: Path = REPO_ROOT / "data" / "universe.csv"
+    # Defaults to <USSTOCKS_BACKUP_S3_URI>/corpus when omitted.
+    backup_s3_uri: str | None = None
+    corpus_s3_uri: str | None = None
+    # Grow the provider's unknown monthly unique-symbol allowance cautiously.
+    corpus_max_symbols_per_run: int = Field(default=10, ge=1, le=50)
+    corpus_max_new_symbols_per_run: int = Field(default=3, ge=0, le=50)
+    corpus_refresh_hours: float = Field(default=20.0, gt=0)
+    corpus_overlap_days: int = Field(default=14, ge=1, le=90)
 
     # ------------------------------------------------------------------- auth
     auth_mode: AuthMode = "cloudflare_access"

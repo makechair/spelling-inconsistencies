@@ -6,6 +6,8 @@
 > スクリプトのコード照合に加え、稼働中インスタンスでの実測（WebSocket無配信、
 > 被覆率、価格差、REST消費）を突き合わせた
 > 注意: Terraform 管理外の手動設定（Cloudflare Tunnel／Access／DNS）は未検証である。
+> 追記: 2026-07-31 に定量分析用の日足コーパス（Phase 1）を実装し、本書19節へ
+> REST予算共有、Parquet、S3、systemd timer の構成を追加した。
 
 > **2026-07-29 の前提変更:** 仕様書が構成全体の土台に置いていた「WebSocket で常時
 > 受信し1秒ごとに更新する」が、Tiingo・Alpaca いずれの無料枠でも成立しないことが
@@ -31,11 +33,12 @@
 | API／画面 | FastAPI + SSE + ビルド不要の静的 JavaScript。画面は30秒ごとにローカルDBから差分を取る |
 | 外部公開 | Cloudflare Tunnel。Lightsail の 80/443 は公開しない |
 | 認証 | Cloudflare Access とアプリ内 JWT 検証の二重ゲート |
-| 実行基盤 | Amazon Lightsail 1GB、collector/API/cloudflaredをsystemdで直接起動 |
+| 実行基盤 | Amazon Lightsail 2GB、collector/API/cloudflaredをsystemdで直接起動 |
 | IaC | Terraform。Lightsail、S3、IAM、SNS、CloudWatch、Budgets を管理 |
 | CI | GitHub Actions でテスト、lint、Terraform validate/apply |
 | CD | Lightsail 上の systemd timer が `main` を2分間隔で pull |
 | バックアップ | SQLite 整合コピーを gzip 化し、S3 Standard-IA へ日次保管 |
+| 分析コーパス | Tiingo調整済み日足を少数ずつ取得し、銘柄別Parquetとして同じS3へ保管 |
 
 システム全体は「単一ホスト・単一リージョン・単一SQLite」という意図的に小さな構成で、
 Redis、メッセージブローカー、ロードバランサー、マネージドDBを追加せず、月額コストと
@@ -63,7 +66,7 @@ flowchart LR
 
     subgraph RESULT["結果"]
         R1["表示中の1銘柄<br/>約2分ごとに新しい足<br/>画面反映は最大 +30秒<br/>≒ 30 calls/hour"]
-        R2["残り9銘柄<br/>30分ごとの保険sweep<br/>= 18 calls/hour<br/>開けば1回で追いつく"]
+        R2["残り9銘柄<br/>1時間ごとの保険sweep<br/>= 9 calls/hour<br/>開けば1回で追いつく"]
         R3["タブを閉じたら<br/>5分で前景から降りる<br/>読まれていないチャートに<br/>枠を使わない"]
     end
 
@@ -108,15 +111,15 @@ flowchart LR
 | 用途 | 設定 | 実効間隔 | calls / hour |
 |---|---|---|---:|
 | 前景（表示中の1銘柄） | `foreground_poll_seconds=90` | 約2分（min_gap 120秒に律速） | 約30 |
-| 保険sweep（残り9銘柄） | `background_poll_seconds=1800` | 30分 | 18 |
+| 保険sweep（残り9銘柄） | `background_poll_seconds=3600` | 1時間 | 9 |
 | 再接続／起動時backfill | 都度 | — | 数回 |
 | 銘柄検索 | catalogに無い語のみ | — | ほぼ0 |
-| **合計** | | | **約48 / 上限50** |
+| **合計** | | | **約39 / 上限50** |
 
-**余裕は小さい。** `min_gap` を下げて前景を本当に90秒間隔にすると 40 calls/hour となり、
-保険sweepと合わせて 58 calls/hour で**上限を超える**。鮮度を上げるなら
-`background_poll_seconds` を1時間へ伸ばすか、銘柄数を減らすか、有料枠へ移るかの
-選択になる。現在の値は「実効2分・約48回」で意図せず均衡している状態である。
+現在は履歴コーパスと再接続backfillのため、通常時に約11 calls/hourの余白を確保している。
+`min_gap` を下げて前景を本当に90秒間隔にすると、前景40 + 保険sweep 9 =
+49 calls/hourとなり、起動時backfillや検索を含める余地がほぼなくなる。鮮度を上げる場合は
+銘柄数を減らすか、有料枠へ移る必要がある。
 
 なお、poll loop は市場が閉じている間は何もしない（`has_open_window`）。1時間あたりの枠は
 取引時間のあいだにしか使われないので、寄り付き直後の再接続バックフィルや、
@@ -127,7 +130,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     PR["Provider REST<br/>/iex/{sym}/prices<br/>1min resample"]
-    PL["poll loop<br/>前景90秒 / 背景30分<br/>休場中は停止<br/>出来高0の足を除外"]
+    PL["poll loop<br/>前景90秒 / 背景1時間<br/>休場中は停止<br/>出来高0の足を除外"]
     RB["RestBudget<br/>50/h · 1,000/day<br/>api_usageへ永続化"]
     MD[("market.db<br/>bars_1m UPSERT<br/>is_final = true")]
     BR["Browser<br/>30秒ごとに<br/>/api/bars?start=最新足"]
@@ -248,7 +251,7 @@ flowchart TB
         Role["GitHub deploy role"]
         Operator["Human operator policy"]
 
-        subgraph LS["Lightsail / Ubuntu 24.04 / 1GB"]
+        subgraph LS["Lightsail / Ubuntu 24.04 / 2GB"]
             FW["Public ports<br/>TCP 22 only"]
             Host["Python venv + systemd<br/>2GB swap / unattended-upgrades"]
             Runtime["collector + api + cloudflared<br/>direct host processes"]
@@ -553,7 +556,7 @@ flowchart TD
 | 1 | 15秒ごとに起床 | 購読銘柄が0本 |
 | 2 | `has_open_window(now-2分, now)` | **市場が閉じていれば何もしない**——休場中に枠を消費しない |
 | 3 | `recently_viewed(300秒)` から前景銘柄を1つ選ぶ | 5分以内に誰も見ていなければ前景なし |
-| 4 | 前景は90秒経過で対象、他は1800秒経過で対象 | まだ間隔に達していない |
+| 4 | 前景は90秒経過で対象、他は3600秒経過で対象 | まだ間隔に達していない |
 | 5 | `request_gap_since_last_bar()` | gapが120秒未満（= 前景の実効間隔が約2分になる理由） |
 | 6 | backfill loop が5秒後に drain、token を1つ消費 | token が無ければ最大300秒待って再queue |
 
@@ -622,7 +625,7 @@ APIは1ワーカーで動作する。SQLiteコネクションはスレッドロ�
 **30秒の差分取得について。** この要求は SQLite の読み出しであって provider へは
 届かないため、頻度は無料枠ではなく「確定した1分足をどれだけ早く見せたいか」だけで
 決まる。同時に、これが `viewer_idle_seconds=300` を満たし続ける唯一の仕組みでもある。
-打刻が止まれば5分後に前景から外れ、30分間隔の sweep へ落ちる。タブが非表示の間は
+打刻が止まれば5分後に前景から外れ、1時間間隔の sweep へ落ちる。タブが非表示の間は
 停止し、復帰時に即座に1回実行する——誰も読んでいないチャートに枠を使わないためである。
 
 **フロントエンドのモジュール:**
@@ -901,7 +904,7 @@ Terraformにはない。外形監視も `/api/health` が認証必須のため�
 | provider REST枠枯渇 | window更新まで待機、timeout後requeue | 補完完了が遅れる。検索はローカル結果へ縮退する |
 | provider が 429 | 要求を再queueし300秒cooldown | gapは次の周回で埋まる |
 | catalog import失敗 | 前回の行が残り検索は動き続ける | journalを確認。新規上場が引けないだけ |
-| ブラウザのタブを閉じた | 5分後に前景から外れ30分sweepへ | 次に開いた1回で全て埋まる |
+| ブラウザのタブを閉じた | 5分後に前景から外れ1時間sweepへ | 次に開いた1回で全て埋まる |
 | Tiingo長時間障害 | 自動切替なし | operatorがAlpacaへ明示切替 |
 | collector crash | systemdが再起動 | 作成中barは未flushの可能性、REST補完 |
 | API crash | 独立再起動 | 収集は継続、SSE client再接続 |
@@ -979,10 +982,11 @@ collector は自分が処理する `messageType`（`A`=データ、`E`=エラー
 
 同じ理由で、`/api/health` の `connected` は現在の実態を表さない（13.1 参照）。
 
-### 16.2 REST枠の余裕は小さい
+### 16.2 REST枠には履歴取得用の余白を設けた
 
-前景と保険sweepで約48 calls/hour（上限50）。鮮度を上げる方向へ設定を動かすと
-すぐに超える。`/api/health` の `rest_calls_hour` は、この構成では見ておく価値のある値である。
+前景と保険sweepは通常約39 calls/hour（上限50）。残りを日足コーパス、起動時backfill、
+検索へ回せる。ただし前景を実効90秒へ縮めると通常分だけで49 calls/hourになる。
+`/api/health` の `rest_calls_hour` は、この構成では見ておく価値のある値である。
 
 ### 16.3 アプリrolloutはCI成功でgateされていない
 
@@ -1028,6 +1032,7 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 ├── src/usstocks/
 │   ├── adapters/          # provider境界、WS/REST正規化（tiingo / alpaca / mock）
 │   ├── collector/         # 集約、再接続、補完、ポーリング、quota、publish
+│   ├── corpus/            # 調整済み日足、Parquet、S3 upload、段階的universe投入
 │   ├── api/               # FastAPI、認証、REST、SSE、静的配信
 │   ├── db/                # SQLite接続、repository、live store、migration ×3
 │   ├── calendar_us.py     # 米国市場日／session判定
@@ -1041,13 +1046,15 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 │   ├── viewstate.js       # 期間・zoom・MAの永続化
 │   ├── indicators.js      # 移動平均
 │   └── vendor/            # vendored chart library
+├── data/
+│   └── universe.csv       # AI・半導体50銘柄とsubsector
 ├── deploy/
 │   ├── Dockerfile
 │   ├── docker-compose.yml
 │   ├── agent/             # pull CD用script + systemd timer
 │   ├── backup/            # consistent backup / verified restore
 │   ├── cloudflared/       # 手動Cloudflare設定のreference
-│   └── systemd/           # direct runtime、installer、deploy／backup／catalog timer
+│   └── systemd/           # direct runtime、deploy／backup／catalog／corpus timer
 ├── infra/
 │   ├── terraform/         # AWS desired state
 │   └── iam/               # 初回applyを行うhuman operator policy
@@ -1069,6 +1076,7 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 | Compose互換経路 | `deploy/docker-compose.yml`, `deploy/Dockerfile` |
 | Lightsail／firewall／snapshot | `infra/terraform/lightsail.tf` |
 | S3／backup IAM | `infra/terraform/backup.tf` |
+| 日足コーパス／共有REST予算 | `corpus/daily.py`, `collector/ratelimit.py`, `data/universe.csv`, `deploy/systemd/usstocks-corpus.*` |
 | budget／SNS／CloudWatch | `infra/terraform/monitoring.tf` |
 | GitHub OIDC権限 | `infra/terraform/github_oidc.tf` |
 | CI apply | `.github/workflows/deploy.yml` |
@@ -1081,7 +1089,64 @@ installer、deploy service unitを変更した場合は、ホストの`/etc/syst
 | DB schema／ownership | `db/migrations/`, `repository.py`, `live_store.py` |
 | SSE／browser reconnect | `api/routes/live.py`, `web/app.js` |
 
-## 19. まとめ
+## 19. 定量分析用の日足コーパス
+
+リアルタイムチャートの10銘柄とは別に、AI・半導体50銘柄のイベントスタディ用データを
+構築する。分足履歴は翌日に再取得できない実例があるため、コーパスはTiingo dailyの
+調整済み日足を正本とする。Phase 0のAAPL実測では1990年以降9,211行が1コールで返り、
+`adjClose`、`splitFactor`、`divCash`も存在した。
+
+```mermaid
+flowchart LR
+    TIMER["usstocks-corpus.timer<br/>Tue–Sat 03:30 UTC<br/>12:30 JST"] --> GUARD["時間帯guard<br/>09:00–17:00 JST"]
+    GUARD --> SELECT["universe.csv<br/>新規 最大3<br/>合計 最大10"]
+    SELECT --> BUDGET["RestBudget<br/>market.db / api_usage<br/>collectorと共有"]
+    BUDGET --> DAILY["Tiingo daily REST<br/>直近14日を重ねて取得"]
+    DAILY --> ACTION{"新しい分割／配当?"}
+    ACTION -->|No| MERGE["既存行へ日付upsert"]
+    ACTION -->|Yes| FULL["その銘柄だけ全期間再取得"]
+    FULL --> MERGE
+    MERGE --> ATOMIC["一時Parquetへ書込<br/>os.replaceで確定"]
+    ATOMIC --> LOCAL["/var/lib/usstocks/corpus<br/>state.json + partitions"]
+    LOCAL --> S3["S3 corpus/<br/>daily/symbol=.../part.parquet"]
+    SELECT --> SECTORS["universe/sectors.parquet"]
+    SECTORS --> S3
+```
+
+### 19.1 なぜ別のREST予算を持たないのか
+
+Tiingoの上限はAPIキー単位である。collectorとコーパスが別々に「50 calls/hour」を
+管理すると、両方が最後の1トークンを使い、provider側では上限超過になる。
+`RestBudget.try_acquire()` は `BEGIN IMMEDIATE` 内でhour/dayを確認して同時に加算する。
+collectorとoneshot timerが別プロセスでも、同じ `market.db.api_usage` が直列化点になる。
+
+### 19.2 ユニークシンボル上限への安全策
+
+月間ユニークシンボル数はAPIから取得できない。無人実行は新規3銘柄、合計10銘柄を
+上限とし、HTTPエラーが出た時点で残りを止める。既存銘柄は
+`last_success_utc` が古い順にローテーションするため、CSV先頭だけが更新され続ける
+飢餓も起こさない。上限を確認できるまでは、50銘柄を一度に投入しない。
+
+### 19.3 書込・再送・権限境界
+
+1銘柄分のParquetは同一ディレクトリの一時ファイルへ書き、完成後だけ置換する。
+ローカル確定後にS3 uploadが失敗した場合、`state.json` の `pending_upload` を残し、
+次回はAPIを再消費せずS3送信だけを再試行する。Lightsail上の既存backup uploaderは
+`daily/*` と `corpus/*` だけへ `PutObject` でき、削除や他prefixの読取りは許可しない。
+
+### 19.4 ランタイムへの影響
+
+`pyarrow` はrevision venvへ入るが、collector/APIはimportしないため常駐メモリは増えない。
+コーパス処理はoneshotで `MemoryMax=512M`、`TimeoutStartSec=1800`。2GB Lightsail上で
+collector/APIと併存できる上限を設け、米国市場が閉じた時間だけ動かす。systemd unitを
+追加する変更なので、pull deploy後にinstallerの再実行が必要である。
+
+2026-07-31の本番実測では、物理メモリ1.9GiBのうち使用584MiB、available 1.3GiB、
+swap使用52KiB、root disk使用5.6GiB / 58GiB（10%）だった。`systemctl show` の
+`MemoryCurrent` はcollector約29.7MiB、API約43.8MiBで、常駐2プロセス合計は約73.5MiB。
+日足処理を市場休場中のoneshotかつ512MiB上限にする限り、現在の2GBプランには十分な余白がある。
+
+## 20. まとめ
 
 このリポジトリは、小規模な個人用途に合わせて、外向き接続中心、二重認証、
 単一ホスト、SQLite、pull型CDという一貫した設計を採っている。データ取得から画面までの

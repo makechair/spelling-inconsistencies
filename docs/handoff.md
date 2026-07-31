@@ -37,11 +37,11 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
 
 ## 2. 今すぐ知っておくべき直近の変更（2026-07-31セッション）
 
-このセッションは**設計・意思決定のみ**で、コーパス構築のコードはまだ1行も書いていない
-（Phase 0 未実行）。実施したのは:
+当初のClaudeセッションは設計・意思決定のみだったが、Codex引き継ぎ後の
+2026-07-31セッションで Phase 0 と Phase 1 のローカル実装まで進んだ。実施したのは:
 
 1. `docs/analysis-spec.md` を新規作成 — Phase 0〜4の作業計画、REST枠の配分、
-   50銘柄ユニバース案（`data/universe.csv` はまだ存在しない）、S3ストレージ設計
+   50銘柄ユニバース（`data/universe.csv`）、S3ストレージ設計
 2. teiten-pipeline との統合方針を、**あちら側の会話で実装コードを確認してもらった上で**
    確定（`docs/analysis-spec.md` 5節）。要点:
    - 永続化は **Notion API 経由で読み出す**方式に決定（S3直書きは不採用）
@@ -50,8 +50,17 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
      （teiten側で実装・デプロイ完了、2026-07-31 02:40 UTC）
    - teiten 側は収集セクターを `ai_platform`/`eda_ip` まで拡大済み、
      Haiku呼び出しコストは変えていない（セクター最低枠保証で対応）
-3. Phase 0（`scripts/probe_tiingo_daily.py` で日足の `adjClose`/`splitFactor`/`divCash`
-   有無を検証）は**まだ実行していない**。これが次の一歩
+3. Phase 0をLightsailで実行済み。AAPLはHTTP 200、2,344,266 bytes、9,211行、
+   1990-01-02〜2026-07-30、`adjClose`/`splitFactor`/`divCash`あり。50銘柄外挿は
+   約117.2 MB（1 GB枠の11.7%）。詳細は `docs/analysis-spec.md` 2節
+4. Phase 1を実装し、全139テストとruff lintが通過:
+   - `data/universe.csv`（50銘柄）
+   - `src/usstocks/corpus/daily.py`（共有REST予算、Parquet、S3 upload）
+   - `deploy/systemd/usstocks-corpus.service` / `.timer`
+   - `infra/terraform/backup.tf` の `corpus/*` 書き込み権限
+   - 新規銘柄は1回3件、全体10件まで。HTTPエラーで残りを停止
+5. **Phase 1 はまだ main への反映・本番導入前。** Terraform権限反映と
+   systemd installer再実行後に、最初の3銘柄を取得する
 
 コミット履歴（このセッション分、新しい順）:
 
@@ -61,39 +70,35 @@ FastAPI、SQLite、SSE配信。**これは既に動いている運用中のシ�
 4822043 Write down what a fresh session needs so it does not re-derive it
 ```
 
-## 3. リポジトリ／ブランチの実態（要注意・ハマりどころ）
+## 3. リポジトリ／ブランチの実態
 
-このセッション中に発覚した事実:
+2026-07-31にローカル設定を再確認した結果:
 
-- **`origin`**（`makechair/spelling-inconsistencies`）は**移行前の旧リポジトリ**で、
-  現在のブランチ `claude/us-stock-realtime-chart-xpdow8` は Terraform/AWS周りの
-  古いコミットで止まっている。
-- **実体は `makechair/us-stock-realtime-chart`**（このローカルリポジトリでは git remote
-  `newrepo` として登録されている）。2026-07-28のコミット
-  "Point the docs at the new repository and unify the install path" で移行が明記されている。
-- このセッションでの作業はすべて `newrepo`（`makechair/us-stock-realtime-chart`）の
-  `main` ブランチと `claude/us-stock-realtime-chart-xpdow8` ブランチ両方に push 済み。
-  **`origin`（spelling-inconsistencies）にも同じコミットを push しているが、そちらは
-  本来のプロジェクトの置き場ではない**可能性が高い。次の担当者は、まず
-  `makechair/us-stock-realtime-chart` が正しい push 先であることを確認してから作業すること。
-- ローカルの `.git/config` にはこの2つの remote が両方登録されており、ブランチの
-  tracking先が食い違って local HEAD が意図せず古いコミットに戻る事故が過去に一度発生した
-  （fast-forward で復旧済み、データ損失なし）。ブランチを切り替える前に
-  `git log --oneline -3` で現在地を確認する習慣を推奨。
+- remoteは **`origin = git@github.com:makechair/us-stock-realtime-chart.git`** の1つだけ。
+  旧 `spelling-inconsistencies` remoteや`newrepo` remoteは現在の `.git/config` に無い。
+- 現在地は `main`、HEADは`8b13532`で、`origin/main`と一致している。
+- Phase 1の変更はこの作業ツリーに未コミットで、まだpush・本番反映していない。
+- `main`をpushすると、GitHub Actionsの結果を待たずLightsailのpull agentが検知して
+  collector/APIを再起動する。Actions枠を使い切っている月は特に、ローカルテスト完了を
+  確認してからpushする。
+- `wip/local-systemd`ブランチは残っているが、現行systemd運用は既に`main`へ統合済み。
+  Phase 1の作業で切り替える必要はない。
 
 ## 4. 保留中・未着手のタスク
 
-### 4-1. Phase 0（日足エンドポイント検証）★次にやるべきこと
+### 4-1. Phase 0（日足エンドポイント検証）— 完了
 
-`docs/analysis-spec.md` 2節のコマンドで `scripts/probe_tiingo_daily.py` を実行し、
-`adjClose`/`splitFactor`/`divCash` が揃っているか確認する。判定基準・次の行動も
-同節に記載済み。銘柄を列挙しない設計（ユニークシンボル枠を温存するため）なので、
-そのまま実行すればよい。
+実測値は `docs/analysis-spec.md` 2節に記録済み。API枠を使って再実行しないこと。
 
 ### 4-2. Phase 1（日足コーパス構築）
 
-Phase 0 通過後。`data/universe.csv` の作成（`docs/analysis-spec.md` 3節の下書きを
-編集して確定）、取得スクリプト、systemd timer、S3 Parquet 書き出しが成果物。
+実装・ローカル検証済み、本番導入前。次の順で進める。
+
+1. 変更をレビューして正しいリポジトリの `main` へ反映
+2. Terraformでbackup uploaderの `corpus/*` PutObject権限を反映
+3. Lightsailで `deploy/systemd/install.sh` を再実行してunitを導入
+4. 09:00–17:00 JST内に `usstocks-corpus.service` を起動
+5. 最初の3銘柄のHTTP結果、Parquet、S3 object、共有REST予算を確認
 
 ### 4-3. Phase 2（Notion取り込み + 統合）
 
@@ -112,7 +117,12 @@ SKHY削除、`volume=0` の掃除、Alpacaキーのローテーション等）�
 
 ## 5. 環境・運用上の注意
 
-- テストは `pytest` で130件全通過（この引き継ぎ時点）。`.venv/bin/pytest -q` で確認可能
+- テストは `pytest` で139件全通過（Codex引き継ぎ後）。`.venv/bin/pytest -q` で確認可能
+- 2026-07-31の本番確認ではcollector/APIはactive、`usstocks-corpus.timer`は未導入。
+  poll間隔3変数はenv未指定なので、現行revisionの既定値（背景1800秒）で動いている。
+  Phase 1反映後はコード既定の3600秒になる
+- 同じ本番確認で、物理メモリ1.9GiB中584MiB使用・available 1.3GiB、
+  swap 52KiB、root disk 10%。collector約29.7MiB、API約43.8MiBで余力がある
 - 本体は systemd で常時稼働中の想定（`docs/systemd-deployment.md`）。コーパス関連の
   取得処理は**市場が閉じている時間帯（09:00–17:00 JST）に走らせ、ライブポーリングと
   RESTトークンを奪い合わせないこと**（`docs/analysis-spec.md` 4節）
@@ -143,10 +153,10 @@ make install && make dev   # http://127.0.0.1:8000
 
 ## 7. 次に着手するならこの順で
 
-1. **Phase 0 検証**（§4-1）— まだ誰も実行していない、一番手前のタスク
-2. **teiten側とのNotion API接続確認**（§4-3）— 実際にスキーマが読み出せるか
-3. **`data/universe.csv` の確定**（§4-2）— Phase 0 通過後、3節の下書きを編集
-4. 本体側の未処理TODO（§4-4）— 余力があれば、コーパス作業と並行可能
+1. **Phase 1のレビュー・main反映・本番導入**（§4-2）
+2. **最初の3銘柄でユニークシンボル上限を観測**（4xxなら増加を止める）
+3. **teiten側とのNotion API接続確認**（§4-3）
+4. 本体側の未処理TODO（§4-4）— コーパス作業と並行可能
 
 新しい担当者・エージェントが作業を始める際は、まず `docs/analysis-spec.md` の
 「再調査してはいけない確定事項」を読み、同じ検証をやり直さないこと。作業後は

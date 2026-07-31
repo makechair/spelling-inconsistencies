@@ -2,7 +2,7 @@
 #
 # Pull-based application deployment.
 #
-# DEPLOY_RUNTIME=systemd (recommended on the 1 GB Lightsail plan):
+# DEPLOY_RUNTIME=systemd (recommended on the 2 GB Lightsail plan):
 #   build an immutable venv release, atomically switch /opt/usstocks/current,
 #   restart only collector/API, health-check, and roll back on failure.
 #
@@ -129,6 +129,7 @@ build_systemd_release() {
 
   if [[ -x "${release_dir}/venv/bin/python" &&
         -d "${release_dir}/web" &&
+        -f "${release_dir}/data/universe.csv" &&
         -x "${release_dir}/backup.sh" &&
         -f "${release_dir}/REVISION" &&
         "$(<"${release_dir}/REVISION")" == "${sha}" ]]; then
@@ -153,9 +154,11 @@ build_systemd_release() {
     HOME=/var/lib/usstocks \
     PIP_CACHE_DIR="${PIP_CACHE_DIR}" \
     "${BUILD_DIR}/venv/bin/python" -m pip install \
-      --disable-pip-version-check "${REPO_DIR}"
+      --disable-pip-version-check "${REPO_DIR}[parquet]"
 
   cp -a "${REPO_DIR}/web" "${BUILD_DIR}/web"
+  install -d -o usstocks -g usstocks -m 0755 "${BUILD_DIR}/data"
+  install -m 0644 "${REPO_DIR}/data/universe.csv" "${BUILD_DIR}/data/universe.csv"
   install -m 0755 "${REPO_DIR}/deploy/backup/backup.sh" "${BUILD_DIR}/backup.sh"
   printf '%s\n' "${sha}" > "${BUILD_DIR}/REVISION"
 

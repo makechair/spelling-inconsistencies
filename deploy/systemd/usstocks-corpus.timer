@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh the daily analysis corpus after US after-hours closes
+
+[Timer]
+# Tue-Sat 03:30 UTC = Tue-Sat 12:30 JST. That corresponds to the completed
+# Mon-Fri US sessions and stays inside the agreed 09:00-17:00 JST window.
+OnCalendar=Tue..Sat *-*-* 03:30:00 UTC
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

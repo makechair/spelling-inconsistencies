@@ -125,7 +125,10 @@ data "aws_iam_policy_document" "backup_uploader" {
     sid       = "PutBackupObjects"
     effect    = "Allow"
     actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.backup.arn}/daily/*"]
+    resources = [
+      "${aws_s3_bucket.backup.arn}/daily/*",
+      "${aws_s3_bucket.backup.arn}/corpus/*",
+    ]
   }
 
   statement {
@@ -137,13 +140,13 @@ data "aws_iam_policy_document" "backup_uploader" {
     condition {
       test     = "StringLike"
       variable = "s3:prefix"
-      values   = ["daily/*"]
+      values   = ["daily/*", "corpus/*"]
     }
   }
 }
 
 resource "aws_iam_user_policy" "backup_uploader" {
-  name   = "write-daily-backups-only"
+  name   = "write-backups-and-corpus-only"
   user   = aws_iam_user.backup_uploader.name
   policy = data.aws_iam_policy_document.backup_uploader.json
 }

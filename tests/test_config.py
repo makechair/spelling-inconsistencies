@@ -19,6 +19,9 @@ def test_free_tier_budgets_match_the_documented_limits():
     assert settings.rest_calls_per_hour == 50
     assert settings.rest_calls_per_day == 1_000
     assert settings.monthly_bandwidth_bytes == 1_000_000_000
+    assert settings.background_poll_seconds == 3_600
+    assert settings.corpus_max_symbols_per_run == 10
+    assert settings.corpus_max_new_symbols_per_run == 3
 
 
 def test_threshold_level_is_left_to_the_plan_by_default():

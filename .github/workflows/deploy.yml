@@ -54,7 +54,7 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,parquet]"
 
       - name: Lint
         run: ruff check src tests scripts

@@ -1,7 +1,8 @@
 # 定量分析コーパス — 引き継ぎ仕様
 
 > 目的: ニュース・決算（Notion）と株価変動を突き合わせ、定量分析を可能にする。
-> 状態: **Phase 0 未実行**。この文書は 2026-07-30 時点の確定事項をまとめたもの。
+> 状態: **Phase 0 完了、Phase 1 実装・ローカル検証完了（本番導入前）**。
+> 2026-07-31 時点の確定事項をまとめたもの。
 > 読み方: 新しいセッションはこの1枚を読めば作業に入れる。**ここに書かれた事実を
 > 再調査しないこと** — いずれも実測で確定済みで、再検証にはAPI枠と時間がかかる。
 
@@ -48,7 +49,10 @@ Claude Pro / ChatGPT Plus は**対話UIの枠であって、APIは含まれな�
 **未確認**: 月間ユニークシンボル上限。APIから読めず、Tiingoのドキュメントは403で取得
 できなかった。**50銘柄を一度に投入しないこと** — 少数ずつ増やして 4xx を観測する。
 
-## 2. Phase 0 — 検証（次にやること）
+## 2. Phase 0 — 検証（完了）
+
+2026-07-31 14時台 JST、Lightsail `usstocks-dev01` 上で AAPL だけを対象に実行した。
+APIキーはサーバー内で環境変数へ渡し、値そのものは出力していない。
 
 ```bash
 sudo -u usstocks env \
@@ -61,18 +65,28 @@ sudo -u usstocks env \
 `scripts/probe_tiingo_daily.py` は**意図的に銘柄を列挙しない**（列挙するとユニーク
 シンボル枠を探査自体が消費するため）。既存銘柄1本から外挿する。
 
-**判定基準:**
+**実測結果:**
 
-| 結果 | 次の行動 |
+| 項目 | 結果 |
 |---|---|
-| `adjClose` / `splitFactor` / `divCash` が揃う | Phase 1 へ進む |
-| **調整済みフィールドが無い** | **日足案を組み直す。**分割をまたぐイベントスタディが50%の暴落に見える |
-| 全期間が1コールで返らない | ページングの実装が要る。calls/銘柄の見積りを修正 |
+| provider coverage | 1980-12-12 .. 2026-07-30 |
+| 指定範囲 | 1990-01-01 以降 |
+| HTTP | 200 |
+| 応答サイズ | 2,344,266 bytes |
+| 行数 | 9,211 |
+| 実データ範囲 | 1990-01-02 .. 2026-07-30 |
+| 調整済みフィールド | `adjClose` / `splitFactor` / `divCash` すべて存在 |
+| 最終行 | `adjClose=333.4300`, `splitFactor=1.0`, `divCash=0.0` |
+| 50銘柄外挿 | 約117.2 MB（1 GB/月の11.7%）、約460,550行 |
+
+**判定:** 全期間が1コールで返り、調整済みフィールドも揃う。ページングは不要で、
+Phase 1 の日足 Parquet 方式へ進める。月間ユニークシンボル上限だけは未確認のままなので、
+Phase 1 の自動実行では新規銘柄を1回3件までに制限する。
 
 ## 3. 銘柄ユニバース（AI・半導体、50銘柄）
 
-**下書き。着手前に編集すること。** SEC EDGAR の SIC 分類は50銘柄では過剰なので使わない
-（手書きリスト1枚で足りる）。`data/universe.csv` に `symbol,subsector` で置く想定。
+2026-07-31 に下表を `data/universe.csv` として確定した。SEC EDGAR の SIC 分類は
+50銘柄では過剰なので使わない（手書きリスト1枚で足りる）。
 
 | subsector | symbols |
 |---|---|
@@ -105,6 +119,45 @@ s3://<既存バックアップバケット>/corpus/
   枠を奪い合わせない
 - **同じ `RestBudget`（`api_usage` テーブル）からトークンを取ること。**
   別バケットにすると Tiingo 側の実際の上限を二重に超える
+
+### Phase 1 実装（2026-07-31）
+
+| 成果物 | 実装 |
+|---|---|
+| ユニバース | `data/universe.csv`（50銘柄、SKHYなし） |
+| 取得・Parquet化 | `src/usstocks/corpus/daily.py` |
+| systemd | `usstocks-corpus.service` / `.timer` |
+| S3権限 | 既存backup uploaderに `corpus/*` の `PutObject` を追加 |
+| 検証 | 全139テスト通過、ruff lint通過 |
+
+無人実行の既定値は、1回10銘柄まで、そのうち新規銘柄は3件まで。新規をCSV順に
+少数ずつ増やし、既存は `last_success_utc` が古い順に巡回する。APIがHTTPエラーを
+返した時点で残りを止めるため、未知のユニークシンボル上限を一度に踏み抜かない。
+
+日々の更新は直近14日を重ねて取得する。新しい `splitFactor != 1` または
+`divCash != 0` を検出した場合だけ、その銘柄の全期間を再取得する。分割・配当後に
+過去の `adjClose` が古いまま残るのを避けつつ、毎日全履歴を取り直す帯域浪費を防ぐ。
+
+ローカルの `/var/lib/usstocks/corpus/state.json` は、S3 upload失敗時の再送状態も保持する。
+Parquetは同じディレクトリの一時ファイルへ書き、完成後に `os.replace` するため、
+途中終了したファイルが正本にならない。partitionのS3 uploadが失敗した場合はその実行の
+残り銘柄も止め、APIだけを消費し続けない。
+
+timerは **Tue–Sat 03:30 UTC（12:30 JST）**。これは直前のMon–Fri米国セッション終了後で、
+合意済みの09:00–17:00 JST内に収まる。`Persistent=true` による時間外のcatch-upは
+スクリプト自身が拒否し、次の定刻まで待つ。
+
+初回本番導入は、Terraformでbackup uploaderの `corpus/*` 権限を反映した後、
+systemd unitを再導入する。
+
+```bash
+sudo /opt/usstocks/app/deploy/systemd/install.sh /opt/usstocks/app
+systemctl list-timers usstocks-corpus.timer
+
+# 09:00–17:00 JST内で、既定の新規3銘柄だけを初回取得
+sudo systemctl start usstocks-corpus.service
+journalctl -u usstocks-corpus.service --since today
+```
 
 ## 5. teiten-pipeline との統合
 
@@ -205,13 +258,13 @@ Mac ローカル、コードは GitHub に無い）。GitHub上の別セッシ�
 
 ## 6. フェーズ
 
-| # | 内容 | 成果物 | 依存 |
-|---|---|---|---|
-| 0 | 日足エンドポイントの検証 | プローブ出力 | — |
-| 1 | 日足コーパス | `universe.csv`, 取得スクリプト, systemd timer, S3 Parquet | 0 |
-| 2 | Notion取り込み + 抽出統合 | teiten スキーマ拡張, corpus への書き出し | 永続化方式の決定、カバレッジ確認 |
-| 3 | イベントスタディ | DuckDB クエリ / ノートブック | 1, 2 |
-| 4（任意） | イベント窓の分足オンデマンド取得 | 既存 backfill の再利用 | 3 |
+| # | 状態 | 内容 | 成果物 | 依存 |
+|---|---|---|---|---|
+| 0 | **完了** | 日足エンドポイントの検証 | プローブ出力 | — |
+| 1 | **実装・ローカル検証完了／本番導入前** | 日足コーパス | `universe.csv`, 取得スクリプト, systemd timer, S3 Parquet | 0 |
+| 2 | 未着手 | Notion取り込み + 抽出統合 | teiten スキーマ拡張, corpus への書き出し | 永続化方式の決定、カバレッジ確認 |
+| 3 | 未着手 | イベントスタディ | DuckDB クエリ / ノートブック | 1, 2 |
+| 4（任意） | 未着手 | イベント窓の分足オンデマンド取得 | 既存 backfill の再利用 | 3 |
 
 Phase 1 と Phase 2 は独立しており、並行して進められる。teiten 実装の実態確認は
 完了した（5節）。Phase 2 着手前に残る判断は5節末の「新たに判明したブロッカー」
@@ -219,7 +272,8 @@ Phase 1 と Phase 2 は独立しており、並行して進められる。teiten
 
 ## 7. 未処理のTODO（本体側）
 
-- [ ] `background_poll_seconds` を 1800 → 3600 に変更（履歴用に144 calls/day を捻出）
+- [x] `background_poll_seconds` のコード既定値と `.env.example` を 1800 → 3600 に変更
+      （本番 `/etc/usstocks/usstocks.env` の値確認・反映は本番導入時に行う）
 - [ ] SKHY をウォッチリストから削除（空レスポンスを引き続けて枠を消費している）
 - [ ] `DELETE FROM bars_1m WHERE volume = 0`（出来高0の足の掃除、未実行）
 - [ ] Alpaca APIキーのローテーション（チャットに露出済み）

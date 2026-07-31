@@ -118,13 +118,41 @@ class RestBudget:
 
     # ------------------------------------------------------------- spending
     def try_acquire(self, cost: int = 1, now: datetime | None = None) -> bool:
-        """Spend budget if available. Never blocks."""
+        """Spend budget if available. Never blocks.
+
+        The read and both counter increments live in one IMMEDIATE transaction.
+        That matters now that the collector and daily-corpus timer are separate
+        processes sharing the same provider allowance: a read-then-bump sequence
+        in separate transactions lets both processes observe the same final
+        token and overspend it.
+        """
         now = now or datetime.now(tz=UTC)
-        snapshot = self.snapshot(now)
-        if snapshot.hour_remaining < cost or snapshot.day_remaining < cost:
-            return False
-        self._bump("hour", now, calls=cost)
-        self._bump("day", now, calls=cost)
+        hour_key = _window_key("hour", now)
+        day_key = _window_key("day", now)
+        with transaction(self._repo.connection) as conn:
+            hour_row = conn.execute(
+                "SELECT calls FROM api_usage"
+                " WHERE source = ? AND window_kind = 'hour' AND window_start = ?",
+                (self._source, hour_key),
+            ).fetchone()
+            day_row = conn.execute(
+                "SELECT calls FROM api_usage"
+                " WHERE source = ? AND window_kind = 'day' AND window_start = ?",
+                (self._source, day_key),
+            ).fetchone()
+            hour_calls = int(hour_row["calls"]) if hour_row else 0
+            day_calls = int(day_row["calls"]) if day_row else 0
+            if hour_calls + cost > self._per_hour or day_calls + cost > self._per_day:
+                return False
+            for kind, key in (("hour", hour_key), ("day", day_key)):
+                conn.execute(
+                    "INSERT INTO api_usage"
+                    " (source, window_kind, window_start, calls, bytes)"
+                    " VALUES (?, ?, ?, ?, 0)"
+                    " ON CONFLICT (source, window_kind, window_start) DO UPDATE SET"
+                    " calls = api_usage.calls + excluded.calls",
+                    (self._source, kind, key, cost),
+                )
         return True
 
     async def acquire(self, cost: int = 1, *, timeout: float | None = None) -> bool:

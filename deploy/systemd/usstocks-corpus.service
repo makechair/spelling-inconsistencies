@@ -1,0 +1,31 @@
+[Unit]
+Description=Build adjusted daily-bar corpus and upload Parquet to Amazon S3
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/usstocks/current/data/universe.csv
+
+[Service]
+Type=oneshot
+User=usstocks
+Group=usstocks
+WorkingDirectory=/var/lib/usstocks
+EnvironmentFile=/etc/usstocks/usstocks.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/env USSTOCKS_DB_PATH=/var/lib/usstocks/market.db USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus USSTOCKS_CORPUS_UNIVERSE_PATH=/opt/usstocks/current/data/universe.csv /opt/usstocks/current/venv/bin/python -m usstocks.corpus.daily
+
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/usstocks
+ProtectHome=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0027
+
+# One partition is about ten thousand rows; this leaves room for pyarrow on the
+# 2 GB Lightsail plan without allowing a one-shot task to starve the collector.
+MemoryMax=512M
+TimeoutStartSec=1800
