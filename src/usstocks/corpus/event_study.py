@@ -633,6 +633,142 @@ def _case_report_rows(case_studies: list[dict[str, object]]) -> list[list[str]]:
     return rows
 
 
+def _case_rarity(study: dict[str, object], horizon: int) -> str:
+    value = study.get(f"raw_return_{horizon}d")
+    percentile = study.get(f"historical_percentile_{horizon}d")
+    observations = int(study.get(f"historical_observations_{horizon}d") or 0)
+    if value is None or percentile is None:
+        return "—"
+    if observations < 252:
+        return f"不足（{observations}観測）"
+    tail = float(percentile) if float(value) < 0 else 1 - float(percentile)
+    return f"{'下位' if float(value) < 0 else '上位'}{tail * 100:.1f}%"
+
+
+def _case_detail_reports(
+    case_studies: list[dict[str, object]], min_peers: int
+) -> tuple[str, str]:
+    markdown_sections: list[str] = []
+    html_sections: list[str] = []
+    horizon_headers = [
+        "期間",
+        "観測リターン",
+        "過去分布での位置",
+        "累積分位",
+        "過去観測数",
+        "peer数",
+        "peer平均",
+        "peerとの差",
+        "正式abnormal",
+    ]
+    for study in case_studies:
+        symbol = str(study["symbol"])
+        reaction_date = str(study["reaction_date"])
+        context = study.get("historical_move_context")
+        metric_rows = [
+            ["イベント日", str(study.get("event_date") or "—")],
+            ["反応候補日", str(study.get("candidate_date") or "—")],
+            ["反応取引日", reaction_date],
+            [
+                "時刻品質",
+                f"{study.get('timing_quality') or '—'} / "
+                f"{study.get('timing_bucket') or '—'}",
+            ],
+            ["センチメント", str(study.get("sentiment") or "—")],
+            ["分類信頼度", _number(study.get("confidence"), 2)],
+            ["重要度", _number(study.get("importance"), 0)],
+            ["同日同種記事数", _number(study.get("event_group_size"), 0)],
+            ["イベント重み", _number(study.get("event_weight"), 3)],
+            ["20日窓の重複数", _number(study.get("overlap_count"), 0)],
+            ["直前5取引日", _percent(study.get("pre_event_return_5d"))],
+            ["直前20取引日", _percent(study.get("pre_event_return_20d"))],
+            [
+                "反応日出来高 / 過去60日中央値",
+                (
+                    f"{_number(study.get('reaction_volume_ratio_60d'), 2)}倍"
+                    if study.get("reaction_volume_ratio_60d") is not None
+                    else "—"
+                ),
+            ],
+        ]
+        if isinstance(context, dict):
+            direction = "下落" if context.get("move_direction") == "down" else "上昇"
+            metric_rows.append(
+                [
+                    "同規模の過去変動",
+                    f"{_number(context.get('similar_move_count'), 0)}件（{direction}）",
+                ]
+            )
+
+        horizon_rows: list[list[str]] = []
+        for horizon in HORIZONS:
+            peer_count = int(study.get(f"peer_count_{horizon}d") or 0)
+            abnormal = study.get(f"abnormal_return_{horizon}d")
+            abnormal_label = _percent(abnormal)
+            if abnormal is None and peer_count:
+                abnormal_label = f"—（{min_peers}社未満）"
+            horizon_rows.append(
+                [
+                    (
+                        "反応日（1取引日累計）"
+                        if horizon == 0
+                        else f"+{horizon}日（{horizon + 1}取引日累計）"
+                    ),
+                    _percent(study.get(f"raw_return_{horizon}d")),
+                    _case_rarity(study, horizon),
+                    _percent(study.get(f"historical_percentile_{horizon}d")),
+                    _number(study.get(f"historical_observations_{horizon}d"), 0),
+                    str(peer_count),
+                    _percent(study.get(f"exploratory_benchmark_return_{horizon}d")),
+                    _percent(study.get(f"exploratory_relative_return_{horizon}d")),
+                    abnormal_label,
+                ]
+            )
+
+        markdown = [
+            f"### {symbol} · {reaction_date}",
+            str(study.get("headline") or "見出しなし"),
+            _markdown_table(["項目", "値"], metric_rows),
+            _markdown_table(horizon_headers, horizon_rows),
+        ]
+        html_parts = [
+            f"<section class=\"case-detail\"><h3>{html.escape(symbol)} · "
+            f"{html.escape(reaction_date)}</h3>",
+            f"<p class=\"note\">{html.escape(str(study.get('headline') or '見出しなし'))}</p>",
+            _html_table(["項目", "値"], metric_rows),
+            _html_table(horizon_headers, horizon_rows),
+        ]
+        if isinstance(context, dict):
+            forward_rows = [
+                [
+                    f"{days}取引日後",
+                    _percent(context.get(f"forward_mean_{days}d")),
+                    _percent(context.get(f"forward_median_{days}d")),
+                    _percent(context.get(f"forward_win_rate_{days}d")),
+                ]
+                for days in (1, 5, 20)
+            ]
+            label = f"同程度以上の過去変動後（{context.get('similar_move_count')}件）"
+            markdown.extend(
+                [
+                    f"#### {label}",
+                    _markdown_table(
+                        ["期間", "平均", "中央値", "上昇率"], forward_rows
+                    ),
+                ]
+            )
+            html_parts.extend(
+                [
+                    f"<h4>{html.escape(label)}</h4>",
+                    _html_table(["期間", "平均", "中央値", "上昇率"], forward_rows),
+                ]
+            )
+        html_parts.append("</section>")
+        markdown_sections.append("\n\n".join(markdown))
+        html_sections.append("".join(html_parts))
+    return "\n\n".join(markdown_sections), "".join(html_sections)
+
+
 def _render_reports(
     metadata: dict[str, object],
     summary_rows: list[dict[str, object]],
@@ -662,7 +798,11 @@ def _render_reports(
         "同規模変動後5日",
     ]
     findings = report_payload.get("findings", [])
-    case_rows = _case_report_rows(report_payload.get("case_studies", []))  # type: ignore[arg-type]
+    case_studies = report_payload.get("case_studies", [])  # type: ignore[assignment]
+    case_rows = _case_report_rows(case_studies)  # type: ignore[arg-type]
+    case_details_markdown, case_details_html = _case_detail_reports(
+        case_studies, int(metadata["min_peers"])  # type: ignore[arg-type]
+    )
     findings_markdown = "\n".join(
         f"- **{finding['title']}**: {finding['body']}"  # type: ignore[index]
         for finding in findings  # type: ignore[union-attr]
@@ -715,6 +855,12 @@ def _render_reports(
 ## 個別ケース分析
 
 {_markdown_table(case_headers, case_rows)}
+
+### 算出値の全期間明細
+
+推論文と切り離して検証できるよう、算出可能な決定論的指標を全て掲載します。
+
+{case_details_markdown}
 
 ## 全イベント
 
@@ -785,6 +931,11 @@ def _render_reports(
   <ul>{findings_html}</ul>
   <h2>個別ケース分析</h2>
   {_html_table(case_headers, case_rows)}
+  <h2>算出値の全期間明細</h2>
+  <p class="note">
+    推論文と切り離して検証できるよう、算出可能な決定論的指標を全て掲載します。
+  </p>
+  {case_details_html}
   <h2>全イベント</h2>
   {_html_table(overall_headers, overall)}
   <h2>イベント種別別・重複窓除外</h2>

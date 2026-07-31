@@ -326,13 +326,29 @@ function renderLoadedBars() {
   const visible = state.extended
     ? payload.bars
     : payload.bars.filter((bar) => bar.session === 'regular');
-  const now = Math.floor(Date.now() / 1000);
+  const latestTime = visible.at(-1)?.time ?? null;
+  const oldestTime = visible[0]?.time ?? null;
 
   state.periodNotes.clear();
   for (const { days, label } of PERIODS) {
-    const cutoff = now - days * 86400;
-    const bars = visible.filter((bar) => bar.time >= cutoff);
-    charts.get(days).setBars(bars);
+    const periodSeconds = days * 86400;
+    const desiredFrom = latestTime == null ? null : latestTime - periodSeconds;
+    // Anchor every pane at the newest stored bar rather than wall-clock time.
+    // A weekend must not empty the 1D pane. If history does not reach the
+    // requested boundary, start at the oldest actual record as requested.
+    const visibleFrom =
+      desiredFrom == null || oldestTime == null
+        ? null
+        : Math.max(desiredFrom, oldestTime);
+    const bars = visibleFrom == null
+      ? []
+      : visible.filter((bar) => bar.time >= visibleFrom && bar.time <= latestTime);
+    charts.get(days).setBars(bars, {
+      visibleFrom,
+      visibleTo: latestTime,
+      periodSeconds,
+      oldestTime,
+    });
 
     // The provider is named only when more than one appears in the period.
     // IEX and SIP volume are not comparable, so a mixed range must not be
@@ -341,7 +357,7 @@ function renderLoadedBars() {
     const notes = [`${bars.length.toLocaleString()} 本`];
     if (sources.length > 1) notes.push(`提供元が混在: ${sources.join(' / ')}`);
     const clipped =
-      payload.truncated && visible.length > 0 && visible[0].time > cutoff;
+      payload.truncated && desiredFrom != null && oldestTime > desiredFrom;
     if (clipped) notes.push('件数上限で期間先頭を省略');
     if (!bars.length) notes.push('データなし');
     state.periodNotes.set(days, notes.join(' · '));

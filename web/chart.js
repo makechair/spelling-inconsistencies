@@ -86,6 +86,18 @@ export class PriceChart {
         crosshairMarkerVisible: false,
       }),
     }));
+    // Whitespace points make the requested calendar window part of the time
+    // scale even when it begins on a weekend or outside market hours. Without
+    // them fitContent() collapses (for example) a 7D pane to the timestamps on
+    // which trades happened, so its axis can appear to cover only five days.
+    this.rangeAnchors = this.chart.addLineSeries({
+      visible: false,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    this.periodWindow = null;
+    this.periodSeconds = null;
+    this.oldestLoadedTime = null;
 
     this.legend = document.createElement('div');
     this.legend.className = 'chart-legend';
@@ -140,6 +152,10 @@ export class PriceChart {
    */
   setExpanded(expanded) {
     this.persistView = expanded;
+    if (this.periodWindow) {
+      this.#applyPeriodWindow();
+      return;
+    }
     if (expanded) {
       const { barSpacing, rightOffset } = view();
       if (barSpacing == null) {
@@ -150,6 +166,17 @@ export class PriceChart {
           ...(rightOffset == null ? {} : { rightOffset }),
         });
       }
+    } else {
+      this.chart.timeScale().fitContent();
+    }
+  }
+
+  #applyPeriodWindow() {
+    if (!this.periodWindow) return;
+    const { from, to } = this.periodWindow;
+    this.rangeAnchors.setData(from < to ? [{ time: from }, { time: to }] : [{ time: to }]);
+    if (from < to) {
+      this.chart.timeScale().setVisibleRange({ from, to });
     } else {
       this.chart.timeScale().fitContent();
     }
@@ -256,7 +283,10 @@ export class PriceChart {
   }
 
   /** Replace the whole series. `bars` come from /api/bars. */
-  setBars(bars) {
+  setBars(
+    bars,
+    { visibleFrom = null, visibleTo = null, periodSeconds = null, oldestTime = null } = {},
+  ) {
     const candles = bars.map((bar) => ({
       time: bar.time,
       open: bar.open,
@@ -282,7 +312,21 @@ export class PriceChart {
     this.lastVolume = volumes.length ? volumes[volumes.length - 1] : null;
     this.#renderLegend(null);
     this.lastTime = bars.length ? bars[bars.length - 1].time : null;
-    if (!bars.length) return;
+    this.periodSeconds = periodSeconds;
+    this.oldestLoadedTime = oldestTime;
+    this.periodWindow =
+      visibleFrom != null && visibleTo != null
+        ? { from: visibleFrom, to: visibleTo }
+        : null;
+    if (!bars.length) {
+      this.rangeAnchors.setData([]);
+      return;
+    }
+
+    if (this.periodWindow) {
+      this.#applyPeriodWindow();
+      return;
+    }
 
     // fitContent() unconditionally was what discarded the zoom on every load,
     // symbol switch and period change. Fit only when there is nothing
@@ -320,6 +364,25 @@ export class PriceChart {
     });
     this.lastCandle = { time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close };
     this.lastVolume = { time: bar.time, value: bar.volume };
+
+    // Grid panes keep their named calendar width as live bars arrive. An
+    // expanded pane is left alone after the initial range so a user's manual
+    // zoom is not reset by the 30-second refresh.
+    if (
+      !this.persistView &&
+      this.periodWindow &&
+      this.periodSeconds != null &&
+      bar.time > this.periodWindow.to
+    ) {
+      this.periodWindow = {
+        from: Math.max(
+          this.oldestLoadedTime ?? bar.time,
+          bar.time - this.periodSeconds,
+        ),
+        to: bar.time,
+      };
+      this.#applyPeriodWindow();
+    }
 
     // Without this the averages freeze at the last completed bar while the
     // candle beside them keeps moving, which reads as a stalled indicator.

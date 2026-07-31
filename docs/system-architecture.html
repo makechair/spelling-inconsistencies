@@ -1173,9 +1173,10 @@
             <ol>
               <li><code>/api/symbols?watched_only=true</code></li>
               <li><code>/api/bars/{symbol}?days=365</code>を<strong>1回だけ</strong>取得</li>
-              <li>最新側の最大20,000 barsを1D・7D・1M・1Yへ分配して4分割描画</li>
-              <li>チャート選択時は単一画面へ拡大し、保存済みzoomを復元</li>
-              <li>「4分割」でoverviewへ戻り、各期間をfitし直す</li>
+              <li>最新側の最大20,000 barsを、最新足を右端に1D・7D・1M・1Yへ分配して4分割描画</li>
+              <li>非取引日を含む暦日幅を不可視anchorで固定。履歴不足時だけ最古データを左端にする</li>
+              <li>チャート選択時は同じ期間幅のまま単一画面へ拡大</li>
+              <li>「4分割」で高さ固定の2×2 overviewへ戻す</li>
               <li><code>/api/live?symbols=...</code>へEventSource接続</li>
             </ol>
           </div>
@@ -1206,8 +1207,8 @@
           <table>
             <thead><tr><th>File</th><th>役割</th></tr></thead>
             <tbody>
-              <tr><td><code>web/app.js</code></td><td>watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、差分取得、SSE、再接続判定。4画面は1回のhistory応答を共有</td></tr>
-              <tr><td><code>web/chart.js</code></td><td>Lightweight Charts。軸フォーマット、legend、出来高、MA描画。4分割時はfitし、拡大時だけzoomを復元・保存。provider帰属表示は無効化</td></tr>
+              <tr><td><code>web/app.js</code></td><td>watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、差分取得、SSE、再接続判定。最新足を右端に各暦日幅を計算し、履歴不足時は最古データを左端にする</td></tr>
+              <tr><td><code>web/chart.js</code></td><td>Lightweight Charts。軸フォーマット、legend、出来高、MA描画。不可視anchorで時間軸を固定し、拡大／4分割復帰時も期間幅を再適用。provider帰属表示は無効化</td></tr>
               <tr><td><code>web/timezone.js</code></td><td>表示タイムゾーンの単一の情報源。既定<code>America/New_York</code>、localStorage保存。軸とパネルが別々のzoneになる問題への対応</td></tr>
               <tr><td><code>web/viewstate.js</code></td><td><code>{days, extended, barSpacing, rightOffset, movingAverages}</code>を保存。読み込みや銘柄切替でzoomを失わない</td></tr>
               <tr><td><code>web/indicators.js</code></td><td>移動平均。窓が満たない間は点を出さない</td></tr>
@@ -1583,6 +1584,9 @@
             前回比較、全体／イベント種別の統計を表示する。母集団が小さい間も、反応前の
             長期日足内percentile、直前モメンタム、60日出来高比、同業差、同規模変動後の
             ベースレートを個別ケースとして示し、一般化できる集計と分離する。
+            所見文はLLMではなく算出値をルールで文章化するため追加費用はない。
+            各ケースには0／1／2／5／20日のreturn・percentile・観測数・peer比較と、
+            類似変動後1／5／20日の全算出値を明細表示する。
           </p>
         </div>
         <div class="callout">

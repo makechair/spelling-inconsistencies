@@ -12,7 +12,6 @@
 <header class="topbar">
   <a class="brand brand-link" href="/">US&nbsp;Stocks</a>
   <a class="topbar-link active" href="/reports" aria-current="page">分析レポート</a>
-  <span class="report-topbar-note">Notionイベント × 株価変動</span>
 </header>
 
 <main class="report-layout">
@@ -89,6 +88,7 @@
           <tbody id="case-study-body"></tbody>
         </table>
       </div>
+      <div id="case-detail-list" class="case-detail-list"></div>
     </section>
 
     <section>
@@ -170,6 +170,8 @@
       <ul>
         <li><code>raw_return</code>は反応取引日の直前終値を基準にした調整済みリターンです。</li>
         <li><code>abnormal_return</code>は同subsectorの等ウェイトreturnを差し引きます。</li>
+        <li>「今回の読み取り」は算出済み指標を条件分岐で文章化したもので、LLM APIは使用していません。</li>
+        <li>個別ケースの数値表には、推論文の根拠となる決定論的な算出値を全期間分掲載します。</li>
         <li>過去の日次版も同じ定義で保存するため、データ追加による結果の変化を比較できます。</li>
         <li>日足分析であり、日中発表の発表前変動を分離できないため、因果ではなく関連を示します。</li>
       </ul>

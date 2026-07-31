@@ -595,9 +595,9 @@ sequenceDiagram
     UI->>API: GET /api/bars/{symbol}?days=365
     API->>M: source優先で最新側からhistory read
     API-->>UI: 最大20,000 bars（時系列順）
-    UI->>UI: 1回の応答を1D / 7D / 1M / 1Yへ分配して4分割描画
+    UI->>UI: 最新足を終点に1D / 7D / 1M / 1Yへ分配して4分割描画
     opt chart選択
-        UI->>UI: 選択期間を拡大し、保存済みzoomを復元
+        UI->>UI: 選択期間の暦日幅を保ったまま拡大
     end
     UI->>API: EventSource /api/live?symbols=...
     API->>L: full snapshot read
@@ -640,8 +640,8 @@ APIは1ワーカーで動作する。SQLiteコネクションはスレッドロ�
 
 | File | 役割 |
 |---|---|
-| `web/app.js` | watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、30秒の差分取得（`refreshTail`）、SSE、再接続判定。4画面は1回のhistory応答を共有 |
-| `web/chart.js` | Lightweight Charts。軸フォーマット、legend、出来高、MA描画。4分割時は各期間をfitし、拡大時だけzoomを復元・保存。provider帰属表示は無効化 |
+| `web/app.js` | watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、30秒の差分取得（`refreshTail`）、SSE、再接続判定。最新足を右端に各暦日幅を計算し、履歴不足時は最古データを左端にする |
+| `web/chart.js` | Lightweight Charts。軸フォーマット、legend、出来高、MA描画。非取引日でも期間幅が縮まらないよう不可視anchorで時間軸を固定。拡大／4分割復帰時も同じ期間幅を再適用 |
 | `web/timezone.js` | 表示タイムゾーンの単一の情報源。既定 `America/New_York`、localStorage保存 |
 | `web/viewstate.js` | `{days, extended, barSpacing, rightOffset, movingAverages}` を保存 |
 | `web/indicators.js` | 移動平均。窓が満たない間は点を出さない |
@@ -1258,6 +1258,8 @@ DuckDB／pyarrowやイベント明細Parquetを常駐プロセスへimportしな
 反応前だけの同銘柄日足からreturn percentileと同規模変動後のベースレートを計算し、
 直前5／20日モメンタム、60日出来高中央値比、利用可能な同subsector平均との差を併記する。
 peerが3社未満の相対returnは参考値として残すが、正式なabnormal returnには昇格させない。
+所見文はLLMではなく算出値をルールで文章化するため追加費用はない。Webと日次MD／HTMLには、
+全horizonのraw return・percentile・観測数・peer比較と、類似変動後の全算出値を明細表示する。
 
 2026-07-31の本番初回実行では、Notion 368ページからticker付き17イベントを展開し、
 現時点の日足corpusへ1件を接続、16件を未接続として明示した。初回は6ファイルをS3へ

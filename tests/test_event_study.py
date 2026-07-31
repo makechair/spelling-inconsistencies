@@ -240,7 +240,12 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert len(unmatched) == 1
     assert unmatched[0]["symbol"] == "ZZZZ"
     assert unmatched[0]["reason"] == "symbol_not_in_daily_corpus"
-    assert "Notionイベント × 株価変動" in (output / "report.md").read_text()
+    report_markdown = (output / "report.md").read_text()
+    assert "Notionイベント × 株価変動" in report_markdown
+    assert "算出値の全期間明細" in report_markdown
+    assert "直前5取引日" in report_markdown
+    assert "累積分位" in report_markdown
+    assert "同程度以上の過去変動後" in report_markdown
     assert "<!doctype html>" in (output / "report.html").read_text()
     report = json.loads((output / "report.json").read_text())
     assert report["report_date"] == "2026-07-31"

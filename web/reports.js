@@ -9,9 +9,12 @@ const elements = {
   caseStudyBody: document.querySelector("#case-study-body"),
   caseStudyWrap: document.querySelector("#case-study-table-wrap"),
   caseStudyEmpty: document.querySelector("#case-study-empty"),
+  caseDetailList: document.querySelector("#case-detail-list"),
   overallBody: document.querySelector("#overall-body"),
   eventTypeBody: document.querySelector("#event-type-body"),
 };
+
+const HORIZONS = [0, 1, 2, 5, 20];
 
 const countIds = {
   news_pages: "count-pages",
@@ -128,9 +131,131 @@ function eventCell(tr, study) {
   tr.append(td);
 }
 
+function horizonLabel(horizon) {
+  return horizon === 0
+    ? "反応日（1取引日累計）"
+    : `+${horizon}日（${horizon + 1}取引日累計）`;
+}
+
+function detailTable(title, headers, rows) {
+  const section = document.createElement("section");
+  section.className = "case-metric-section";
+  const heading = document.createElement("h4");
+  heading.textContent = title;
+  const wrap = document.createElement("div");
+  wrap.className = "report-table-wrap";
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  headers.forEach((label) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.append(th);
+  });
+  thead.append(headRow);
+  const tbody = document.createElement("tbody");
+  rows.forEach((values) => row(tbody, values));
+  table.append(thead, tbody);
+  wrap.append(table);
+  section.append(heading, wrap);
+  return section;
+}
+
+function metricGrid(study, context) {
+  const grid = document.createElement("dl");
+  grid.className = "case-metric-grid";
+  const items = [
+    ["イベント日", study.event_date],
+    ["反応候補日", study.candidate_date],
+    ["反応取引日", study.reaction_date],
+    ["時刻品質", `${study.timing_quality || "—"} / ${study.timing_bucket || "—"}`],
+    ["センチメント", study.sentiment || "—"],
+    ["分類信頼度", number(study.confidence, 2)],
+    ["重要度", number(study.importance, 0)],
+    ["同日同種記事数", number(study.event_group_size, 0)],
+    ["イベント重み", number(study.event_weight, 3)],
+    ["20日窓の重複数", number(study.overlap_count, 0)],
+    ["直前5取引日", percent(study.pre_event_return_5d, true)],
+    ["直前20取引日", percent(study.pre_event_return_20d, true)],
+    ["反応日出来高 / 過去60日中央値", study.reaction_volume_ratio_60d == null
+      ? "—"
+      : `${number(study.reaction_volume_ratio_60d, 2)}倍`],
+    ["同規模の過去変動", context
+      ? `${number(context.similar_move_count, 0)}件（${context.move_direction === "down" ? "下落" : "上昇"}）`
+      : "—"],
+  ];
+  items.forEach(([label, value]) => {
+    const item = document.createElement("div");
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = value ?? "—";
+    item.append(dt, dd);
+    grid.append(item);
+  });
+  return grid;
+}
+
+function renderCaseDetails(report, studies) {
+  elements.caseDetailList.replaceChildren();
+  studies.forEach((study) => {
+    const article = document.createElement("article");
+    article.className = "case-detail";
+    const header = document.createElement("header");
+    const title = document.createElement("h3");
+    title.textContent = `${study.symbol} · ${study.reaction_date}`;
+    const headline = document.createElement("p");
+    headline.textContent = `${study.event_type || "unknown"} · ${study.headline || "見出しなし"}`;
+    header.append(title, headline);
+
+    const context = study.historical_move_context;
+    const horizonRows = HORIZONS.map((horizon) => {
+      const peerCount = Number(study[`peer_count_${horizon}d`] || 0);
+      const abnormal = study[`abnormal_return_${horizon}d`];
+      return [
+        horizonLabel(horizon),
+        percent(study[`raw_return_${horizon}d`], true),
+        rarityLabel(study, horizon),
+        percent(study[`historical_percentile_${horizon}d`]),
+        number(study[`historical_observations_${horizon}d`], 0),
+        number(peerCount, 0),
+        percent(study[`exploratory_benchmark_return_${horizon}d`], true),
+        percent(study[`exploratory_relative_return_${horizon}d`], true),
+        abnormal == null && peerCount > 0
+          ? `—（${report.min_peers}社未満）`
+          : percent(abnormal, true),
+      ];
+    });
+    const sections = [
+      detailTable(
+        "期間別の観測値・過去分布・同業比較",
+        ["期間", "観測リターン", "過去分布での位置", "累積分位", "過去観測数", "peer数", "peer平均", "peerとの差", "正式abnormal"],
+        horizonRows,
+      ),
+    ];
+    if (context) {
+      sections.push(
+        detailTable(
+          `同程度以上の過去変動後（${number(context.similar_move_count, 0)}件）`,
+          ["先の期間", "平均", "中央値", "上昇率"],
+          [1, 5, 20].map((days) => [
+            `${days}取引日後`,
+            percent(context[`forward_mean_${days}d`], true),
+            percent(context[`forward_median_${days}d`], true),
+            percent(context[`forward_win_rate_${days}d`]),
+          ]),
+        ),
+      );
+    }
+    article.append(header, metricGrid(study, context), ...sections);
+    elements.caseDetailList.append(article);
+  });
+}
+
 function renderCaseStudies(report) {
   const studies = report.case_studies || [];
   elements.caseStudyBody.replaceChildren();
+  elements.caseDetailList.replaceChildren();
   if (!studies.length) {
     elements.caseStudyWrap.hidden = true;
     elements.caseStudyEmpty.hidden = false;
@@ -169,6 +294,7 @@ function renderCaseStudies(report) {
     });
     elements.caseStudyBody.append(tr);
   });
+  renderCaseDetails(report, studies);
 }
 
 function renderComparison(report) {
