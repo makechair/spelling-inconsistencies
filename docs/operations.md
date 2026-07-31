@@ -185,6 +185,10 @@ JSTの日付ごとに成果物を残し、次回は直前の`report.json`を読�
 認証済みの`/api/analysis/reports`からJSONだけを読む。APIプロセスはDuckDB／pyarrowや
 イベント明細Parquetを読み込まない。
 
+母集団が小さい間は、画面の「個別ケース分析」を先に読む。長期日足内の希少性、
+イベント前モメンタム、60日出来高比、同業平均との差、同規模変動後の履歴を表示する。
+同業が`analysis_min_peers`未満の場合は参考値であり、正式なabnormal returnではない。
+
 ローカルだけで確認する場合:
 
 ```bash

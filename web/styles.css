@@ -506,6 +506,16 @@ body {
 }
 .report-observation h2 { margin: 0; }
 .report-observation > p { margin: 0; font-size: 15px; line-height: 1.75; }
+.report-findings { display: grid; gap: 12px; }
+.report-finding {
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.report-finding:last-child { padding-bottom: 0; border-bottom: 0; }
+.report-finding strong { display: block; margin-bottom: 3px; }
+.report-finding p { margin: 0; color: var(--text); line-height: 1.7; }
+.report-finding.warning strong { color: var(--warn); }
+.report-finding.context strong { color: var(--accent); }
 
 .report-section-heading {
   display: flex;
@@ -535,6 +545,10 @@ body {
 .report-table-wrap th:first-child,
 .report-table-wrap td:first-child { text-align: left; }
 .report-table-wrap tbody tr:last-child td { border-bottom: 0; }
+.report-event-cell { min-width: 300px; max-width: 440px; white-space: normal !important; }
+.report-event-cell strong,
+.report-event-cell span { display: block; }
+.report-event-cell span { margin-top: 3px; color: var(--muted); font-size: 12px; }
 
 .report-method {
   padding: 22px 24px;

@@ -294,10 +294,150 @@ def _overall_comparison(
     return comparison
 
 
+def _case_studies(
+    event_rows: list[dict[str, object]],
+    context_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    contexts = {row["event_key"]: row for row in context_rows}
+    studies: list[dict[str, object]] = []
+    for event in event_rows:
+        study = dict(event)
+        study["historical_move_context"] = contexts.get(event["event_key"])
+        studies.append(study)
+    return studies
+
+
+def _finding(
+    title: str,
+    body: str,
+    *,
+    level: str = "observation",
+) -> dict[str, str]:
+    return {"title": title, "body": body, "level": level}
+
+
+def _analysis_findings(
+    metadata: dict[str, object],
+    case_studies: list[dict[str, object]],
+) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    matched = int(metadata["matched_events"])
+    ticker_events = int(metadata["ticker_events"])
+    if matched < 5:
+        findings.append(
+            _finding(
+                "結論の強さ",
+                f"価格反応まで接続できたのは{ticker_events}件中{matched}件です。"
+                "現段階はイベント種別の平均効果ではなく、個別ケースの記述分析として"
+                "読んでください。",
+                level="warning",
+            )
+        )
+
+    for study in case_studies[:5]:
+        symbol = str(study["symbol"])
+        headline = str(study.get("headline") or "見出しなし")
+        available_horizons = [
+            horizon
+            for horizon in reversed(HORIZONS)
+            if study.get(f"raw_return_{horizon}d") is not None
+        ]
+        if not available_horizons:
+            continue
+        horizon = available_horizons[0]
+        raw_return = float(study[f"raw_return_{horizon}d"])
+        percentile = study.get(f"historical_percentile_{horizon}d")
+        observations = int(study.get(f"historical_observations_{horizon}d") or 0)
+        rarity = ""
+        if percentile is not None and observations >= 252:
+            tail = float(percentile) if raw_return < 0 else 1 - float(percentile)
+            side = "下位" if raw_return < 0 else "上位"
+            rarity = (
+                f"、過去{observations:,}観測の同銘柄分布では"
+                f"{side}{tail * 100:.1f}%"
+            )
+        elif observations:
+            rarity = f"。過去分布は{observations}観測しかなく、希少性は未判定"
+        findings.append(
+            _finding(
+                f"{symbol}: {horizon + 1}取引日累計",
+                f"「{headline}」の反応日から{horizon}日後までの調整済みリターンは"
+                f"{raw_return * 100:+.2f}%{rarity}です。",
+            )
+        )
+
+        peers = int(study.get(f"peer_count_{horizon}d") or 0)
+        exploratory = study.get(f"exploratory_relative_return_{horizon}d")
+        if peers and exploratory is not None:
+            threshold = int(metadata["min_peers"])
+            qualifier = (
+                "正式benchmark"
+                if peers >= threshold
+                else f"参考値（{peers}社、基準{threshold}社未満）"
+            )
+            findings.append(
+                _finding(
+                    f"{symbol}: 同業平均との差",
+                    (
+                        "反応日は"
+                        f"{float(study['exploratory_relative_return_0d']) * 100:+.2f}ポイント、"
+                        if study.get("exploratory_relative_return_0d") is not None
+                        and horizon != 0
+                        else ""
+                    )
+                    + f"{horizon}日後は{float(exploratory) * 100:+.2f}ポイント。"
+                    f"これは{qualifier}です。",
+                    level="context",
+                )
+            )
+
+        volume_ratio = study.get("reaction_volume_ratio_60d")
+        if volume_ratio is not None:
+            pre_20d = study.get("pre_event_return_20d")
+            momentum = (
+                f"イベント直前20取引日は{float(pre_20d) * 100:+.2f}%、"
+                if pre_20d is not None
+                else ""
+            )
+            findings.append(
+                _finding(
+                    f"{symbol}: 事前トレンドと出来高",
+                    momentum + "反応日の調整済み出来高は直前60取引日の中央値の"
+                    f"{float(volume_ratio):.2f}倍でした。価格変動と売買参加の強さを"
+                    "分けて評価できます。",
+                    level="context",
+                )
+            )
+
+        context = study.get("historical_move_context")
+        if isinstance(context, dict) and int(context.get("similar_move_count") or 0) >= 20:
+            count = int(context["similar_move_count"])
+            mean_5d = context.get("forward_mean_5d")
+            win_5d = context.get("forward_win_rate_5d")
+            if mean_5d is not None and win_5d is not None:
+                move_label = (
+                    "下落" if context.get("move_direction") == "down" else "上昇"
+                )
+                findings.append(
+                    _finding(
+                        f"{symbol}: 同規模変動後の履歴",
+                        f"反応日と同等以上の{move_label}日は過去に{count}回あり、"
+                        "その後5取引日の"
+                        f"平均は{float(mean_5d) * 100:+.2f}%、上昇率は"
+                        f"{float(win_5d) * 100:.1f}%でした。ニュース効果ではなく、"
+                        "値動きだけを条件にした参考統計です。",
+                        level="context",
+                    )
+                )
+    return findings
+
+
 def _report_payload(
     report_date: date,
     metadata: dict[str, object],
     summary_rows: list[dict[str, object]],
+    event_rows: list[dict[str, object]],
+    context_rows: list[dict[str, object]],
     previous: dict[str, Any] | None,
 ) -> dict[str, object]:
     counts = {
@@ -309,9 +449,10 @@ def _report_payload(
         "overlapping_events": metadata["overlapping_events"],
     }
     previous_counts = previous.get("counts", {}) if previous else {}
+    case_studies = _case_studies(event_rows, context_rows)
     return _jsonable(
         {
-            "version": 1,
+            "version": 2,
             "report_date": report_date,
             "daily_through": metadata["latest_daily_date"],
             "notion_through": metadata["latest_news_edit"],
@@ -330,6 +471,8 @@ def _report_payload(
                 },
                 "overall": _overall_comparison(summary_rows, previous),
             },
+            "findings": _analysis_findings(metadata, case_studies),
+            "case_studies": case_studies,
             # JSON is deliberately complete enough for the API and future
             # historical comparisons, so the web process never imports
             # DuckDB/pyarrow or holds the large event-level Parquet in memory.
@@ -437,6 +580,59 @@ def _report_rows(summary_rows: list[dict[str, object]]) -> tuple[list[list[str]]
     return overall, by_type
 
 
+def _case_report_rows(case_studies: list[dict[str, object]]) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for study in case_studies:
+        horizons = [
+            horizon
+            for horizon in reversed(HORIZONS)
+            if study.get(f"raw_return_{horizon}d") is not None
+        ]
+        if not horizons:
+            continue
+        horizon = horizons[0]
+        raw_return = study[f"raw_return_{horizon}d"]
+        percentile = study.get(f"historical_percentile_{horizon}d")
+        observations = int(study.get(f"historical_observations_{horizon}d") or 0)
+        rarity = "—"
+        if percentile is not None and observations >= 252:
+            tail = float(percentile) if float(raw_return) < 0 else 1 - float(percentile)
+            rarity = f"{'下位' if float(raw_return) < 0 else '上位'}{tail * 100:.1f}%"
+        elif observations:
+            rarity = f"不足（{observations}観測）"
+        relative = study.get(f"exploratory_relative_return_{horizon}d")
+        peer_count = int(study.get(f"peer_count_{horizon}d") or 0)
+        context = study.get("historical_move_context")
+        historical_forward = "—"
+        if (
+            isinstance(context, dict)
+            and int(context.get("similar_move_count") or 0) >= 20
+            and context.get("forward_mean_5d") is not None
+        ):
+            historical_forward = (
+                f"{_percent(context['forward_mean_5d'])} / "
+                f"勝率{_percent(context['forward_win_rate_5d'])}"
+            )
+        rows.append(
+            [
+                str(study["reaction_date"]),
+                str(study["symbol"]),
+                str(study.get("headline") or "見出しなし"),
+                _percent(study.get("pre_event_return_20d")),
+                f"{horizon}日 {_percent(raw_return)}",
+                rarity,
+                f"{_percent(relative)} / {peer_count}社" if relative is not None else "—",
+                (
+                    f"{_number(study['reaction_volume_ratio_60d'], 2)}倍"
+                    if study.get("reaction_volume_ratio_60d") is not None
+                    else "—"
+                ),
+                historical_forward,
+            ]
+        )
+    return rows
+
+
 def _render_reports(
     metadata: dict[str, object],
     summary_rows: list[dict[str, object]],
@@ -454,6 +650,28 @@ def _render_reports(
         "95% CI",
     ]
     type_headers = ["イベント種別", "期間", "イベント数", "加重平均", "中央値", "勝率"]
+    case_headers = [
+        "反応日",
+        "銘柄",
+        "イベント",
+        "直前20日",
+        "観測済み反応",
+        "過去分布",
+        "同業差",
+        "出来高",
+        "同規模変動後5日",
+    ]
+    findings = report_payload.get("findings", [])
+    case_rows = _case_report_rows(report_payload.get("case_studies", []))  # type: ignore[arg-type]
+    findings_markdown = "\n".join(
+        f"- **{finding['title']}**: {finding['body']}"  # type: ignore[index]
+        for finding in findings  # type: ignore[union-attr]
+    )
+    findings_html = "".join(
+        f"<li><strong>{html.escape(str(finding['title']))}</strong>: "
+        f"{html.escape(str(finding['body']))}</li>"
+        for finding in findings  # type: ignore[union-attr]
+    )
     unmatched = ", ".join(metadata["unmatched_symbols"]) or "なし"  # type: ignore[arg-type]
     latest_daily = html.escape(str(metadata["latest_daily_date"]))
     latest_news = html.escape(str(metadata["latest_news_edit"]))
@@ -489,6 +707,14 @@ def _render_reports(
 
 このレポートはその日時点の全日足・全Notionコーパスを再計算したスナップショットです。
 日付別に保持するため、分析母集団や統計値の変化を後から比較できます。
+
+## 実データからの所見
+
+{findings_markdown}
+
+## 個別ケース分析
+
+{_markdown_table(case_headers, case_rows)}
 
 ## 全イベント
 
@@ -555,6 +781,10 @@ def _render_reports(
     各日付のレポートは、その日時点の全日足・全Notionコーパスを再計算した
     スナップショットです。
   </p>
+  <h2>実データからの所見</h2>
+  <ul>{findings_html}</ul>
+  <h2>個別ケース分析</h2>
+  {_html_table(case_headers, case_rows)}
   <h2>全イベント</h2>
   {_html_table(overall_headers, overall)}
   <h2>イベント種別別・重複窓除外</h2>
@@ -670,6 +900,9 @@ def run(
         event_unmatched = connection.execute(
             "SELECT * FROM event_unmatched ORDER BY symbol, candidate_date, page_id"
         ).to_arrow_table()
+        event_case_context = connection.execute(
+            "SELECT * FROM event_case_context ORDER BY event_key"
+        ).to_arrow_table()
         metadata = _metadata(connection, settings.analysis_min_peers)
     except duckdb.Error as exc:
         raise CorpusError(f"event study query failed: {exc}") from exc
@@ -681,10 +914,14 @@ def run(
     _write_parquet(paths["event_summary.parquet"], event_summary, pq)
     _write_parquet(paths["event_unmatched.parquet"], event_unmatched, pq)
     summary_rows = event_summary.to_pylist()
+    event_rows = event_returns.to_pylist()
+    context_rows = event_case_context.to_pylist()
     report_payload = _report_payload(
         report_date,
         metadata,
         summary_rows,
+        event_rows,
+        context_rows,
         previous_report,
     )
     _write_text(

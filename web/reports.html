@@ -59,7 +59,36 @@
         <p class="report-eyebrow">TODAY'S READ</p>
         <h2 id="observation-title">今回の読み取り</h2>
       </div>
-      <p id="report-observation">—</p>
+      <div id="report-findings" class="report-findings"></div>
+    </section>
+
+    <section>
+      <div class="report-section-heading">
+        <div>
+          <h2>個別ケース分析</h2>
+          <p class="report-section-note">
+            同銘柄の長期日足分布、同subsector、出来高、イベント前後を突き合わせた結果
+          </p>
+        </div>
+      </div>
+      <div id="case-study-empty" class="report-empty" hidden></div>
+      <div id="case-study-table-wrap" class="report-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>反応日</th>
+              <th>イベント</th>
+              <th>直前20日</th>
+              <th>観測済み反応</th>
+              <th>過去分布</th>
+              <th>同業差</th>
+              <th>出来高</th>
+              <th>同規模変動後5日</th>
+            </tr>
+          </thead>
+          <tbody id="case-study-body"></tbody>
+        </table>
+      </div>
     </section>
 
     <section>

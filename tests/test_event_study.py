@@ -247,6 +247,15 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert report["previous_report_date"] is None
     assert report["counts"]["matched_events"] == 4
     assert report["summary"]
+    assert len(report["case_studies"]) == 4
+    assert report["findings"][0]["title"] == "結論の強さ"
+    nvda_case = next(
+        study for study in report["case_studies"] if study["page_id"] == "page-nvda-1"
+    )
+    assert nvda_case["historical_percentile_0d"] is not None
+    assert nvda_case["historical_observations_0d"] > 0
+    assert nvda_case["reaction_volume_ratio_60d"] == 1.0
+    assert nvda_case["exploratory_relative_return_0d"] == nvda_case["abnormal_return_0d"]
     assert (output / "manifest.json").exists()
     daily = tmp_path / "corpus" / "analysis" / "daily" / "date=2026-07-31"
     assert (daily / "report.json").exists()

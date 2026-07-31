@@ -382,6 +382,8 @@ def test_analysis_report_page_and_json_archive(settings: Settings, tmp_path: Pat
         page = test_client.get("/reports")
         assert page.status_code == 200
         assert 'id="report-date"' in page.text
+        assert 'id="case-study-body"' in page.text
+        assert 'id="report-findings"' in page.text
         assert "/static/reports.js" in page.text
 
         listed = test_client.get("/api/analysis/reports")
