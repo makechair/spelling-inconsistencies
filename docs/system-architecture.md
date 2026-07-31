@@ -1274,6 +1274,34 @@ uploadし、同一入力での再実行は0 upload。CPU時間は約1.3秒だっ
 timerはenabled/activeで、次回以降は日足partitionの段階追加に応じてmatched数が
 自動的に増える。
 
+### 19.7 ニュース全文資産の分離方針
+
+Notionの要約だけでも価格反応日は計算できるが、将来の再分類や「なぜ動いたか」の検証には
+取得時の情報量が足りない。現行teitenはRSS本文を最大2,000字までLLMへ渡すものの、
+Notionへは500字要約と見立てだけを書き、LLM入力本文を保存していない。
+
+```mermaid
+flowchart LR
+    SOURCE["RSS／許可された記事ページ"] --> FETCH["取得時snapshot<br/>paywall回避なし"]
+    FETCH --> HASH["canonical URL + SHA-256<br/>抽出器version"]
+    HASH --> S3TEXT["S3 corpus/articles/<br/>gzip JSON本文"]
+    FETCH --> FACTS["企業／製品／数量／供給関係<br/>event type／根拠span"]
+    FACTS --> PARQUET["news Parquet<br/>分析用のversioned facts"]
+    S3TEXT --> PARQUET
+    FACTS --> NOTION["Notion<br/>索引・要約・人手編集"]
+```
+
+Notionは人が読む索引、S3は再処理可能な本文資産、Parquetは分析用の構造化事実とする。
+sentimentは多数ある属性の1つに留め、企業・ticker、製品、工程、顧客／供給者、数量と単位、
+価格・設備投資・生産能力、対象期間、発言主体、直接／間接影響、importance、confidence、
+根拠spanをversion付きで残す。許諾できない媒体はURL、RSS本文、要約、hash、取得失敗理由だけを
+保存し、認証・paywall・robotsを回避しない。
+
+Notionの現行仕様ではAPIは平均3 request/秒、1 requestは500KB／1,000 blocks、rich textは
+1 object 2,000文字。Freeの1人workspaceと有料planはblocks無制限だが、Freeでownerが2人以上
+なら通算1,000 blocksで、削除しても枠は戻らない。容量だけなら本文textは置ける場合が多いが、
+API分割、再抽出、重複排除、将来の移行を考えると全文正本をNotionにしない。
+
 ## 20. まとめ
 
 このリポジトリは、小規模な個人用途に合わせて、外向き接続中心、二重認証、

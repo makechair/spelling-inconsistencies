@@ -413,6 +413,34 @@ Micron／マイクロン→MU、Western Digital→WDC、Seagate→STXを補完�
 `ticker_origin`と`ticker_evidence`をevent明細へ保存する。明示タグと本文補完の件数を
 分けて表示し、記事資産と分析用推定の境界を監査可能にする。
 
+### ニュース本文の保存方針
+
+価格反応の算出は日付・ticker・要約で実行できるが、要因分類の再学習、数値の再検証、
+企業・製品・顧客・供給関係の抽出には取得時の本文情報が必要になる。現行teitenはRSSの
+`content:encoded`またはsummaryを最大2,000字までLLM入力へ使い、TrendForceだけは
+許可された記事ページを少数取得するが、その入力本文を永続保存していない。
+
+Notionへ全文を複製せず、役割を次のように分ける。
+
+| 保存先 | 役割 |
+|---|---|
+| Notion | 人が読む見出し、500字要約、見立て、URL、分類、記事archive状態、content hash |
+| S3 `corpus/articles/` | 許諾範囲内の取得本文、取得時刻、canonical URL、HTTP情報、抽出器version、SHA-256 |
+| news Parquet | eventとS3 objectを結ぶ軽量索引、構造化事実、ticker根拠 |
+
+S3 objectは本文をgzipしたJSONとし、URLではなくcontent hashで重複排除する。paywall、
+認証回避、robots／利用条件に反する取得は行わない。保存できない媒体はURL、取得時刻、
+RSS本文、要約、構造化事実、失敗理由だけを残す。画像やPDFをNotionへ大量添付しない。
+
+構造化事実はsentimentだけでなく、企業・ticker、製品、工程、顧客／供給者、数量と単位、
+価格・設備投資・生産能力、対象期間、発言主体、直接／間接影響、event type、importance、
+confidence、根拠spanをversion付きで保存する。抽出器を更新しても原文snapshotから再計算できる。
+
+Notion APIは平均3 request/秒、1 request 500KB／1,000 blocks、rich text object 2,000文字。
+Freeの1人workspaceと有料planはblocks無制限だが、Freeでownerが2人以上ならworkspace通算
+1,000 blocksで、削除しても使用数は戻らない。したがってNotionのblock数ではなく、
+検索性・API分割・再分析のしやすさを理由に本文をS3へ分離する。
+
 `findings`はLLM APIではなく、上記の算出値と標本数を条件分岐で文章化するルールベース出力。
 追加のAPI費用は発生しない。文章だけで判断させず、Web、`report.md`、`report.html`には
 0／1／2／5／20日のraw return、percentile、観測数、peer数・平均・差・正式abnormal、

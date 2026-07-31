@@ -1609,6 +1609,23 @@
           </p>
         </div>
         <div class="callout">
+          <strong>ニュース本文はNotionではなくS3を再処理可能な正本にする</strong>
+          <p>
+            要約だけでも価格反応日は計算できるが、将来の再分類と要因検証には取得時の
+            情報量が必要になる。Notionは見出し・500字要約・見立て・URL・content hashを持つ
+            人向け索引、S3の<code>corpus/articles/</code>は許諾範囲内のgzip本文snapshot、
+            news Parquetは企業・製品・数量・供給関係・根拠spanを持つ分析用索引とする。
+            sentimentは属性の1つに留める。paywall、認証、robotsを回避せず、保存できない媒体は
+            RSS本文・要約・URL・hash・失敗理由だけを残す。
+          </p>
+          <p>
+            Notion APIは平均3 request/秒、1 request 500KB／1,000 blocks、rich text object
+            2,000文字。Freeの1人workspaceと有料planはblocks無制限だが、Freeでownerが2人以上
+            なら通算1,000 blocksで削除しても枠は戻らない。容量よりも再抽出・重複排除・移行の
+            しやすさを理由に、全文正本をNotionから分離する。
+          </p>
+        </div>
+        <div class="callout">
           <strong>本番初回結果（2026-07-31）</strong>
           <p>
             Notion 368ページからticker付き17イベントを展開し、段階導入中の日足corpusへ

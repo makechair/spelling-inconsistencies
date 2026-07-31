@@ -270,8 +270,14 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert report["summary"]
     assert len(report["case_studies"]) == 4
     assert report["focus_symbol"] == "NVDA"
-    assert [focus["symbol"] for focus in report["symbol_focus"]] == ["NVDA", "AMD"]
+    assert [focus["symbol"] for focus in report["symbol_focus"]] == [
+        "NVDA",
+        "AMD",
+        "ZZZZ",
+    ]
     nvda_focus = report["symbol_focus"][0]
+    assert nvda_focus["notion_article_events"] == 3
+    assert nvda_focus["matched_events"] == 3
     assert nvda_focus["article_events"] == 3
     assert nvda_focus["effective_events"] == 2.0
     assert nvda_focus["reaction_date_count"] == 2
@@ -284,6 +290,8 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert nvda_case["historical_percentile_0d"] is not None
     assert nvda_case["ticker_origin"] == "explicit"
     assert nvda_case["ticker_evidence"] == "notion_ticker"
+    assert nvda_case["summary_ja"] == "事実要約"
+    assert nvda_case["my_take"] == "見立て"
     assert nvda_case["historical_observations_0d"] > 0
     assert nvda_case["reaction_volume_ratio_60d"] == 1.0
     assert nvda_case["exploratory_relative_return_0d"] == nvda_case["abnormal_return_0d"]

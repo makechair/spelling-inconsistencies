@@ -540,7 +540,10 @@ body {
   font-size: 13px;
 }
 .report-focus-summary { margin: 0 0 16px; line-height: 1.7; }
-.report-focus-cards { grid-template-columns: repeat(5, minmax(120px, 1fr)); margin-bottom: 18px; }
+.report-focus-cards {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  margin-bottom: 18px;
+}
 .report-focus-cards article { background: var(--bg); }
 .report-focus-cards strong { font-size: 18px; overflow-wrap: anywhere; }
 
@@ -592,6 +595,12 @@ body {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
+}
+.case-detail > header .case-source-summary { color: var(--text); line-height: 1.7; }
+.case-detail > header .case-source-take {
+  padding-left: 10px;
+  border-left: 2px solid var(--accent);
+  line-height: 1.65;
 }
 .case-metric-grid {
   display: grid;

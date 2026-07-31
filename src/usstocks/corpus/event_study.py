@@ -153,6 +153,8 @@ def _timed_event_schema(pa: Any) -> Any:
             ("event_date", pa.date32()),
             ("published_at", pa.string()),
             ("headline", pa.string()),
+            ("summary_ja", pa.string()),
+            ("my_take", pa.string()),
             ("event_type", pa.string()),
             ("sentiment", pa.string()),
             ("confidence", pa.float64()),
@@ -231,7 +233,7 @@ def _build_timed_events(connection: Any, pa: Any) -> Any:
             row = {
                 key: value
                 for key, value in news_row.items()
-                if key not in {"summary_ja", "my_take", "tickers"}
+                if key != "tickers"
             }
             row["event_key"] = f"{news_row['page_id']}:{symbol}"
             row["symbol"] = symbol
@@ -390,7 +392,10 @@ def _median(values: list[float]) -> float | None:
     return (ordered[middle - 1] + ordered[middle]) / 2
 
 
-def _symbol_focus(case_studies: list[dict[str, object]]) -> list[dict[str, object]]:
+def _symbol_focus(
+    case_studies: list[dict[str, object]],
+    ticker_inventory: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     """Aggregate matched Notion pages within each ticker.
 
     The event-study summary deliberately remains the cross-sectional research
@@ -402,16 +407,33 @@ def _symbol_focus(case_studies: list[dict[str, object]]) -> list[dict[str, objec
     for study in case_studies:
         grouped.setdefault(str(study["symbol"]), []).append(study)
 
+    inventory = {
+        str(item["symbol"]): item for item in (ticker_inventory or [])
+    }
+    symbols = set(grouped) | set(inventory)
+
     focus: list[dict[str, object]] = []
-    for symbol, studies in sorted(
-        grouped.items(), key=lambda item: (-len(item[1]), item[0])
+    for symbol in sorted(
+        symbols,
+        key=lambda value: (
+            -int(inventory.get(value, {}).get("article_events") or len(grouped.get(value, []))),
+            value,
+        ),
     ):
+        studies = grouped.get(symbol, [])
+        inventory_entry = inventory.get(symbol, {})
         reaction_dates = sorted({str(study["reaction_date"]) for study in studies})
         event_types: dict[str, int] = {}
+        categories: dict[str, int] = {}
+        sources: dict[str, int] = {}
         ticker_origins: dict[str, int] = {}
         for study in studies:
             event_type = str(study.get("event_type") or "unknown")
             event_types[event_type] = event_types.get(event_type, 0) + 1
+            category = str(study.get("category") or "unknown")
+            categories[category] = categories.get(category, 0) + 1
+            source = str(study.get("source") or "unknown")
+            sources[source] = sources.get(source, 0) + 1
             origin = str(study.get("ticker_origin") or "unknown")
             ticker_origins[origin] = ticker_origins.get(origin, 0) + 1
 
@@ -440,17 +462,22 @@ def _symbol_focus(case_studies: list[dict[str, object]]) -> list[dict[str, objec
                 float(study.get("event_weight") or 1) * float(study[peer_field])
                 for study in peer_observed
             )
+            date_values = {
+                str(study["reaction_date"]): float(study[field]) for study in observed
+            }
             horizon_rows.append(
                 {
                     "horizon": horizon,
                     "events": len(observed),
+                    "reaction_date_events": len(date_values),
                     "effective_events": effective,
                     "weighted_mean_return": (
                         weighted_total / effective if effective else None
                     ),
-                    "median_return": _median(
-                        [float(study[field]) for study in observed]
-                    ),
+                    # Multiple articles can describe the same market session.
+                    # A date-level median prevents article volume from changing
+                    # the centre of the observed price distribution.
+                    "median_return": _median(list(date_values.values())),
                     "weighted_win_rate": wins / effective if effective else None,
                     "peer_events": len(peer_observed),
                     "peer_effective_events": peer_effective,
@@ -463,6 +490,15 @@ def _symbol_focus(case_studies: list[dict[str, object]]) -> list[dict[str, objec
         focus.append(
             {
                 "symbol": symbol,
+                "notion_article_events": int(
+                    inventory_entry.get("article_events") or len(studies)
+                ),
+                "matched_events": len(studies),
+                "unmatched_events": max(
+                    int(inventory_entry.get("article_events") or len(studies))
+                    - len(studies),
+                    0,
+                ),
                 "article_events": len(studies),
                 "effective_events": sum(
                     float(study.get("event_weight") or 1) for study in studies
@@ -470,7 +506,12 @@ def _symbol_focus(case_studies: list[dict[str, object]]) -> list[dict[str, objec
                 "reaction_dates": reaction_dates,
                 "reaction_date_count": len(reaction_dates),
                 "event_types": dict(sorted(event_types.items())),
+                "categories": dict(sorted(categories.items())),
+                "sources": dict(sorted(sources.items())),
                 "ticker_origins": dict(sorted(ticker_origins.items())),
+                "ticker_origins_inventory": inventory_entry.get(
+                    "ticker_origins", dict(sorted(ticker_origins.items()))
+                ),
                 "horizons": horizon_rows,
             }
         )
@@ -484,6 +525,93 @@ def _finding(
     level: str = "observation",
 ) -> dict[str, str]:
     return {"title": title, "body": body, "level": level}
+
+
+def _focus_findings(
+    metadata: dict[str, object],
+    case_studies: list[dict[str, object]],
+) -> list[dict[str, str]]:
+    ticker_inventory = metadata.get("ticker_inventory")
+    inventory = ticker_inventory if isinstance(ticker_inventory, list) else []
+    focuses = _symbol_focus(case_studies, inventory)
+    if not focuses:
+        return []
+    focus = focuses[0]
+    symbol = str(focus["symbol"])
+    origins = focus.get("ticker_origins_inventory", {})
+    origin_label = " / ".join(
+        f"{origin} {count}件"
+        for origin, count in origins.items()  # type: ignore[union-attr]
+    )
+    findings = [
+        _finding(
+            f"{symbol}: ニュース資産と価格接続",
+            f"Notion記事イベント{focus['notion_article_events']}件のうち"
+            f"{focus['matched_events']}件を日足へ接続しました。反応取引日は"
+            f"{focus['reaction_date_count']}日、ticker根拠は{origin_label or '未分類'}です。"
+            "記事本文の量と独立した価格観測数を分けて読んでください。",
+            level="context",
+        )
+    ]
+    horizon_map = {
+        int(row["horizon"]): row
+        for row in focus.get("horizons", [])  # type: ignore[union-attr]
+    }
+    for horizon in (0, 2, 5):
+        row = horizon_map.get(horizon)
+        if not row or row.get("weighted_mean_return") is None:
+            continue
+        label = "反応日" if horizon == 0 else f"反応日から+{horizon}日"
+        findings.append(
+            _finding(
+                f"{symbol}: {label}の反応日別集計",
+                f"観測できた反応日は{row['reaction_date_events']}日。記事重複を"
+                f"1/N補正した平均は{_percent(row['weighted_mean_return'])}、"
+                f"反応日単位の中央値は{_percent(row['median_return'])}、"
+                f"上昇率は{_percent(row['weighted_win_rate'])}です。",
+            )
+        )
+
+    by_date: dict[str, dict[str, object]] = {}
+    for study in case_studies:
+        if study["symbol"] == symbol and study.get("raw_return_0d") is not None:
+            by_date.setdefault(str(study["reaction_date"]), study)
+    if by_date:
+        low_date, low = min(
+            by_date.items(), key=lambda item: float(item[1]["raw_return_0d"])
+        )
+        high_date, high = max(
+            by_date.items(), key=lambda item: float(item[1]["raw_return_0d"])
+        )
+        findings.append(
+            _finding(
+                f"{symbol}: 反応日の振れ幅",
+                f"最小は{low_date}の{_percent(low['raw_return_0d'])}"
+                f"（過去累積分位{_percent(low.get('historical_percentile_0d'))}、"
+                f"出来高比{_number(low.get('reaction_volume_ratio_60d'), 2)}倍）、"
+                f"最大は{high_date}の{_percent(high['raw_return_0d'])}"
+                f"（過去累積分位{_percent(high.get('historical_percentile_0d'))}、"
+                f"出来高比{_number(high.get('reaction_volume_ratio_60d'), 2)}倍）です。"
+                "平均だけでは相殺される両方向の大変動があります。",
+                level="context",
+            )
+        )
+    overlapping = sum(
+        1
+        for study in case_studies
+        if study["symbol"] == symbol and int(study.get("overlap_count") or 0) > 0
+    )
+    if overlapping:
+        findings.append(
+            _finding(
+                f"{symbol}: イベント窓の重複",
+                f"接続{focus['matched_events']}件中{overlapping}件は別記事の20取引日窓と"
+                "重なります。複数記事が同じテーマと相場局面を記述しているため、"
+                "各記事を独立した因果イベントとして数えません。",
+                level="warning",
+            )
+        )
+    return findings
 
 
 def _analysis_findings(
@@ -503,6 +631,8 @@ def _analysis_findings(
                 level="warning",
             )
         )
+
+    findings.extend(_focus_findings(metadata, case_studies))
 
     for study in case_studies[:5]:
         symbol = str(study["symbol"])
@@ -620,7 +750,9 @@ def _report_payload(
     }
     previous_counts = previous.get("counts", {}) if previous else {}
     case_studies = _case_studies(event_rows, context_rows)
-    symbol_focus = _symbol_focus(case_studies)
+    ticker_inventory = metadata["ticker_inventory"]
+    assert isinstance(ticker_inventory, list)
+    symbol_focus = _symbol_focus(case_studies, ticker_inventory)
     return _jsonable(
         {
             "version": 2,
@@ -630,6 +762,7 @@ def _report_payload(
             "min_peers": metadata["min_peers"],
             "counts": counts,
             "unmatched_symbols": metadata["unmatched_symbols"],
+            "ticker_inventory": ticker_inventory,
             "previous_report_date": previous.get("report_date") if previous else None,
             "comparison": {
                 "count_deltas": {
@@ -821,12 +954,13 @@ def _focus_report_rows(
         )
         ticker_origins = " / ".join(
             f"{origin} {count}"
-            for origin, count in focus.get("ticker_origins", {}).items()  # type: ignore[union-attr]
+            for origin, count in focus.get("ticker_origins_inventory", {}).items()  # type: ignore[union-attr]
         )
         overview.append(
             [
                 str(focus["symbol"]),
-                str(focus["article_events"]),
+                str(focus["notion_article_events"]),
+                str(focus["matched_events"]),
                 _number(focus["effective_events"]),
                 str(focus["reaction_date_count"]),
                 ticker_origins or "—",
@@ -848,6 +982,7 @@ def _focus_report_rows(
                 else f"+{row['horizon']}日（{int(row['horizon']) + 1}取引日累計）"
             ),
             str(row["events"]),
+            str(row["reaction_date_events"]),
             _number(row["effective_events"]),
             _percent(row["weighted_mean_return"]),
             _percent(row["median_return"]),
@@ -900,6 +1035,8 @@ def _case_detail_reports(
                 f"{study.get('ticker_origin') or 'unknown'} / "
                 f"{study.get('ticker_evidence') or '—'}",
             ],
+            ["カテゴリ", str(study.get("category") or "unknown")],
+            ["出典", str(study.get("source") or "—")],
             [
                 "時刻品質",
                 f"{study.get('timing_quality') or '—'} / "
@@ -959,6 +1096,8 @@ def _case_detail_reports(
         markdown = [
             f"### {symbol} · {reaction_date}",
             str(study.get("headline") or "見出しなし"),
+            f"**事実要約:** {study.get('summary_ja') or '—'}",
+            f"**収集時の見立て:** {study.get('my_take') or '—'}",
             _markdown_table(["項目", "値"], metric_rows),
             _markdown_table(horizon_headers, horizon_rows),
         ]
@@ -966,6 +1105,9 @@ def _case_detail_reports(
             f"<section class=\"case-detail\"><h3>{html.escape(symbol)} · "
             f"{html.escape(reaction_date)}</h3>",
             f"<p class=\"note\">{html.escape(str(study.get('headline') or '見出しなし'))}</p>",
+            f"<p>{html.escape(str(study.get('summary_ja') or '—'))}</p>",
+            "<p class=\"note\">収集時の見立て: "
+            f"{html.escape(str(study.get('my_take') or '—'))}</p>",
             _html_table(["項目", "値"], metric_rows),
             _html_table(horizon_headers, horizon_rows),
         ]
@@ -1035,7 +1177,8 @@ def _render_reports(
     )
     focus_overview_headers = [
         "銘柄",
-        "記事イベント",
+        "Notion記事",
+        "日足接続",
         "実効件数",
         "反応取引日",
         "ticker根拠",
@@ -1046,10 +1189,11 @@ def _render_reports(
     ]
     focus_primary_headers = [
         "期間",
-        "観測数",
+        "記事観測",
+        "反応日数",
         "実効件数",
         "加重平均",
-        "中央値",
+        "反応日中央値",
         "上昇率",
         "peer差平均",
     ]
@@ -1242,6 +1386,23 @@ def _metadata(connection: Any, min_peers: int) -> dict[str, object]:
             "SELECT DISTINCT symbol FROM event_unmatched ORDER BY symbol"
         ).fetchall()
     ]
+    ticker_inventory: dict[str, dict[str, object]] = {}
+    for symbol, origin, events in connection.execute(
+        """
+        SELECT symbol, ticker_origin, count(*)
+        FROM events_timed_input
+        GROUP BY symbol, ticker_origin
+        ORDER BY symbol, ticker_origin
+        """
+    ).fetchall():
+        entry = ticker_inventory.setdefault(
+            symbol,
+            {"symbol": symbol, "article_events": 0, "ticker_origins": {}},
+        )
+        entry["article_events"] = int(entry["article_events"]) + int(events)
+        origins = entry["ticker_origins"]
+        assert isinstance(origins, dict)
+        origins[str(origin)] = int(events)
     return {
         "news_pages": _scalar(connection, "SELECT count(*) FROM news_input"),
         "ticker_events": _scalar(connection, "SELECT count(*) FROM events_timed_input"),
@@ -1258,6 +1419,10 @@ def _metadata(connection: Any, min_peers: int) -> dict[str, object]:
         "latest_daily_date": _scalar(connection, "SELECT max(date) FROM daily_indexed"),
         "latest_news_edit": _scalar(connection, "SELECT max(last_edited_at) FROM news_input"),
         "unmatched_symbols": unmatched_symbols,
+        "ticker_inventory": sorted(
+            ticker_inventory.values(),
+            key=lambda item: (-int(item["article_events"]), str(item["symbol"])),
+        ),
         "min_peers": min_peers,
     }
 

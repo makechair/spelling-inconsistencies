@@ -146,6 +146,9 @@ function median(values) {
 
 function focusStatistics(studies, horizon) {
   const raw = studies.filter((study) => study[`raw_return_${horizon}d`] != null);
+  const dateValues = new Map(
+    raw.map((study) => [study.reaction_date, Number(study[`raw_return_${horizon}d`])]),
+  );
   const weight = (study) => Number(study.event_weight ?? 1);
   const effective = raw.reduce((total, study) => total + weight(study), 0);
   const peer = raw.filter(
@@ -154,6 +157,7 @@ function focusStatistics(studies, horizon) {
   const peerWeight = peer.reduce((total, study) => total + weight(study), 0);
   return {
     events: raw.length,
+    dateEvents: dateValues.size,
     effective,
     mean: effective
       ? raw.reduce(
@@ -162,7 +166,7 @@ function focusStatistics(studies, horizon) {
           0,
         ) / effective
       : null,
-    median: median(raw.map((study) => Number(study[`raw_return_${horizon}d`]))),
+    median: median([...dateValues.values()]),
     winRate: effective
       ? raw.reduce(
           (total, study) =>
@@ -182,30 +186,36 @@ function focusStatistics(studies, horizon) {
 }
 
 function renderFocusSymbol(report, symbol) {
+  const focus = (report.symbol_focus || []).find((item) => item.symbol === symbol) || {};
   const studies = (report.case_studies || []).filter(
     (study) => study.symbol === symbol,
   );
   const reactionDates = [...new Set(studies.map((study) => study.reaction_date))].sort();
   const eventTypes = new Map();
-  const tickerOrigins = new Map();
+  const categories = new Map();
   studies.forEach((study) => {
     const type = study.event_type || "unknown";
     eventTypes.set(type, (eventTypes.get(type) || 0) + 1);
-    const origin = study.ticker_origin || "unknown";
-    tickerOrigins.set(origin, (tickerOrigins.get(origin) || 0) + 1);
+    const category = study.category || "unknown";
+    categories.set(category, (categories.get(category) || 0) + 1);
   });
   const effective = studies.reduce(
     (total, study) => total + Number(study.event_weight ?? 1),
     0,
   );
-  text("focus-events", number(studies.length, 0));
+  text("focus-events", number(focus.notion_article_events ?? studies.length, 0));
+  text("focus-matched", number(studies.length, 0));
   text("focus-effective", number(effective, 1));
   text("focus-dates", number(reactionDates.length, 0));
   text(
     "focus-origins",
-    [...tickerOrigins.entries()]
+    Object.entries(focus.ticker_origins_inventory || {})
       .map(([origin, count]) => `${origin} ${count}`)
       .join(" / "),
+  );
+  text(
+    "focus-categories",
+    [...categories.entries()].map(([category, count]) => `${category} ${count}`).join(" / "),
   );
   text(
     "focus-types",
@@ -218,7 +228,8 @@ function renderFocusSymbol(report, symbol) {
     ? `${reactionDates[0]}〜${reactionDates.at(-1)}`
     : "反応日なし";
   elements.focusSummary.textContent =
-    `${symbol}は${studies.length}記事イベント（${dateRange}）。` +
+    `${symbol}はNotion ${focus.notion_article_events ?? studies.length}件のうち` +
+    `${studies.length}件を日足へ接続（${dateRange}）。` +
     `反応日の加重平均は${percent(day0.mean, true)}` +
     `、2日後までの加重平均は${percent(day2.mean, true)}` +
     `（${day2.events}件観測）です。記事数が少ないため、因果効果ではなく` +
@@ -230,6 +241,7 @@ function renderFocusSymbol(report, symbol) {
     row(elements.focusBody, [
       horizonLabel(horizon),
       number(stats.events, 0),
+      number(stats.dateEvents, 0),
       number(stats.effective, 1),
       percent(stats.mean, true),
       percent(stats.median, true),
@@ -240,23 +252,19 @@ function renderFocusSymbol(report, symbol) {
 }
 
 function renderTickerFocus(report) {
-  const counts = new Map();
-  (report.case_studies || []).forEach((study) => {
-    counts.set(study.symbol, (counts.get(study.symbol) || 0) + 1);
-  });
-  const symbols = [...counts].sort(
-    ([leftSymbol, leftCount], [rightSymbol, rightCount]) =>
-      rightCount - leftCount || leftSymbol.localeCompare(rightSymbol),
-  );
+  const symbols = report.symbol_focus || [];
   elements.focusSymbol.replaceChildren();
-  symbols.forEach(([symbol, count]) => {
+  symbols.forEach((focus) => {
     const option = document.createElement("option");
-    option.value = symbol;
-    option.textContent = `${symbol}（${count}件）`;
+    option.value = focus.symbol;
+    option.textContent =
+      `${focus.symbol}（Notion ${focus.notion_article_events} / 接続 ${focus.matched_events}）`;
     elements.focusSymbol.append(option);
   });
   const requested = new URL(window.location.href).searchParams.get("symbol");
-  const selected = counts.has(requested) ? requested : symbols[0]?.[0];
+  const selected = symbols.some((focus) => focus.symbol === requested)
+    ? requested
+    : report.focus_symbol || symbols[0]?.symbol;
   if (!selected) return;
   elements.focusSymbol.value = selected;
   renderFocusSymbol(report, selected);
@@ -303,6 +311,8 @@ function metricGrid(study, context) {
       "ticker根拠",
       `${study.ticker_origin || "unknown"} / ${study.ticker_evidence || "—"}`,
     ],
+    ["カテゴリ", study.category || "unknown"],
+    ["出典", study.source || "—"],
     ["時刻品質", `${study.timing_quality || "—"} / ${study.timing_bucket || "—"}`],
     ["センチメント", study.sentiment || "—"],
     ["分類信頼度", number(study.confidence, 2)],
@@ -342,6 +352,18 @@ function renderCaseDetails(report, studies) {
     const headline = document.createElement("p");
     headline.textContent = `${study.event_type || "unknown"} · ${study.headline || "見出しなし"}`;
     header.append(title, headline);
+    if (study.summary_ja) {
+      const summary = document.createElement("p");
+      summary.className = "case-source-summary";
+      summary.textContent = study.summary_ja;
+      header.append(summary);
+    }
+    if (study.my_take) {
+      const take = document.createElement("p");
+      take.className = "case-source-take";
+      take.textContent = `収集時の見立て: ${study.my_take}`;
+      header.append(take);
+    }
 
     const context = study.historical_move_context;
     const horizonRows = HORIZONS.map((horizon) => {
