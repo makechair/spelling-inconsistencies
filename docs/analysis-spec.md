@@ -1,7 +1,7 @@
 # 定量分析コーパス — 引き継ぎ仕様
 
 > 目的: ニュース・決算（Notion）と株価変動を突き合わせ、定量分析を可能にする。
-> 状態: **Phase 0〜2は本番稼働中。Phase 3はローカル実装・テスト完了、本番反映前**。
+> 状態: **Phase 0〜3は本番稼働中。Phase 3は初回分析とS3保存まで確認済み**。
 > 2026-07-31 時点の確定事項をまとめたもの。
 > 読み方: 新しいセッションはこの1枚を読めば作業に入れる。**ここに書かれた事実を
 > 再調査しないこと** — いずれも実測で確定済みで、再検証にはAPI枠と時間がかかる。
@@ -295,7 +295,7 @@ schema driftを黙って分析データへ混ぜない。
 | 0 | **完了** | 日足エンドポイントの検証 | プローブ出力 | — |
 | 1 | **完了（本番稼働中）** | 日足コーパス | `universe.csv`, 取得スクリプト, systemd timer, S3 Parquet | 0 |
 | 2 | **完了（本番稼働中）** | Notion取り込み + 抽出統合 | `corpus/news.py`, systemd timer, S3 Parquet | 0 |
-| 3 | **実装済み（本番反映前）** | イベントスタディ | DuckDB SQL / Parquet / Markdown・HTML report | 1, 2 |
+| 3 | **完了（本番稼働中）** | イベントスタディ | DuckDB SQL / Parquet / Markdown・HTML report | 1, 2 |
 | 4（任意） | 未着手 | イベント窓の分足オンデマンド取得 | 既存 backfill の再利用 | 3 |
 
 Phase 1 と Phase 2 は独立しており、どちらも本番稼働まで完了した。teiten 実装の
@@ -304,8 +304,7 @@ Phase 1 と Phase 2 は独立しており、どちらも本番稼働まで完了
 ### Phase 3 の設計到達点
 
 Phase 3は**日足によるイベントスタディを先に作る**。日足とニュースの入力schema、
-S3配置、計算仕様、SQL、テスト、レポート生成までローカル実装済み。systemd unitの
-本番配置と初回実データ実行は未実施。
+S3配置、計算仕様、SQL、テスト、レポート生成、systemd unitの本番配置まで完了した。
 
 #### 反応日の決め方
 
@@ -386,6 +385,13 @@ DuckDBは1 thread、memory limit 256MB。systemd側は`MemoryMax=512M`で囲う�
 fixtureでは、16:00 ET境界、週末、時刻なし、同一イベントの1/N重み、20取引日窓の
 重なり、未収録ticker、最低3 peerのsubsector benchmark、同一入力の再実行でupload 0を
 検証した。リポジトリ全体は157テストとruffを通過。
+
+本番初回実行は終了コード0、CPU時間約1.3秒。Notion 368ページからticker付き17イベントを
+展開し、段階導入中の日足corpusへ1件を接続、16件を`event_unmatched.parquet`へ記録した。
+初回は6ファイルをS3へ送り、同一入力での2回目はupload 0を確認した。
+`usstocks-event-study.timer`はenabled/activeで、毎日04:30 UTC（13:30 JST）+
+最大5分のjitterで実行する。初回のmatchedが少ないのは、日足corpusを未知のprovider上限に
+備えて1回3新規銘柄ずつ増やしている途中であり、次のPhase 1更新後に自動的に増える。
 
 ## 7. 未処理のTODO（本体側）
 

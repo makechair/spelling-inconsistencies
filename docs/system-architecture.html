@@ -1550,10 +1550,10 @@
 
         <h3>Notionイベント × 株価変動（Phase 3実装）</h3>
         <p>
-          入力とS3配置は本番稼働まで完了している。次はNotionの各tickerを日足へ展開し、
+          入力とS3配置は本番稼働まで完了している。Notionの各tickerを日足へ展開し、
           発表後0・1・2・5・20取引日の調整済みリターンをDuckDBで計算する。
-          SQL、境界テスト、Parquet／Markdown／HTMLレポート生成はローカル実装済みで、
-          systemd unitの本番配置と初回実データ実行は未実施。
+          SQL、境界テスト、Parquet／Markdown／HTMLレポート生成、systemd timer、
+          初回実データ実行とS3保存まで本番確認済み。
         </p>
         <div class="steps" aria-label="イベントスタディ計算フロー">
           <div class="step"><span class="step-num">1</span><strong>取引日へ整列</strong><span>published_atをETへ変換。16:00以降・休場日は次の取引日。</span></div>
@@ -1588,6 +1588,14 @@
             systemdは512MB上限で、ローカルParquetだけを読む。
             出力はevent明細・集計・未接続tickerのParquetとMarkdown／HTML。
             S3では<code>manifest.json</code>を最後に更新し、同一digestは再送しない。
+          </p>
+        </div>
+        <div class="callout">
+          <strong>本番初回結果（2026-07-31）</strong>
+          <p>
+            Notion 368ページからticker付き17イベントを展開し、段階導入中の日足corpusへ
+            1件を接続、16件を未接続Parquetへ記録した。初回は6ファイルをS3へ送り、
+            同一入力の再実行は0 upload。CPU時間は約1.3秒で、timerはactive。
           </p>
         </div>
       </section>

@@ -9,7 +9,7 @@
 > 追記: 2026-07-31 に定量分析用の日足コーパス（Phase 1）とNotionニュースコーパス
 > （Phase 2）を実装し、本書19節へREST予算共有、差分同期、S3確定フローを追加した。
 > Phase 3のイベントスタディはDuckDB SQL、Parquet、Markdown／HTML reportまで
-> ローカル実装・テスト済みで、本番反映前。
+> 実装し、systemd timer、初回分析、S3保存まで本番確認済み。
 
 > **2026-07-29 の前提変更:** 仕様書が構成全体の土台に置いていた「WebSocket で常時
 > 受信し1秒ごとに更新する」が、Tiingo・Alpaca いずれの無料枠でも成立しないことが
@@ -1199,8 +1199,8 @@ teiten側のschema変更を分析結果へ混入する前に検知できる。on
 
 Phase 3では、ニュースの各`ticker`を日足の`symbol`へ展開し、発表後
 0/1/2/5/20取引日の調整済みリターンを計算する。入力とS3配置は本番稼働中で、
-DuckDB SQL、テストfixture、Parquet／Markdown／HTMLレポート生成もローカル実装済み。
-systemd unitの本番配置と初回実データ実行は未実施。
+DuckDB SQL、テストfixture、Parquet／Markdown／HTMLレポート生成、systemd unitも
+本番稼働中。
 
 ```mermaid
 flowchart LR
@@ -1244,6 +1244,12 @@ SPY／QQQ／SMHは未知の月間ユニークシンボル枠を消費するた�
 毎日13:30 JSTのoneshotでPhase 1/2のローカルParquetだけを読むため、
 ライブcollectorとREST予算を奪い合わない。S3では`manifest.json`を最後に更新し、
 途中までuploadされた世代を完成済みと誤認しない。
+
+2026-07-31の本番初回実行では、Notion 368ページからticker付き17イベントを展開し、
+現時点の日足corpusへ1件を接続、16件を未接続として明示した。初回は6ファイルをS3へ
+uploadし、同一入力での再実行は0 upload。CPU時間は約1.3秒だった。
+timerはenabled/activeで、次回以降は日足partitionの段階追加に応じてmatched数が
+自動的に増える。
 
 ## 20. まとめ
 
