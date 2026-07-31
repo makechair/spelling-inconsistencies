@@ -153,22 +153,49 @@ def test_s3_destination_requires_bucket_and_key():
 def test_aws_upload_uses_boto3_and_sse(tmp_path: Path, monkeypatch):
     local_path = tmp_path / "part.parquet"
     local_path.write_bytes(b"parquet")
-    calls: list[dict[str, object]] = []
+    signing_calls: list[dict[str, object]] = []
+    upload_calls: list[dict[str, object]] = []
 
     class FakeS3:
-        def put_object(self, **kwargs):
-            kwargs["Body"] = kwargs["Body"].read()
-            calls.append(kwargs)
+        def generate_presigned_url(self, operation, **kwargs):
+            signing_calls.append({"operation": operation, **kwargs})
+            return "https://signed.example/upload"
 
-    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda service: FakeS3()))
+    class FakeConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    def fake_put(url, **kwargs):
+        upload_calls.append({"url": url, **kwargs})
+        return httpx.Response(200)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "boto3",
+        SimpleNamespace(client=lambda service, config: FakeS3()),
+    )
+    monkeypatch.setitem(sys.modules, "botocore.config", SimpleNamespace(Config=FakeConfig))
+    monkeypatch.setattr(httpx, "put", fake_put)
     aws_upload(local_path, "s3://example/corpus/daily/symbol=NVDA/part.parquet")
 
-    assert calls == [
+    assert signing_calls == [
         {
-            "Bucket": "example",
-            "Key": "corpus/daily/symbol=NVDA/part.parquet",
-            "Body": b"parquet",
-            "ServerSideEncryption": "AES256",
+            "operation": "put_object",
+            "Params": {
+                "Bucket": "example",
+                "Key": "corpus/daily/symbol=NVDA/part.parquet",
+                "ServerSideEncryption": "AES256",
+            },
+            "ExpiresIn": 900,
+            "HttpMethod": "PUT",
+        }
+    ]
+    assert upload_calls == [
+        {
+            "url": "https://signed.example/upload",
+            "content": b"parquet",
+            "headers": {"x-amz-server-side-encryption": "AES256"},
+            "timeout": 120.0,
         }
     ]
 

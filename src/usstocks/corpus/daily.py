@@ -307,20 +307,39 @@ def _parse_s3_destination(destination: str) -> tuple[str, str]:
 def aws_upload(local_path: Path, destination: str) -> None:
     try:
         import boto3
+        from botocore.config import Config
     except ImportError as exc:
         raise CorpusError("daily corpus requires the 'parquet' package extra") from exc
     bucket, key = _parse_s3_destination(destination)
     try:
-        with local_path.open("rb") as body:
-            boto3.client("s3").put_object(
-                Bucket=bucket,
-                Key=key,
-                Body=body,
-                ServerSideEncryption="AES256",
-            )
+        # The host's bundled AWS CLI/botocore transport cannot resolve AWS
+        # endpoints even though the OS resolver and httpx can. Let botocore do
+        # only SigV4 signing, then send the short-lived URL over the same httpx
+        # stack already used successfully for provider traffic.
+        client = boto3.client("s3", config=Config(signature_version="s3v4"))
+        signed_url = client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": bucket,
+                "Key": key,
+                "ServerSideEncryption": "AES256",
+            },
+            ExpiresIn=900,
+            HttpMethod="PUT",
+        )
+        response = httpx.put(
+            signed_url,
+            content=local_path.read_bytes(),
+            headers={"x-amz-server-side-encryption": "AES256"},
+            timeout=120.0,
+        )
+        if response.status_code >= 400:
+            raise CorpusError(f"S3 upload returned HTTP {response.status_code}")
+    except CorpusError:
+        raise
     except Exception as exc:
-        # SDK exception messages can contain request metadata. Keep logs stable
-        # and secret-free while preserving the original exception for tracing.
+        # Signed URLs and SDK exception messages can contain credentials or
+        # request metadata. Keep logs stable and secret-free.
         raise CorpusError(f"S3 upload failed: {type(exc).__name__}") from exc
 
 
