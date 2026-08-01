@@ -24,6 +24,9 @@ const elements = {
   returnPathChart: document.querySelector("#return-path-chart"),
   returnSurfaceDecision: document.querySelector("#return-surface-decision"),
   returnSurfaceInterpretation: document.querySelector("#return-surface-interpretation"),
+  walkForwardSummary: document.querySelector("#walk-forward-summary"),
+  walkForwardBody: document.querySelector("#walk-forward-body"),
+  walkForwardExampleBody: document.querySelector("#walk-forward-example-body"),
   peerSummary: document.querySelector("#peer-summary"),
   peerChart: document.querySelector("#peer-chart"),
   peerInterpretation: document.querySelector("#peer-interpretation"),
@@ -1091,7 +1094,7 @@ function renderReturnSurface(rows, tradePlans) {
     const caution = document.createElement("p");
     caution.className = "report-decision-caution";
     caution.textContent =
-      "多数のB→S候補から最良値を選んだ探索結果です。隣接帯の安定性と将来のウォークフォワード成績を確認してから判断します。";
+      "多数のB→S候補から最良値を選んだ探索結果です。隣接帯の安定性と、下段の未使用期間における検証実績を確認してから判断します。";
     elements.returnSurfaceDecision.append(heading, timing, expected, evidence, caution);
     elements.returnSurfaceInterpretation.textContent = plan.sell_at_window_boundary
       ? "Sが20日後にあるためピークは未確認です。20日後を機械的な売却日とはせず、観測窓を延ばして再検証します。"
@@ -1104,6 +1107,84 @@ function renderReturnSurface(rows, tradePlans) {
   elements.returnSurfaceBucket.onchange = () =>
     updateSelection(Number(elements.returnSurfaceBucket.value));
   updateSelection(initialBucket);
+}
+
+function validationCondition(result) {
+  if (result.surface_method === "lower_tail") {
+    return `急落 ${percent(result.move_min, true)}〜${percent(result.move_max, true)}`;
+  }
+  if (result.surface_method === "upper_tail") {
+    return `急騰 ${percent(result.move_min, true)}〜${percent(result.move_max, true)}`;
+  }
+  return `${percent(result.target_move, true)}近傍（±${percent(result.bandwidth)}）`;
+}
+
+function renderWalkForward(report, symbol) {
+  const results = report.walk_forward_simulations?.[symbol] || [];
+  const examples = report.walk_forward_examples?.[symbol] || [];
+  elements.walkForwardBody.replaceChildren();
+  elements.walkForwardExampleBody.replaceChildren();
+  if (!results.length) {
+    elements.walkForwardSummary.textContent =
+      "時系列分割後に十分な学習・検証標本を確保できませんでした。";
+    return;
+  }
+
+  const weightedObservations = results.reduce(
+    (sum, result) => sum + Number(result.validation_observations || 0),
+    0,
+  );
+  const weightedWinRate = weightedObservations
+    ? results.reduce(
+        (sum, result) => sum
+          + Number(result.actual_win_rate || 0)
+          * Number(result.validation_observations || 0),
+        0,
+      ) / weightedObservations
+    : null;
+  const directionAccuracy = results.filter((result) => result.direction_correct).length
+    / results.length;
+  const calibrationMae = results.reduce(
+    (sum, result) => sum + Math.abs(Number(result.calibration_error || 0)),
+    0,
+  ) / results.length;
+  const latestFold = Math.max(...results.map((result) => Number(result.fold)));
+  const latest = results
+    .filter((result) => Number(result.fold) === latestFold)
+    .sort((left, right) => Number(left.move_bucket) - Number(right.move_bucket));
+  const latestFrom = latest.map((result) => result.validation_from).sort()[0];
+  const latestThrough = latest.map((result) => result.validation_through).sort().at(-1);
+  elements.walkForwardSummary.textContent =
+    `${results.length}条件区間・延べ${number(weightedObservations, 0)}シグナルを将来側で検証。` +
+    `期待方向の一致率${percent(directionAccuracy)}、期待値の平均絶対誤差` +
+    `${percent(calibrationMae)}、シグナル勝率${percent(weightedWinRate)}です。` +
+    `表は直近の未使用期間（${latestFrom}〜${latestThrough}）を示します。`;
+
+  latest.forEach((result) => {
+    row(elements.walkForwardBody, [
+      validationCondition(result),
+      `${result.validation_from}〜${result.validation_through}`,
+      `+${result.buy_day}日買い → +${result.sell_day}日売り`,
+      percent(result.expected_return_after_cost, true),
+      percent(result.actual_mean_return, true),
+      percent(result.actual_win_rate),
+      `${number(result.validation_observations, 0)}（実効${number(result.validation_effective_observations, 1)}）`,
+      percent(result.calibration_error, true),
+    ]);
+  });
+
+  examples
+    .filter((example) => Number(example.fold) === latestFold)
+    .sort((left, right) => String(right.signal_date).localeCompare(String(left.signal_date)))
+    .slice(0, 10)
+    .forEach((example) => {
+      row(elements.walkForwardExampleBody, [
+        example.signal_date,
+        percent(example.actual_initial_move, true),
+        `+${example.buy_day}日買い → +${example.sell_day}日売り`,
+        percent(example.actual_return_after_cost, true),
+      ]);
+    });
 }
 
 function renderHorizonChart(studies) {
@@ -1379,6 +1460,7 @@ function renderFocusSymbol(report, symbol) {
   renderAnalogChart(studies);
   const smoothedSurface = report.smoothed_return_surfaces?.[symbol] || [];
   const smoothedPlans = report.smoothed_trade_plans?.[symbol] || [];
+  renderWalkForward(report, symbol);
   renderReturnSurface(
     smoothedSurface.length
       ? smoothedSurface

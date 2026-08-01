@@ -82,6 +82,44 @@
           </div>
           <p id="return-surface-summary" class="report-analog-summary"></p>
           <div id="return-surface-decision" class="report-decision" hidden></div>
+          <section class="report-validation" aria-labelledby="walk-forward-title">
+            <h4 id="walk-forward-title">過去で学習 → 将来区間で売買検証</h4>
+            <p class="report-chart-description">各検証区間より前のデータだけで変動条件とB/Sを決め、その後の未使用期間で実際のコスト後リターンを測ります。複数ポジションの同時保有や資金配分は含まない、1シグナル単位の検証です。</p>
+            <p id="walk-forward-summary" class="report-analog-summary"></p>
+            <div class="report-table-wrap">
+              <table class="report-validation-table">
+                <thead>
+                  <tr>
+                    <th>初日条件</th>
+                    <th>検証期間</th>
+                    <th>売買</th>
+                    <th>学習期待値</th>
+                    <th>検証実績</th>
+                    <th>勝率</th>
+                    <th>件数</th>
+                    <th>期待値誤差</th>
+                  </tr>
+                </thead>
+                <tbody id="walk-forward-body"></tbody>
+              </table>
+            </div>
+            <details class="report-validation-examples">
+              <summary>実際のシグナル例を見る</summary>
+              <div class="report-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>変動日</th>
+                      <th>初日変動</th>
+                      <th>ルール</th>
+                      <th>実現リターン</th>
+                    </tr>
+                  </thead>
+                  <tbody id="walk-forward-example-body"></tbody>
+                </table>
+              </div>
+            </details>
+          </section>
           <section class="report-surface-path" aria-labelledby="return-path-title">
             <h4 id="return-path-title">選択帯の期待経路</h4>
             <svg id="return-path-chart" viewBox="0 0 720 300" role="img"

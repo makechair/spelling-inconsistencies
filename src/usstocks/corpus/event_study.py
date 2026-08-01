@@ -742,6 +742,8 @@ def _report_payload(
     return_trade_plan_rows: list[dict[str, object]],
     smoothed_surface_rows: list[dict[str, object]],
     smoothed_trade_plan_rows: list[dict[str, object]],
+    validation_result_rows: list[dict[str, object]],
+    validation_example_rows: list[dict[str, object]],
     previous: dict[str, Any] | None,
 ) -> dict[str, object]:
     counts = {
@@ -769,6 +771,12 @@ def _report_payload(
     smoothed_trade_plans: dict[str, list[dict[str, object]]] = {}
     for row in smoothed_trade_plan_rows:
         smoothed_trade_plans.setdefault(str(row["symbol"]), []).append(row)
+    walk_forward_simulations: dict[str, list[dict[str, object]]] = {}
+    for row in validation_result_rows:
+        walk_forward_simulations.setdefault(str(row["symbol"]), []).append(row)
+    walk_forward_examples: dict[str, list[dict[str, object]]] = {}
+    for row in validation_example_rows:
+        walk_forward_examples.setdefault(str(row["symbol"]), []).append(row)
     return _jsonable(
         {
             "version": 2,
@@ -798,6 +806,8 @@ def _report_payload(
             "return_trade_plans": return_trade_plans,
             "smoothed_return_surfaces": smoothed_return_surfaces,
             "smoothed_trade_plans": smoothed_trade_plans,
+            "walk_forward_simulations": walk_forward_simulations,
+            "walk_forward_examples": walk_forward_examples,
             "case_studies": case_studies,
             # JSON is deliberately complete enough for the API and future
             # historical comparisons, so the web process never imports
@@ -1502,7 +1512,15 @@ def run(
             .joinpath("sql/event_study.sql")
             .read_text(encoding="utf-8")
         )
-        connection.execute(sql)
+        for statement_number, statement in enumerate(sql.split(";"), start=1):
+            if not statement.strip():
+                continue
+            try:
+                connection.execute(statement)
+            except duckdb.Error as exc:
+                raise CorpusError(
+                    f"event study statement {statement_number} failed: {exc}"
+                ) from exc
 
         event_returns = connection.execute(
             "SELECT * FROM event_returns ORDER BY reaction_date, symbol, page_id"
@@ -1528,6 +1546,14 @@ def run(
             "SELECT * FROM return_trade_plan_smoothed "
             "ORDER BY symbol, move_bucket"
         ).to_arrow_table()
+        validation_results = connection.execute(
+            "SELECT * FROM return_validation_results "
+            "ORDER BY symbol, fold, move_bucket"
+        ).to_arrow_table()
+        validation_examples = connection.execute(
+            "SELECT * FROM return_validation_examples "
+            "ORDER BY symbol, fold, move_bucket, signal_date DESC"
+        ).to_arrow_table()
         metadata = _metadata(connection, settings.analysis_min_peers)
     except duckdb.Error as exc:
         raise CorpusError(f"event study query failed: {exc}") from exc
@@ -1545,6 +1571,8 @@ def run(
     return_trade_plan_rows = return_trade_plan.to_pylist()
     smoothed_surface_rows = smoothed_return_surface.to_pylist()
     smoothed_trade_plan_rows = smoothed_trade_plan.to_pylist()
+    validation_result_rows = validation_results.to_pylist()
+    validation_example_rows = validation_examples.to_pylist()
     report_payload = _report_payload(
         report_date,
         metadata,
@@ -1555,6 +1583,8 @@ def run(
         return_trade_plan_rows,
         smoothed_surface_rows,
         smoothed_trade_plan_rows,
+        validation_result_rows,
+        validation_example_rows,
         previous_report,
     )
     _write_text(

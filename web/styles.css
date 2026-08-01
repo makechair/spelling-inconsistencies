@@ -654,6 +654,20 @@ body {
 .report-decision strong { display: block; margin-bottom: 5px; font-size: 15px; }
 .report-decision p { margin: 3px 0; color: var(--text); font-size: 13px; line-height: 1.55; }
 .report-decision .report-decision-caution { color: var(--muted); font-size: 12px; }
+
+.report-validation {
+  margin: 20px 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.34);
+}
+
+.report-validation h4 { margin: 0 0 6px; font-size: 17px; }
+.report-validation .report-table-wrap { margin-top: 12px; }
+.report-validation-table { min-width: 900px; }
+.report-validation-examples { margin-top: 14px; }
+.report-validation-examples summary { cursor: pointer; color: var(--accent); }
 .report-chart-subject { fill: var(--accent); }
 .report-chart-peer-bar { fill: #94a3b8; }
 .report-chart-bar-value { fill: var(--text); font-size: 10px; font-weight: 700; }

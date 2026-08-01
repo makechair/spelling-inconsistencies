@@ -325,6 +325,11 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert all(row["buy_day"] < row["sell_day"] for row in smoothed_plans)
     assert all(row["effective_observations"] >= 10 for row in smoothed_plans)
     assert all(row["surface_method"] == "kernel" for row in smoothed_plans)
+    assert "walk_forward_simulations" in report
+    assert "walk_forward_examples" in report
+    # The compact 28-session fixture is intentionally too short for a
+    # chronological train/validation split, so no pseudo-accuracy is emitted.
+    assert report["walk_forward_simulations"].get("NVDA", []) == []
     assert (output / "manifest.json").exists()
     daily = tmp_path / "corpus" / "analysis" / "daily" / "date=2026-07-31"
     assert (daily / "report.json").exists()

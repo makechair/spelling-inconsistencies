@@ -623,13 +623,15 @@ INNER JOIN return_surface_baseline AS baseline USING (symbol, horizon);
 
 -- A trade plan must preserve the order of the decision: wait first, buy, and
 -- only then sell.  Computing the return between those two endpoints directly
--- also lets us report a real win rate and downside quantile; neither can be
+-- also lets us report a real win rate and downside quantile, neither can be
 -- reconstructed from two independently aggregated surface cells.
 CREATE OR REPLACE TEMP TABLE return_trade_observations AS
 SELECT
     move.symbol,
     move.move_bucket,
     move.date AS signal_date,
+    move.trading_index AS signal_index,
+    move.move_return,
     buy_day.buy_day,
     sell_day.sell_day,
     sell_day.sell_day - buy_day.buy_day AS holding_days,
@@ -874,6 +876,296 @@ QUALIFY row_number() OVER (
         expected_return_after_cost DESC,
         holding_days ASC
 ) = 1;
+
+-- Out-of-sample validation for a representative subset of the response
+-- surface.  Each fold learns its move thresholds and B/S pair from data that
+-- ends before the validation window, then applies that frozen rule to the next
+-- chronological block.  This prevents future returns from selecting their own
+-- rule.  Five move regimes keep the nightly query bounded while covering both
+-- tails and the centre of the distribution.
+CREATE OR REPLACE TEMP TABLE return_validation_folds AS
+WITH bounds AS (
+    SELECT
+        symbol,
+        max(trading_index) - 20 AS last_signal_index
+    FROM daily_indexed
+    GROUP BY symbol
+), fractions(fold, test_start_fraction, test_end_fraction) AS (
+    VALUES
+        (1, 0.55, 0.70),
+        (2, 0.70, 0.85),
+        (3, 0.85, 1.00)
+)
+SELECT
+    bounds.symbol,
+    fractions.fold,
+    CAST(floor(last_signal_index * test_start_fraction) AS BIGINT)
+        AS test_start_index,
+    CAST(floor(last_signal_index * test_end_fraction) AS BIGINT)
+        AS test_end_index
+FROM bounds
+CROSS JOIN fractions
+WHERE last_signal_index >= 120;
+
+CREATE OR REPLACE TEMP TABLE return_validation_grid AS
+WITH training_stats AS (
+    SELECT
+        fold.symbol,
+        fold.fold,
+        fold.test_start_index,
+        fold.test_end_index,
+        min(move.move_return) AS move_minimum,
+        max(move.move_return) AS move_maximum,
+        quantile_cont(move.move_return, 0.05) AS move_q05,
+        quantile_cont(move.move_return, 0.25) AS move_q25,
+        quantile_cont(move.move_return, 0.75) AS move_q75,
+        quantile_cont(move.move_return, 0.95) AS move_q95,
+        greatest(
+            0.003,
+            0.9 * least(
+                stddev_samp(move.move_return),
+                (quantile_cont(move.move_return, 0.75)
+                    - quantile_cont(move.move_return, 0.25)) / 1.34
+            ) * pow(count(*)::DOUBLE, -0.2)
+        ) AS bandwidth,
+        count(*) AS training_signals,
+        max(move.date) AS training_through
+    FROM return_validation_folds AS fold
+    INNER JOIN daily_move_buckets AS move
+        ON move.symbol = fold.symbol
+       AND move.trading_index + 20 < fold.test_start_index
+    GROUP BY
+        fold.symbol,
+        fold.fold,
+        fold.test_start_index,
+        fold.test_end_index
+), selected_buckets(move_bucket) AS (
+    VALUES (1), (5), (10), (15), (19)
+)
+SELECT
+    stats.symbol,
+    stats.fold,
+    stats.test_start_index,
+    stats.test_end_index,
+    stats.training_signals,
+    stats.training_through,
+    bucket.move_bucket,
+    CASE
+        WHEN bucket.move_bucket = 1 THEN 'lower_tail'
+        WHEN bucket.move_bucket = 19 THEN 'upper_tail'
+        ELSE 'kernel'
+    END AS surface_method,
+    CASE
+        WHEN bucket.move_bucket = 1 THEN stats.move_q05
+        WHEN bucket.move_bucket = 19 THEN stats.move_q95
+        ELSE stats.move_q05 + (stats.move_q95 - stats.move_q05)
+            * (bucket.move_bucket - 2)::DOUBLE / 16
+    END AS target_move,
+    CASE
+        WHEN bucket.move_bucket = 1 THEN stats.move_minimum
+        WHEN bucket.move_bucket = 19 THEN stats.move_q95
+        ELSE stats.move_q05 + (stats.move_q95 - stats.move_q05)
+            * (bucket.move_bucket - 2)::DOUBLE / 16 - stats.bandwidth
+    END AS move_min,
+    CASE
+        WHEN bucket.move_bucket = 1 THEN stats.move_q05
+        WHEN bucket.move_bucket = 19 THEN stats.move_maximum
+        ELSE stats.move_q05 + (stats.move_q95 - stats.move_q05)
+            * (bucket.move_bucket - 2)::DOUBLE / 16 + stats.bandwidth
+    END AS move_max,
+    stats.bandwidth
+FROM training_stats AS stats
+CROSS JOIN selected_buckets AS bucket;
+
+CREATE OR REPLACE TEMP TABLE return_validation_training_plan AS
+WITH weighted AS (
+    SELECT
+        grid.*,
+        trade.buy_day,
+        trade.sell_day,
+        trade.holding_days,
+        trade.trade_return,
+        CASE
+            WHEN grid.surface_method = 'lower_tail'
+                THEN CAST(trade.move_return <= grid.target_move AS DOUBLE)
+            WHEN grid.surface_method = 'upper_tail'
+                THEN CAST(trade.move_return >= grid.target_move AS DOUBLE)
+            ELSE exp(-0.5 * pow(
+                (trade.move_return - grid.target_move) / grid.bandwidth,
+                2
+            ))
+        END AS kernel_weight
+    FROM return_validation_grid AS grid
+    INNER JOIN return_trade_observations AS trade
+        ON trade.symbol = grid.symbol
+       AND trade.signal_index + 20 < grid.test_start_index
+    WHERE grid.surface_method <> 'kernel'
+       OR abs(trade.move_return - grid.target_move) <= 3 * grid.bandwidth
+), aggregated AS (
+    SELECT
+        symbol,
+        fold,
+        test_start_index,
+        test_end_index,
+        training_signals,
+        training_through,
+        move_bucket,
+        surface_method,
+        target_move,
+        move_min,
+        move_max,
+        bandwidth,
+        buy_day,
+        sell_day,
+        holding_days,
+        count(*) FILTER (WHERE kernel_weight > 0) AS training_observations,
+        pow(sum(kernel_weight), 2) / nullif(sum(pow(kernel_weight, 2)), 0)
+            AS local_effective_observations,
+        sum(kernel_weight * trade_return) / nullif(sum(kernel_weight), 0)
+            AS expected_return,
+        sum(kernel_weight * pow(trade_return, 2)) / nullif(sum(kernel_weight), 0)
+            AS return_second_moment,
+        sum(kernel_weight * CAST(trade_return - 0.001 > 0 AS INTEGER))
+            / nullif(sum(kernel_weight), 0) AS expected_win_rate
+    FROM weighted
+    WHERE kernel_weight > 0
+    GROUP BY ALL
+), scored AS (
+    SELECT
+        * EXCLUDE (return_second_moment),
+        local_effective_observations / holding_days AS effective_observations,
+        expected_return - 0.001 AS expected_return_after_cost,
+        expected_return - 0.001
+            - 1.2816 * sqrt(greatest(
+                return_second_moment - pow(expected_return, 2),
+                0
+            )) / sqrt(greatest(
+                local_effective_observations / holding_days,
+                1
+            )) AS conservative_return
+    FROM aggregated
+)
+SELECT *
+FROM scored
+WHERE effective_observations >= 10
+QUALIFY row_number() OVER (
+    PARTITION BY symbol, fold, move_bucket
+    ORDER BY
+        conservative_return DESC NULLS LAST,
+        expected_return_after_cost DESC,
+        holding_days ASC
+) = 1;
+
+CREATE OR REPLACE TEMP TABLE return_validation_test_trades AS
+SELECT
+    plan.*,
+    trade.signal_date,
+    trade.move_return AS actual_initial_move,
+    trade.trade_return - 0.001 AS actual_return_after_cost,
+    CASE
+        WHEN plan.surface_method = 'lower_tail'
+            THEN CAST(trade.move_return <= plan.target_move AS DOUBLE)
+        WHEN plan.surface_method = 'upper_tail'
+            THEN CAST(trade.move_return >= plan.target_move AS DOUBLE)
+        ELSE exp(-0.5 * pow(
+            (trade.move_return - plan.target_move) / plan.bandwidth,
+            2
+        ))
+    END AS validation_weight
+FROM return_validation_training_plan AS plan
+INNER JOIN return_trade_observations AS trade
+    ON trade.symbol = plan.symbol
+   AND trade.buy_day = plan.buy_day
+   AND trade.sell_day = plan.sell_day
+   AND trade.signal_index >= plan.test_start_index
+   AND trade.signal_index < plan.test_end_index
+WHERE plan.surface_method <> 'kernel'
+   OR abs(trade.move_return - plan.target_move) <= 3 * plan.bandwidth;
+
+CREATE OR REPLACE TEMP TABLE return_validation_results AS
+WITH aggregated AS (
+    SELECT
+        symbol,
+        fold,
+        move_bucket,
+        surface_method,
+        target_move,
+        move_min,
+        move_max,
+        bandwidth,
+        training_signals,
+        training_through,
+        min(signal_date) AS validation_from,
+        max(signal_date) AS validation_through,
+        buy_day,
+        sell_day,
+        holding_days,
+        training_observations,
+        effective_observations AS training_effective_observations,
+        expected_return_after_cost,
+        expected_win_rate,
+        conservative_return,
+        count(*) FILTER (WHERE validation_weight > 0) AS validation_observations,
+        pow(sum(validation_weight), 2)
+            / nullif(sum(pow(validation_weight, 2)), 0) AS validation_local_effective,
+        pow(sum(validation_weight), 2)
+            / nullif(sum(pow(validation_weight, 2)), 0) / holding_days
+            AS validation_effective_observations,
+        sum(validation_weight * actual_return_after_cost)
+            / nullif(sum(validation_weight), 0) AS actual_mean_return,
+        median(actual_return_after_cost) AS actual_median_return,
+        quantile_cont(actual_return_after_cost, 0.10) AS actual_downside_p10,
+        sum(validation_weight * CAST(actual_return_after_cost > 0 AS INTEGER))
+            / nullif(sum(validation_weight), 0) AS actual_win_rate
+    FROM return_validation_test_trades
+    WHERE validation_weight > 0
+    GROUP BY
+        symbol,
+        fold,
+        move_bucket,
+        surface_method,
+        target_move,
+        move_min,
+        move_max,
+        bandwidth,
+        training_signals,
+        training_through,
+        buy_day,
+        sell_day,
+        holding_days,
+        training_observations,
+        effective_observations,
+        expected_return_after_cost,
+        expected_win_rate,
+        conservative_return
+)
+SELECT
+    *,
+    actual_mean_return - expected_return_after_cost AS calibration_error,
+    sign(actual_mean_return) = sign(expected_return_after_cost)
+        AS direction_correct
+FROM aggregated
+WHERE validation_observations >= 5;
+
+CREATE OR REPLACE TEMP TABLE return_validation_examples AS
+SELECT
+    symbol,
+    fold,
+    move_bucket,
+    surface_method,
+    target_move,
+    signal_date,
+    actual_initial_move,
+    buy_day,
+    sell_day,
+    actual_return_after_cost,
+    validation_weight
+FROM return_validation_test_trades
+WHERE validation_weight > 0
+QUALIFY row_number() OVER (
+    PARTITION BY symbol, fold, move_bucket
+    ORDER BY validation_weight DESC, signal_date DESC
+) <= 3;
 
 CREATE OR REPLACE TEMP TABLE event_summary AS
 WITH samples AS (
