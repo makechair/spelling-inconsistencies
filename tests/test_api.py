@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from usstocks.adapters.mock import MockAdapter
 from usstocks.api.app import create_app
 from usstocks.config import Settings
+from usstocks.corpus.daily import write_daily_parquet
 from usstocks.db.live_store import LiveStore
 from usstocks.db.repository import Repository
 from usstocks.models import Bar, CollectorStatus, LiveSnapshot, Session, SymbolInfo
@@ -132,6 +133,55 @@ def test_bars_can_be_aggregated_for_wider_chart_periods(
     assert payload["bars"][0]["open"] == 100.0
     assert payload["bars"][0]["close"] == 114.5
     assert payload["bars"][1]["close"] == 129.5
+
+
+def test_daily_interval_merges_long_corpus_with_recent_market_bars(
+    client: TestClient, settings: Settings
+):
+    daily_path = (
+        settings.corpus_local_dir / "daily" / "symbol=AAPL" / "part.parquet"
+    )
+    rows = []
+    for offset in (10, 5):
+        day = (BASE - timedelta(days=offset)).date()
+        rows.append(
+            {
+                "symbol": "AAPL",
+                "date": day,
+                "open": 90.0,
+                "high": 92.0,
+                "low": 89.0,
+                "close": 91.0,
+                "volume": 1000,
+                "adjOpen": 90.0,
+                "adjHigh": 92.0,
+                "adjLow": 89.0,
+                "adjClose": 91.0,
+                "adjVolume": 1000.0,
+                "divCash": 0.0,
+                "splitFactor": 1.0,
+            }
+        )
+    write_daily_parquet(daily_path, rows)
+    with Repository(settings.db_path) as repo:
+        seed_bars(repo, count=5)
+
+    payload = client.get(
+        "/api/bars/AAPL",
+        params={
+            "start": (BASE - timedelta(days=15)).isoformat(),
+            "end": (BASE + timedelta(days=1)).isoformat(),
+            "interval": "1d",
+            "session": "regular",
+        },
+    ).json()
+
+    assert payload["count"] == 3
+    assert [bar["source"] for bar in payload["bars"]] == [
+        "tiingo_daily",
+        "tiingo_daily",
+        "tiingo",
+    ]
 
 
 def test_bars_report_the_last_fetch_even_when_the_range_is_empty(

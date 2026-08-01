@@ -1163,7 +1163,7 @@
         <h2>8. API／SSE／ブラウザ</h2>
         <p class="section-intro">
           初期画面はwatchlistと1D・7D・1M・1Yを期間別intervalで並列取得し、
-          SQLite側で1分・5分・30分・日足へ集約して4画面を描画する。その後は
+          SQLite側で1分・5分・日足へ集約し、長期daily corpusと接続して4画面を描画する。その後は
           <strong>30秒ごとの差分取得</strong>と、EventSourceによるsnapshot／status受信を
           並行して回す。SSEは最大1時間で意図的にcycleし、ブラウザが自動再接続する。
         </p>
@@ -1173,7 +1173,7 @@
             <ol>
               <li><code>/api/symbols?watched_only=true</code></li>
               <li><code>/api/bars/{symbol}</code>を1D・7D・1M・1Yの期間別intervalで並列取得</li>
-              <li>1分・5分・30分・日足へDB内集約し、各ペイン約250〜400本で4分割描画</li>
+              <li>1分・5分・日足へ集約し、1M／1Yはdaily corpusを直近market.dbで更新して4分割描画</li>
               <li>非取引日を含む暦日幅を不可視anchorで固定。履歴不足時だけ最古データを左端にする</li>
               <li>チャート選択時は同じ期間幅のまま単一画面へ拡大</li>
               <li>「4分割」で高さ固定の2×2 overviewへ戻す</li>
@@ -1207,7 +1207,7 @@
           <table>
             <thead><tr><th>File</th><th>役割</th></tr></thead>
             <tbody>
-              <tr><td><code>web/app.js</code></td><td>watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、差分取得、SSE、再接続判定。期間を変えず、1分／5分／30分／日足へ集約して各ペインを約250〜400本に保つ</td></tr>
+              <tr><td><code>web/app.js</code></td><td>watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、差分取得、SSE、再接続判定。期間を変えず、1分／5分／日足／日足へ集約し、長期daily corpusを直近market.dbで更新する</td></tr>
               <tr><td><code>web/chart.js</code></td><td>Lightweight Charts。軸フォーマット、legend、出来高、MA描画。不可視anchorで時間軸を固定し、拡大／4分割復帰時も期間幅を再適用。provider帰属表示は無効化</td></tr>
               <tr><td><code>web/timezone.js</code></td><td>表示タイムゾーンの単一の情報源。既定<code>America/New_York</code>、localStorage保存。軸とパネルが別々のzoneになる問題への対応</td></tr>
               <tr><td><code>web/viewstate.js</code></td><td><code>{days, extended, barSpacing, rightOffset, movingAverages}</code>を保存。読み込みや銘柄切替でzoomを失わない</td></tr>

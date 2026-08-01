@@ -20,7 +20,7 @@ import { save as saveView, view } from './viewstate.js';
 const PERIODS = [
   { days: 1, label: '1D', interval: '1m', intervalLabel: '1分足' },
   { days: 7, label: '7D', interval: '5m', intervalLabel: '5分足' },
-  { days: 30, label: '1M', interval: '30m', intervalLabel: '30分足' },
+  { days: 30, label: '1M', interval: '1d', intervalLabel: '日足' },
   { days: 365, label: '1Y', interval: '1d', intervalLabel: '日足' },
 ];
 const PERIOD_DAYS = new Set(PERIODS.map(({ days }) => days));
@@ -382,7 +382,7 @@ function renderLoadedBars() {
 
 function renderChartNote() {
   if (state.chartMode === 'grid') {
-    el.chartNote.textContent = '期間別に約250〜400本へ集約 · 選択すると拡大します';
+    el.chartNote.textContent = '期間別に適切な時間足へ集約 · 選択すると拡大します';
     return;
   }
   el.chartNote.textContent = state.periodNotes.get(state.days) || '';

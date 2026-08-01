@@ -2,17 +2,76 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
+from functools import lru_cache
+from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ...config import Settings
 from ...db.repository import Repository
+from ...models import Bar, Session
 from ..deps import get_repository, get_settings_dep
 from ..schemas import BarOut, BarsResponse
 
 router = APIRouter(prefix="/api/bars", tags=["bars"])
+_MARKET_ZONE = ZoneInfo("America/New_York")
+
+
+@lru_cache(maxsize=64)
+def _read_daily_rows(path_text: str, modified_ns: int) -> tuple[dict[str, object], ...]:
+    """Read a small per-symbol parquet, cached by its immutable mtime."""
+    del modified_ns
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(
+        path_text,
+        columns=[
+            "date",
+            "adjOpen",
+            "adjHigh",
+            "adjLow",
+            "adjClose",
+            "adjVolume",
+        ],
+    )
+    return tuple(table.to_pylist())
+
+
+def _daily_corpus_bars(
+    path: Path,
+    symbol: str,
+    start: datetime,
+    end: datetime,
+) -> list[Bar]:
+    if not path.exists():
+        return []
+    received_at = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    rows = _read_daily_rows(str(path), path.stat().st_mtime_ns)
+    bars: list[Bar] = []
+    for row in rows:
+        day = row["date"]
+        timestamp = datetime.combine(day, time(16), tzinfo=UTC)  # type: ignore[arg-type]
+        if not start <= timestamp < end:
+            continue
+        bars.append(
+            Bar(
+                symbol=symbol.upper(),
+                timestamp=timestamp,
+                session=Session.REGULAR,
+                open=float(row["adjOpen"]),
+                high=float(row["adjHigh"]),
+                low=float(row["adjLow"]),
+                close=float(row["adjClose"]),
+                volume=int(round(float(row["adjVolume"]))),
+                source="tiingo_daily",
+                is_final=True,
+                received_at=received_at,
+            )
+        )
+    return bars
 
 
 def _parse_time(value: str | None, field: str) -> datetime | None:
@@ -61,17 +120,56 @@ def get_bars(
     repository.mark_viewed([symbol])
 
     limit = settings.max_bars_per_request
-    query = repository.get_bars if interval == "1m" else repository.get_aggregated_bars
     query_kwargs = {
-        "limit": limit + 1,
         "sources": [source] if source else None,
         "sessions": ["regular"] if session == "regular" else None,
         "newest_first": True,
     }
     if interval == "1m":
-        bars = query(symbol, start_dt, end_dt, **query_kwargs)
+        bars = repository.get_bars(
+            symbol, start_dt, end_dt, limit=limit + 1, **query_kwargs
+        )
+    elif interval == "1d":
+        corpus_path = (
+            settings.corpus_local_dir
+            / "daily"
+            / f"symbol={symbol.upper()}"
+            / "part.parquet"
+        )
+        corpus_bars = (
+            []
+            if source and source not in {"tiingo", "tiingo_daily"}
+            else _daily_corpus_bars(corpus_path, symbol, start_dt, end_dt)
+        )
+        market_bars = repository.get_aggregated_bars(
+            symbol,
+            start_dt,
+            end_dt,
+            interval="1d",
+            limit=None,
+            **query_kwargs,
+        )
+        # The daily corpus supplies the long history; market.db replaces its
+        # newest dates so today's completed/in-progress intraday data appears.
+        by_day = {
+            bar.timestamp.astimezone(_MARKET_ZONE).date(): bar for bar in corpus_bars
+        }
+        by_day.update(
+            {
+                bar.timestamp.astimezone(_MARKET_ZONE).date(): bar
+                for bar in market_bars
+            }
+        )
+        bars = sorted(by_day.values(), key=lambda bar: bar.timestamp)[-(limit + 1) :]
     else:
-        bars = query(symbol, start_dt, end_dt, interval=interval, **query_kwargs)
+        bars = repository.get_aggregated_bars(
+            symbol,
+            start_dt,
+            end_dt,
+            interval=interval,
+            limit=limit + 1,
+            **query_kwargs,
+        )
     truncated = len(bars) > limit
     if truncated:
         # The repository returns chronological order even though the SQL limit
