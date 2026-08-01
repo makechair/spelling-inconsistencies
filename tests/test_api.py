@@ -389,6 +389,8 @@ def test_analysis_report_page_and_json_archive(settings: Settings, tmp_path: Pat
         listed = test_client.get("/api/analysis/reports")
         assert listed.status_code == 200
         assert listed.json()["latest_report_date"] == "2026-07-31"
+        assert "no-store" in listed.headers["cache-control"]
+        assert listed.headers["cdn-cache-control"] == "no-store"
 
         latest = test_client.get("/api/analysis/reports/latest")
         assert latest.status_code == 200
@@ -397,6 +399,7 @@ def test_analysis_report_page_and_json_archive(settings: Settings, tmp_path: Pat
         dated = test_client.get("/api/analysis/reports/2026-07-31")
         assert dated.status_code == 200
         assert dated.json()["report_date"] == "2026-07-31"
+        assert "no-cache" in dated.headers["cache-control"]
         assert test_client.get("/api/analysis/reports/2026-07-30").status_code == 404
 
 

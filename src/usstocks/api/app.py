@@ -122,6 +122,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
+        if request.url.path.startswith("/api/analysis/"):
+            # Daily reports are regenerated in-place.  A browser or reverse
+            # proxy must therefore revalidate the same dated URL instead of
+            # keeping the pre-regeneration JSON response.
+            response.headers["Cache-Control"] = (
+                "no-store, no-cache, must-revalidate, max-age=0"
+            )
+            response.headers["CDN-Cache-Control"] = "no-store"
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")

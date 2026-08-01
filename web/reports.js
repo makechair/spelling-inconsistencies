@@ -1110,8 +1110,14 @@ async function loadReport(reportDate) {
   elements.status.hidden = false;
   elements.status.textContent = `${reportDate}版を読み込んでいます…`;
   elements.content.hidden = true;
-  const response = await fetch(`/api/analysis/reports/${encodeURIComponent(reportDate)}`, {
-    headers: { Accept: "application/json" },
+  const reportUrl = new URL(
+    `/api/analysis/reports/${encodeURIComponent(reportDate)}`,
+    window.location.origin,
+  );
+  reportUrl.searchParams.set("fresh", Date.now().toString());
+  const response = await fetch(reportUrl, {
+    cache: "no-store",
+    headers: { Accept: "application/json", "Cache-Control": "no-cache" },
   });
   if (!response.ok) throw new Error(`report HTTP ${response.status}`);
   const report = await response.json();
@@ -1123,8 +1129,11 @@ async function loadReport(reportDate) {
 
 async function start() {
   try {
-    const response = await fetch("/api/analysis/reports", {
-      headers: { Accept: "application/json" },
+    const indexUrl = new URL("/api/analysis/reports", window.location.origin);
+    indexUrl.searchParams.set("fresh", Date.now().toString());
+    const response = await fetch(indexUrl, {
+      cache: "no-store",
+      headers: { Accept: "application/json", "Cache-Control": "no-cache" },
     });
     if (!response.ok) throw new Error(`index HTTP ${response.status}`);
     const index = await response.json();
