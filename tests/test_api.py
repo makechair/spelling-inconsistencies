@@ -184,6 +184,52 @@ def test_daily_interval_merges_long_corpus_with_recent_market_bars(
     ]
 
 
+def test_weekly_interval_rolls_merged_daily_history_into_weeks(
+    client: TestClient, settings: Settings
+):
+    daily_path = (
+        settings.corpus_local_dir / "daily" / "symbol=AAPL" / "part.parquet"
+    )
+    rows = []
+    for offset, close in ((14, 91.0), (13, 93.0), (7, 95.0), (6, 94.0)):
+        day = (BASE - timedelta(days=offset)).date()
+        rows.append(
+            {
+                "symbol": "AAPL",
+                "date": day,
+                "open": close - 1,
+                "high": close + 1,
+                "low": close - 2,
+                "close": close,
+                "volume": 1000,
+                "adjOpen": close - 1,
+                "adjHigh": close + 1,
+                "adjLow": close - 2,
+                "adjClose": close,
+                "adjVolume": 1000.0,
+                "divCash": 0.0,
+                "splitFactor": 1.0,
+            }
+        )
+    write_daily_parquet(daily_path, rows)
+
+    payload = client.get(
+        "/api/bars/AAPL",
+        params={
+            "start": (BASE - timedelta(days=20)).isoformat(),
+            "end": (BASE + timedelta(days=1)).isoformat(),
+            "interval": "1w",
+            "session": "regular",
+        },
+    ).json()
+
+    assert payload["count"] == 2
+    assert payload["bars"][0]["open"] == 90.0
+    assert payload["bars"][0]["close"] == 93.0
+    assert payload["bars"][0]["volume"] == 2000
+    assert payload["bars"][1]["close"] == 94.0
+
+
 def test_bars_report_the_last_fetch_even_when_the_range_is_empty(
     client: TestClient, settings: Settings
 ):

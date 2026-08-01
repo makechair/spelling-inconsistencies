@@ -464,6 +464,136 @@ INNER JOIN daily_indexed AS endpoint
 WHERE move.adj_close <> 0
 GROUP BY move.symbol, move.move_bucket, horizon.horizon;
 
+-- A trade plan must preserve the order of the decision: wait first, buy, and
+-- only then sell.  Computing the return between those two endpoints directly
+-- also lets us report a real win rate and downside quantile; neither can be
+-- reconstructed from two independently aggregated surface cells.
+CREATE OR REPLACE TEMP TABLE return_trade_observations AS
+SELECT
+    move.symbol,
+    move.move_bucket,
+    move.date AS signal_date,
+    buy_day.buy_day,
+    sell_day.sell_day,
+    sell_day.sell_day - buy_day.buy_day AS holding_days,
+    sell_price.adj_close / buy_price.adj_close - 1 AS trade_return
+FROM daily_move_buckets AS move
+CROSS JOIN range(1, 20) AS buy_day(buy_day)
+CROSS JOIN range(buy_day.buy_day + 1, 21) AS sell_day(sell_day)
+INNER JOIN daily_indexed AS buy_price
+    ON buy_price.symbol = move.symbol
+   AND buy_price.trading_index = move.trading_index + buy_day.buy_day
+INNER JOIN daily_indexed AS sell_price
+    ON sell_price.symbol = move.symbol
+   AND sell_price.trading_index = move.trading_index + sell_day.sell_day
+WHERE buy_price.adj_close <> 0;
+
+CREATE OR REPLACE TEMP TABLE return_trade_peer_observations AS
+SELECT
+    subject.symbol,
+    subject.move_bucket,
+    subject.signal_date,
+    subject.buy_day,
+    subject.sell_day,
+    count(*) AS peer_count,
+    avg(peer_sell.adj_close / peer_buy.adj_close - 1) AS peer_return
+FROM return_trade_observations AS subject
+INNER JOIN sectors_input AS subject_sector
+    ON subject_sector.symbol = subject.symbol
+INNER JOIN sectors_input AS peer_sector
+    ON peer_sector.subsector = subject_sector.subsector
+   AND peer_sector.symbol <> subject.symbol
+INNER JOIN daily_indexed AS peer_signal
+    ON peer_signal.symbol = peer_sector.symbol
+   AND peer_signal.date = subject.signal_date
+INNER JOIN daily_indexed AS peer_buy
+    ON peer_buy.symbol = peer_signal.symbol
+   AND peer_buy.trading_index = peer_signal.trading_index + subject.buy_day
+INNER JOIN daily_indexed AS peer_sell
+    ON peer_sell.symbol = peer_signal.symbol
+   AND peer_sell.trading_index = peer_signal.trading_index + subject.sell_day
+WHERE peer_buy.adj_close <> 0
+GROUP BY
+    subject.symbol,
+    subject.move_bucket,
+    subject.signal_date,
+    subject.buy_day,
+    subject.sell_day;
+
+CREATE OR REPLACE TEMP TABLE return_trade_candidates AS
+WITH aggregated AS (
+    SELECT
+        trade.symbol,
+        trade.move_bucket,
+        min(bucket.move_return) AS move_min,
+        max(bucket.move_return) AS move_max,
+        avg(bucket.move_return) AS move_mean,
+        trade.buy_day,
+        trade.sell_day,
+        trade.holding_days,
+        count(*) AS observations,
+        count(*) / trade.holding_days::DOUBLE AS effective_observations,
+        avg(trade.trade_return) AS expected_return,
+        median(trade.trade_return) AS median_return,
+        stddev_samp(trade.trade_return) AS return_stddev,
+        quantile_cont(trade.trade_return, 0.10) AS downside_p10,
+        avg(CAST(trade.trade_return > 0 AS INTEGER)) AS win_rate,
+        avg(
+            trade.trade_return - peer.peer_return
+        ) FILTER (
+            WHERE peer.peer_count >= parameters.min_peers
+        ) AS sector_excess_return,
+        count(*) FILTER (
+            WHERE peer.peer_count >= parameters.min_peers
+        ) AS sector_observations
+    FROM return_trade_observations AS trade
+    INNER JOIN daily_move_buckets AS bucket
+        ON bucket.symbol = trade.symbol
+       AND bucket.move_bucket = trade.move_bucket
+       AND bucket.date = trade.signal_date
+    LEFT JOIN return_trade_peer_observations AS peer
+        ON peer.symbol = trade.symbol
+       AND peer.move_bucket = trade.move_bucket
+       AND peer.signal_date = trade.signal_date
+       AND peer.buy_day = trade.buy_day
+       AND peer.sell_day = trade.sell_day
+    CROSS JOIN analysis_parameters AS parameters
+    GROUP BY
+        trade.symbol,
+        trade.move_bucket,
+        trade.buy_day,
+        trade.sell_day,
+        trade.holding_days
+)
+SELECT
+    *,
+    expected_return - 0.001 AS expected_return_after_cost,
+    downside_p10 - 0.001 AS downside_p10_after_cost,
+    expected_return - 0.001
+        - 1.2816 * return_stddev / sqrt(greatest(effective_observations, 1))
+        AS conservative_return
+FROM aggregated;
+
+CREATE OR REPLACE TEMP TABLE return_trade_plan AS
+SELECT
+    *,
+    sell_day = 20 AS sell_at_window_boundary,
+    CASE
+        WHEN effective_observations < 10 THEN 'insufficient'
+        WHEN conservative_return > 0 THEN 'strong'
+        WHEN expected_return_after_cost > 0 AND win_rate >= 0.5 THEN 'moderate'
+        ELSE 'weak'
+    END AS evidence_level
+FROM return_trade_candidates
+WHERE effective_observations >= 10
+QUALIFY row_number() OVER (
+    PARTITION BY symbol, move_bucket
+    ORDER BY
+        conservative_return DESC NULLS LAST,
+        expected_return_after_cost DESC,
+        holding_days ASC
+) = 1;
+
 CREATE OR REPLACE TEMP TABLE event_summary AS
 WITH samples AS (
     SELECT 'all' AS sample, *

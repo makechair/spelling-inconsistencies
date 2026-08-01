@@ -19,6 +19,7 @@ const elements = {
   analogDecision: document.querySelector("#analog-decision"),
   analogInterpretation: document.querySelector("#analog-interpretation"),
   returnSurfaceChart: document.querySelector("#return-surface-chart"),
+  returnSurfaceDecision: document.querySelector("#return-surface-decision"),
   returnSurfaceInterpretation: document.querySelector("#return-surface-interpretation"),
   peerSummary: document.querySelector("#peer-summary"),
   peerChart: document.querySelector("#peer-chart"),
@@ -604,9 +605,11 @@ function renderAnalogChart(studies, requestedDate = null) {
     `これはニュース内容ではなく、値動きだけを条件にした統計です。`;
 }
 
-function renderReturnSurface(rows) {
+function renderReturnSurface(rows, tradePlans) {
   const svg = elements.returnSurfaceChart;
   svg.replaceChildren();
+  elements.returnSurfaceDecision.replaceChildren();
+  elements.returnSurfaceDecision.hidden = true;
   elements.returnSurfaceInterpretation.textContent = "算出可能な日足履歴がありません。";
   if (!Array.isArray(rows) || !rows.length) return;
 
@@ -675,18 +678,9 @@ function renderReturnSurface(rows) {
   const plotHeight = 360;
   const cellWidth = plotWidth / buckets.length;
   const cellHeight = plotHeight / 20;
-  const sellByBucket = new Map();
-  const buyByBucket = new Map();
-  buckets.forEach((bucket) => {
-    const cells = eligible.filter((cell) => Number(cell.move_bucket) === bucket);
-    if (!cells.length) return;
-    sellByBucket.set(bucket, cells.reduce((best, cell) =>
-      best == null || Number(cell.forward_mean) > Number(best.forward_mean) ? cell : best,
-    null));
-    buyByBucket.set(bucket, cells.reduce((best, cell) =>
-      best == null || Number(cell.forward_mean) < Number(best.forward_mean) ? cell : best,
-    null));
-  });
+  const planByBucket = new Map((tradePlans || []).map(
+    (plan) => [Number(plan.move_bucket), plan],
+  ));
 
   svg.append(
     svgNode("text", { x: left, y: 22, class: "report-chart-label" }, "同期間の通常平均との差"),
@@ -694,7 +688,7 @@ function renderReturnSurface(rows) {
     svgNode("text", { x: left + 130, y: 22, class: "report-chart-label" }, "低い"),
     svgNode("rect", { x: left + 174, y: 11, width: 42, height: 13, fill: "rgba(34,197,94,.65)" }),
     svgNode("text", { x: left + 222, y: 22, class: "report-chart-label" }, "高い"),
-    svgNode("text", { x: left + 285, y: 22, class: "report-chart-label" }, "S 売却候補 / B 買い待ち候補"),
+    svgNode("text", { x: left + 285, y: 22, class: "report-chart-label" }, "B→S リスク補正後の最適売買ペア"),
   );
 
   for (let horizon = 1; horizon <= 20; horizon += 1) {
@@ -737,16 +731,24 @@ function renderReturnSurface(rows) {
       }
       svg.append(rect);
       if (!reliable) return;
-      const sell = sellByBucket.get(bucket)?.horizon === horizon;
-      const buy = buyByBucket.get(bucket)?.horizon === horizon;
+      const plan = planByBucket.get(bucket);
+      const sell = Number(plan?.sell_day) === horizon;
+      const buy = Number(plan?.buy_day) === horizon;
       if (sell || buy) {
         const marker = sell && buy ? "S/B" : sell ? "S" : "B";
-        svg.append(svgNode("text", {
+        const markerNode = svgNode("text", {
           x: x + cellWidth / 2,
           y: y + cellHeight * 0.72,
           "text-anchor": "middle",
           class: "report-surface-marker",
-        }, marker));
+        }, marker);
+        markerNode.append(svgNode("title", {},
+          `B ${plan.buy_day}日後 → S ${plan.sell_day}日後 / ` +
+          `期待${percent(plan.expected_return_after_cost, true)} / ` +
+          `勝率${percent(plan.win_rate)} / 10%点${percent(plan.downside_p10_after_cost, true)} / ` +
+          `80%下限${percent(plan.conservative_return, true)}`,
+        ));
+        svg.append(markerNode);
       }
     });
   }
@@ -783,14 +785,40 @@ function renderReturnSurface(rows) {
   }, "初日の1日リターン（同銘柄内10分位）"));
 
   const strongestBucket = buckets.at(-1);
-  const strongestSell = sellByBucket.get(strongestBucket);
-  const strongestBuy = buyByBucket.get(strongestBucket);
-  elements.returnSurfaceInterpretation.textContent = strongestSell && strongestBuy
-    ? `最大上昇帯では、絶対期待値最大のSは${strongestSell.horizon}日後` +
-      `（${percent(strongestSell.forward_mean, true)}）、期待値最小のBは` +
-      `${strongestBuy.horizon}日後（${percent(strongestBuy.forward_mean, true)}）です。` +
-      "色は絶対値ではなく通常平均との差なので、初日変動に固有の強弱を確認できます。"
-    : "セルにカーソルを合わせると絶対期待値、通常平均との差、信頼下限を確認できます。";
+  const strongestPlan = planByBucket.get(strongestBucket);
+  if (strongestPlan) {
+    const evidenceLabels = {
+      strong: "強い（80%信頼下限もプラス）",
+      moderate: "中程度（平均と勝率はプラス）",
+      weak: "弱い（下振れを考慮すると優位性未確認）",
+      insufficient: "標本不足",
+    };
+    const heading = document.createElement("strong");
+    heading.textContent = "最大上昇帯の売買計画";
+    const timing = document.createElement("p");
+    timing.textContent =
+      `推奨待機 ${strongestPlan.buy_day}日 → ${strongestPlan.holding_days}日間保有 → ` +
+      `${strongestPlan.sell_day}日後に売却${strongestPlan.sell_at_window_boundary ? "（観測期間末）" : ""}`;
+    const expected = document.createElement("p");
+    expected.textContent =
+      `コスト後期待リターン ${percent(strongestPlan.expected_return_after_cost, true)} / ` +
+      `勝率 ${percent(strongestPlan.win_rate)} / 下振れ10%点 ` +
+      `${percent(strongestPlan.downside_p10_after_cost, true)}`;
+    const evidence = document.createElement("p");
+    evidence.textContent =
+      `同subsector超過 ${percent(strongestPlan.sector_excess_return, true)} / ` +
+      `80%信頼下限 ${percent(strongestPlan.conservative_return, true)} / ` +
+      `実効標本 ${number(strongestPlan.effective_observations, 1)} / ` +
+      `判定 ${evidenceLabels[strongestPlan.evidence_level] || "—"}`;
+    elements.returnSurfaceDecision.append(heading, timing, expected, evidence);
+    elements.returnSurfaceDecision.hidden = false;
+    elements.returnSurfaceInterpretation.textContent = strongestPlan.sell_at_window_boundary
+      ? "Sが20日後にあるため、20日後が天井という意味ではありません。観測期間末でも期待経路が上向きで、ピーク未確認です。"
+      : "B/Sは買いを先、売りを後に固定した実現可能な組み合わせです。色は通常平均との差、B/Sは実際の売買区間リターンを使っています。";
+  } else {
+    elements.returnSurfaceInterpretation.textContent =
+      "売買ペア統計が未生成です。次回の分析更新後にB/Sと勝率を表示します。";
+  }
 }
 
 function renderHorizonChart(studies) {
@@ -1064,7 +1092,10 @@ function renderFocusSymbol(report, symbol) {
   renderHorizonChart(studies);
   renderTimelineChart(studies);
   renderAnalogChart(studies);
-  renderReturnSurface(report.return_surfaces?.[symbol] || []);
+  renderReturnSurface(
+    report.return_surfaces?.[symbol] || [],
+    report.return_trade_plans?.[symbol] || [],
+  );
 }
 
 function renderTickerFocus(report) {

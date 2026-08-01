@@ -76,9 +76,10 @@
             <svg id="return-surface-chart" viewBox="0 0 900 520" role="img"
                  aria-label="初日変動率と保有日数ごとの条件付き期待リターンヒートマップ"></svg>
           </div>
+          <div id="return-surface-decision" class="report-decision" hidden></div>
           <div class="report-chart-guide">
             <strong>判断の読み方</strong>
-            <p>緑は通常の同期間リターンより強く、赤は弱かった領域です。Sは絶対リターンの平均が最大となる売却候補、Bは平均が最小となる買い待ち候補です。実効標本10件未満は空欄にします。</p>
+            <p>緑は通常の同期間リターンより強く、赤は弱かった領域です。BとSは各列で独立した最小・最大ではなく、Bで買ってからSで売る順序を守った全組み合わせのうち、期間重複・ばらつき・往復コスト0.10%を差し引いた80%信頼下限が最も高いペアです。実効標本10件未満は候補から除外します。</p>
             <p id="return-surface-interpretation" class="report-chart-interpretation"></p>
           </div>
         </article>

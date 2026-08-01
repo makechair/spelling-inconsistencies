@@ -739,6 +739,7 @@ def _report_payload(
     event_rows: list[dict[str, object]],
     context_rows: list[dict[str, object]],
     return_surface_rows: list[dict[str, object]],
+    return_trade_plan_rows: list[dict[str, object]],
     previous: dict[str, Any] | None,
 ) -> dict[str, object]:
     counts = {
@@ -757,6 +758,9 @@ def _report_payload(
     return_surfaces: dict[str, list[dict[str, object]]] = {}
     for row in return_surface_rows:
         return_surfaces.setdefault(str(row["symbol"]), []).append(row)
+    return_trade_plans: dict[str, list[dict[str, object]]] = {}
+    for row in return_trade_plan_rows:
+        return_trade_plans.setdefault(str(row["symbol"]), []).append(row)
     return _jsonable(
         {
             "version": 2,
@@ -783,6 +787,7 @@ def _report_payload(
             "focus_symbol": symbol_focus[0]["symbol"] if symbol_focus else None,
             "symbol_focus": symbol_focus,
             "return_surfaces": return_surfaces,
+            "return_trade_plans": return_trade_plans,
             "case_studies": case_studies,
             # JSON is deliberately complete enough for the API and future
             # historical comparisons, so the web process never imports
@@ -1502,6 +1507,9 @@ def run(
         return_surface = connection.execute(
             "SELECT * FROM return_surface ORDER BY symbol, move_bucket, horizon"
         ).to_arrow_table()
+        return_trade_plan = connection.execute(
+            "SELECT * FROM return_trade_plan ORDER BY symbol, move_bucket"
+        ).to_arrow_table()
         metadata = _metadata(connection, settings.analysis_min_peers)
     except duckdb.Error as exc:
         raise CorpusError(f"event study query failed: {exc}") from exc
@@ -1516,6 +1524,7 @@ def run(
     event_rows = event_returns.to_pylist()
     context_rows = event_case_context.to_pylist()
     return_surface_rows = return_surface.to_pylist()
+    return_trade_plan_rows = return_trade_plan.to_pylist()
     report_payload = _report_payload(
         report_date,
         metadata,
@@ -1523,6 +1532,7 @@ def run(
         event_rows,
         context_rows,
         return_surface_rows,
+        return_trade_plan_rows,
         previous_report,
     )
     _write_text(

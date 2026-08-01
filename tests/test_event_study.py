@@ -309,6 +309,9 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert {row["horizon"] for row in surface} == set(range(1, 21))
     assert {row["move_bucket"] for row in surface}
     assert all("forward_mean" in row for row in surface)
+    # The compact fixture has fewer than 10 overlap-adjusted observations per
+    # trade window, so it must not manufacture a B/S recommendation.
+    assert report["return_trade_plans"].get("NVDA", []) == []
     assert (output / "manifest.json").exists()
     daily = tmp_path / "corpus" / "analysis" / "daily" / "date=2026-07-31"
     assert (daily / "report.json").exists()

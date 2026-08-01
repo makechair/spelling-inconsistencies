@@ -19,9 +19,9 @@ import { save as saveView, view } from './viewstate.js';
 
 const PERIODS = [
   { days: 1, label: '1D', interval: '1m', intervalLabel: '1分足' },
-  { days: 7, label: '7D', interval: '5m', intervalLabel: '5分足' },
+  { days: 7, label: '7D', interval: '15m', intervalLabel: '15分足' },
   { days: 30, label: '1M', interval: '1d', intervalLabel: '日足' },
-  { days: 365, label: '1Y', interval: '1d', intervalLabel: '日足' },
+  { days: 365, label: '1Y', interval: '1w', intervalLabel: '週足' },
 ];
 const PERIOD_DAYS = new Set(PERIODS.map(({ days }) => days));
 const MAX_PERIOD_DAYS = PERIODS.at(-1).days;

@@ -74,6 +74,36 @@ def _daily_corpus_bars(
     return bars
 
 
+def _weekly_bars(daily_bars: list[Bar]) -> list[Bar]:
+    """Roll merged daily bars into market-calendar weeks."""
+    weeks: dict[tuple[int, int], list[Bar]] = {}
+    for bar in sorted(daily_bars, key=lambda item: item.timestamp):
+        market_day = bar.timestamp.astimezone(_MARKET_ZONE).date()
+        iso_year, iso_week, _ = market_day.isocalendar()
+        weeks.setdefault((iso_year, iso_week), []).append(bar)
+
+    result: list[Bar] = []
+    for bars in weeks.values():
+        sources = {bar.source for bar in bars}
+        received = [bar.received_at for bar in bars if bar.received_at is not None]
+        result.append(
+            Bar(
+                symbol=bars[0].symbol,
+                timestamp=bars[0].timestamp,
+                session=Session.REGULAR,
+                open=bars[0].open,
+                high=max(bar.high for bar in bars),
+                low=min(bar.low for bar in bars),
+                close=bars[-1].close,
+                volume=sum(bar.volume for bar in bars),
+                source=bars[0].source if len(sources) == 1 else "mixed",
+                is_final=all(bar.is_final for bar in bars),
+                received_at=max(received) if received else None,
+            )
+        )
+    return result
+
+
 def _parse_time(value: str | None, field: str) -> datetime | None:
     if value is None:
         return None
@@ -91,7 +121,7 @@ def get_bars(
     end: str | None = Query(None, description="ISO-8601; defaults to now"),
     days: int | None = Query(None, ge=1, le=3650, description="Shorthand for start"),
     source: str | None = Query(None, description="Restrict to one provider"),
-    interval: Literal["1m", "5m", "15m", "30m", "1h", "1d"] = Query(
+    interval: Literal["1m", "5m", "15m", "30m", "1h", "1d", "1w"] = Query(
         "1m", description="Chart aggregation interval"
     ),
     session: Literal["all", "regular"] = Query(
@@ -129,7 +159,7 @@ def get_bars(
         bars = repository.get_bars(
             symbol, start_dt, end_dt, limit=limit + 1, **query_kwargs
         )
-    elif interval == "1d":
+    elif interval in {"1d", "1w"}:
         corpus_path = (
             settings.corpus_local_dir
             / "daily"
@@ -160,7 +190,9 @@ def get_bars(
                 for bar in market_bars
             }
         )
-        bars = sorted(by_day.values(), key=lambda bar: bar.timestamp)[-(limit + 1) :]
+        daily_bars = sorted(by_day.values(), key=lambda bar: bar.timestamp)
+        bars = _weekly_bars(daily_bars) if interval == "1w" else daily_bars
+        bars = bars[-(limit + 1) :]
     else:
         bars = repository.get_aggregated_bars(
             symbol,

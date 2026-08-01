@@ -640,7 +640,7 @@ APIは1ワーカーで動作する。SQLiteコネクションはスレッドロ�
 
 | File | 役割 |
 |---|---|
-| `web/app.js` | watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、30秒の差分取得（`refreshTail`）、SSE、再接続判定。期間を変えず、1分／5分／日足／日足へ集約する。1M／1Yは長期daily corpusをmarket.dbの直近日足で更新する |
+| `web/app.js` | watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、30秒の差分取得（`refreshTail`）、SSE、再接続判定。期間を変えず、1分／15分／日足／週足へ集約する。1M／1Yは長期daily corpusをmarket.dbの直近日足で更新し、週足は統合後の日足から生成する |
 | `web/chart.js` | Lightweight Charts。軸フォーマット、legend、出来高、MA描画。非取引日でも期間幅が縮まらないよう不可視anchorで時間軸を固定。拡大／4分割復帰時も同じ期間幅を再適用 |
 | `web/timezone.js` | 表示タイムゾーンの単一の情報源。既定 `America/New_York`、localStorage保存 |
 | `web/viewstate.js` | `{days, extended, barSpacing, rightOffset, movingAverages}` を保存 |
