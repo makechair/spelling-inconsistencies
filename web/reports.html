@@ -52,7 +52,7 @@
           <div class="report-chart-heading">
             <div>
               <h3>同規模変動後の上昇確率</h3>
-              <p class="report-chart-description">選択した反応日と同程度以上に動いた過去の日を探し、その後に株価が上がった割合を示します。</p>
+              <p class="report-chart-description">選択した反応日と同程度以上に動いた過去の日を探し、その後1〜20取引日の各終値が基準日終値を上回った割合を連続表示します。</p>
             </div>
             <label class="report-analog-picker" for="analog-event">
               基準にする反応日
@@ -61,7 +61,7 @@
           </div>
           <p id="analog-summary" class="report-analog-summary"></p>
           <svg id="analog-chart" viewBox="0 0 720 300" role="img"
-               aria-label="同規模変動後の1日、5日、20日上昇率"></svg>
+               aria-label="同規模変動後の1日から20日までの上昇率推移"></svg>
           <div class="report-chart-guide">
             <strong>判断の読み方</strong>
             <p>棒が50%より上なら各期日の終値は基準日終値より上になった例が多く、下なら少なかったことを示します。途中で上げ下げした経路は表しません。平均・中央値と過去事例数も併せて確認します。</p>

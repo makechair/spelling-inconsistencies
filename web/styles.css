@@ -605,6 +605,9 @@ body {
 .report-chart-label { fill: var(--muted); font-size: 13px; }
 .report-chart-value { fill: var(--text); font-size: 12px; }
 .report-chart-win-label { fill: var(--text); font-size: 16px; font-weight: 700; }
+.report-chart-analog-line { fill: none; stroke: var(--accent); stroke-width: 3; }
+.report-chart-analog-positive { fill: #22c55e; stroke: var(--bg); stroke-width: 2; }
+.report-chart-analog-negative { fill: #ef4444; stroke: var(--bg); stroke-width: 2; }
 .report-chart-subject { fill: var(--accent); }
 .report-chart-peer-bar { fill: #94a3b8; }
 .report-chart-bar-value { fill: var(--text); font-size: 10px; font-weight: 700; }

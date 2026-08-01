@@ -325,42 +325,92 @@ SELECT
 FROM event_returns_long
 GROUP BY ALL;
 
-CREATE OR REPLACE TEMP TABLE historical_daily_moves AS
-SELECT
-    symbol,
-    date,
-    adj_close / lag(adj_close, 1) OVER symbol_dates - 1 AS daily_return,
-    lead(adj_close, 1) OVER symbol_dates / adj_close - 1 AS forward_return_1d,
-    lead(adj_close, 5) OVER symbol_dates / adj_close - 1 AS forward_return_5d,
-    lead(adj_close, 20) OVER symbol_dates / adj_close - 1 AS forward_return_20d
-FROM daily_indexed
-WINDOW symbol_dates AS (PARTITION BY symbol ORDER BY date);
-
-CREATE OR REPLACE TEMP TABLE event_case_context AS
+CREATE OR REPLACE TEMP TABLE event_similar_moves AS
 SELECT
     event.event_key,
     CASE WHEN event.raw_return_0d < 0 THEN 'down' ELSE 'up' END AS move_direction,
-    count(*) AS similar_move_count,
-    avg(history.forward_return_1d) AS forward_mean_1d,
-    median(history.forward_return_1d) AS forward_median_1d,
-    avg(CAST(history.forward_return_1d > 0 AS INTEGER)) AS forward_win_rate_1d,
-    avg(history.forward_return_5d) AS forward_mean_5d,
-    median(history.forward_return_5d) AS forward_median_5d,
-    avg(CAST(history.forward_return_5d > 0 AS INTEGER)) AS forward_win_rate_5d,
-    avg(history.forward_return_20d) AS forward_mean_20d,
-    median(history.forward_return_20d) AS forward_median_20d,
-    avg(CAST(history.forward_return_20d > 0 AS INTEGER)) AS forward_win_rate_20d
+    history.symbol,
+    history.date,
+    history.trading_index,
+    history.adj_close
 FROM event_returns AS event
-INNER JOIN historical_daily_moves AS history
+INNER JOIN daily_indexed AS history
     ON history.symbol = event.symbol
    AND history.date < event.reaction_date
-   AND (
-        (event.raw_return_0d < 0 AND history.daily_return <= event.raw_return_0d)
-        OR
-        (event.raw_return_0d >= 0 AND history.daily_return >= event.raw_return_0d)
-   )
+INNER JOIN daily_indexed AS history_base
+    ON history_base.symbol = history.symbol
+   AND history_base.trading_index = history.trading_index - 1
 WHERE event.raw_return_0d IS NOT NULL
-GROUP BY event.event_key, move_direction;
+  AND history_base.adj_close <> 0
+  AND (
+        (
+            event.raw_return_0d < 0
+        AND history.adj_close / history_base.adj_close - 1 <= event.raw_return_0d
+        )
+        OR
+        (
+            event.raw_return_0d >= 0
+        AND history.adj_close / history_base.adj_close - 1 >= event.raw_return_0d
+        )
+  );
+
+CREATE OR REPLACE TEMP TABLE event_similar_move_counts AS
+SELECT
+    event_key,
+    move_direction,
+    count(*) AS similar_move_count
+FROM event_similar_moves
+GROUP BY event_key, move_direction;
+
+CREATE OR REPLACE TEMP TABLE event_case_context_long AS
+SELECT
+    move.event_key,
+    move.move_direction,
+    horizon.horizon,
+    count(*) AS forward_observations,
+    avg(endpoint.adj_close / move.adj_close - 1) AS forward_mean,
+    median(endpoint.adj_close / move.adj_close - 1) AS forward_median,
+    avg(CAST(endpoint.adj_close / move.adj_close - 1 > 0 AS INTEGER))
+        AS forward_win_rate
+FROM event_similar_moves AS move
+CROSS JOIN range(1, 21) AS horizon(horizon)
+INNER JOIN daily_indexed AS endpoint
+    ON endpoint.symbol = move.symbol
+   AND endpoint.trading_index = move.trading_index + horizon.horizon
+WHERE move.adj_close <> 0
+GROUP BY move.event_key, move.move_direction, horizon.horizon;
+
+CREATE OR REPLACE TEMP TABLE event_case_context AS
+SELECT
+    counts.event_key,
+    counts.move_direction,
+    counts.similar_move_count,
+    max(context.forward_mean) FILTER (WHERE context.horizon = 1) AS forward_mean_1d,
+    max(context.forward_median) FILTER (WHERE context.horizon = 1) AS forward_median_1d,
+    max(context.forward_win_rate) FILTER (WHERE context.horizon = 1)
+        AS forward_win_rate_1d,
+    max(context.forward_mean) FILTER (WHERE context.horizon = 5) AS forward_mean_5d,
+    max(context.forward_median) FILTER (WHERE context.horizon = 5) AS forward_median_5d,
+    max(context.forward_win_rate) FILTER (WHERE context.horizon = 5)
+        AS forward_win_rate_5d,
+    max(context.forward_mean) FILTER (WHERE context.horizon = 20) AS forward_mean_20d,
+    max(context.forward_median) FILTER (WHERE context.horizon = 20)
+        AS forward_median_20d,
+    max(context.forward_win_rate) FILTER (WHERE context.horizon = 20)
+        AS forward_win_rate_20d,
+    list(
+        struct_pack(
+            horizon := context.horizon,
+            observations := context.forward_observations,
+            mean := context.forward_mean,
+            median := context.forward_median,
+            win_rate := context.forward_win_rate
+        )
+        ORDER BY context.horizon
+    ) AS forward_path
+FROM event_similar_move_counts AS counts
+INNER JOIN event_case_context_long AS context USING (event_key, move_direction)
+GROUP BY counts.event_key, counts.move_direction, counts.similar_move_count;
 
 CREATE OR REPLACE TEMP TABLE event_summary AS
 WITH samples AS (

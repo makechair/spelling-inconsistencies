@@ -1266,7 +1266,8 @@ DuckDB／pyarrowやイベント明細Parquetを常駐プロセスへimportしな
 直前5／20日モメンタム、60日出来高中央値比、利用可能な同subsector平均との差を併記する。
 peerが3社未満の相対returnは参考値として残すが、正式なabnormal returnには昇格させない。
 所見文はLLMではなく算出値をルールで文章化するため追加費用はない。Webと日次MD／HTMLには、
-全horizonのraw return・percentile・観測数・peer比較と、類似変動後の全算出値を明細表示する。
+全horizonのraw return・percentile・観測数・peer比較と、類似変動後1〜20取引日の
+上昇率・平均・中央値を連続系列で表示する。
 分析対象を先行投入する場合は日足jobへ`--symbols`を渡す。指定先は50銘柄universe内に限定し、
 共有REST予算、1実行の上限、安全時間帯を維持するため、ライブ取得のquotaを迂回しない。
 

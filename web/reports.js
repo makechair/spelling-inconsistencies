@@ -426,18 +426,30 @@ function renderAnalogChart(studies, requestedDate = null) {
     `${selected.reaction_date}の${percent(move, true)}を基準に、過去の同程度以上の` +
     `${moveLabel}日${number(count, 0)}件を比較しています。`;
 
-  const horizons = [1, 5, 20].map((days) => ({
+  const legacyHorizons = [1, 5, 20].map((days) => ({
     days,
+    observations: context.similar_move_count,
     winRate: context[`forward_win_rate_${days}d`],
     mean: context[`forward_mean_${days}d`],
     median: context[`forward_median_${days}d`],
-  })).filter((item) => item.winRate != null);
+  }));
+  const horizons = (
+    Array.isArray(context.forward_path) && context.forward_path.length
+      ? context.forward_path.map((point) => ({
+          days: Number(point.horizon),
+          observations: Number(point.observations || 0),
+          winRate: point.win_rate,
+          mean: point.mean,
+          median: point.median,
+        }))
+      : legacyHorizons
+  ).filter((item) => item.winRate != null);
   if (!horizons.length) return;
 
   const left = 64;
   const right = 18;
   const top = 30;
-  const bottom = 94;
+  const bottom = 48;
   const width = 720 - left - right;
   const height = 300 - top - bottom;
   const y = (value) => top + (1 - value) * height;
@@ -460,53 +472,54 @@ function renderAnalogChart(studies, requestedDate = null) {
     );
   });
 
-  const slot = width / horizons.length;
-  const barWidth = Math.min(96, slot * 0.48);
-  horizons.forEach((item, index) => {
-    const pointX = left + slot * (index + 0.5);
+  const x = (days) => left + ((days - 1) / 19) * width;
+  const continuous = horizons.length === 20 && horizons.every(
+    (item, index) => item.days === index + 1,
+  );
+  if (continuous) {
+    const path = horizons.map((item, index) =>
+      `${index ? "L" : "M"}${x(item.days)},${y(Number(item.winRate))}`,
+    ).join(" ");
+    elements.analogChart.append(svgNode("path", {
+      d: path,
+      class: "report-chart-analog-line",
+      opacity: count < 20 ? 0.42 : 1,
+    }));
+  }
+  horizons.forEach((item) => {
+    const pointX = x(item.days);
     const pointY = y(Number(item.winRate));
-    const bar = svgNode("rect", {
-      x: pointX - barWidth / 2,
-      y: pointY,
-      width: barWidth,
-      height: y(0) - pointY,
-      rx: 5,
+    const point = svgNode("circle", {
+      cx: pointX,
+      cy: pointY,
+      r: 4.5,
       class: Number(item.winRate) >= 0.5
-        ? "report-chart-positive"
-        : "report-chart-negative",
-      opacity: count < 20 ? 0.42 : 0.82,
+        ? "report-chart-analog-positive"
+        : "report-chart-analog-negative",
+      opacity: count < 20 ? 0.42 : 1,
     });
-    bar.append(svgNode("title", {},
+    point.append(svgNode("title", {},
       `${item.days}日後 上昇率${percent(item.winRate)} / ` +
-      `平均${percent(item.mean, true)} / 中央値${percent(item.median, true)}`,
+      `平均${percent(item.mean, true)} / 中央値${percent(item.median, true)} / ` +
+      `${number(item.observations, 0)}観測`,
     ));
-    elements.analogChart.append(
-      bar,
-      svgNode("text", {
-        x: pointX,
-        y: pointY - 9,
-        "text-anchor": "middle",
-        class: "report-chart-win-label",
-      }, percent(item.winRate)),
-      svgNode("text", {
+    elements.analogChart.append(point);
+    if ([1, 5, 10, 15, 20].includes(item.days)) {
+      elements.analogChart.append(
+        svgNode("text", {
+          x: pointX,
+          y: pointY + (Number(item.winRate) >= 0.5 ? -10 : 17),
+          "text-anchor": "middle",
+          class: "report-chart-value",
+        }, percent(item.winRate)),
+        svgNode("text", {
         x: pointX,
         y: y(0) + 20,
         "text-anchor": "middle",
         class: "report-chart-label",
-      }, `${item.days}取引日後`),
-      svgNode("text", {
-        x: pointX,
-        y: y(0) + 39,
-        "text-anchor": "middle",
-        class: "report-chart-sample",
-      }, `平均 ${percent(item.mean, true)}`),
-      svgNode("text", {
-        x: pointX,
-        y: y(0) + 56,
-        "text-anchor": "middle",
-        class: "report-chart-sample",
-      }, `中央値 ${percent(item.median, true)}`),
-    );
+        }, `${item.days}日`),
+      );
+    }
   });
 
   const best = horizons.reduce((highest, item) =>

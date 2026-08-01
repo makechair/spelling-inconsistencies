@@ -295,6 +295,13 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert nvda_case["historical_observations_0d"] > 0
     assert nvda_case["reaction_volume_ratio_60d"] == 1.0
     assert nvda_case["exploratory_relative_return_0d"] == nvda_case["abnormal_return_0d"]
+    move_context = nvda_case["historical_move_context"]
+    assert [point["horizon"] for point in move_context["forward_path"]] == list(
+        range(1, 21)
+    )
+    assert move_context["forward_path"][4]["win_rate"] == move_context[
+        "forward_win_rate_5d"
+    ]
     assert (output / "manifest.json").exists()
     daily = tmp_path / "corpus" / "analysis" / "daily" / "date=2026-07-31"
     assert (daily / "report.json").exists()
