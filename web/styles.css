@@ -616,6 +616,8 @@ body {
   stroke: rgba(0, 0, 0, .72);
   stroke-width: 2px;
 }
+.report-surface-scroll { width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+.report-surface-scroll svg { min-width: 800px; }
 .report-decision {
   margin: 8px 0 12px;
   padding: 13px 15px;

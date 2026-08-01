@@ -645,8 +645,28 @@ function renderReturnSurface(rows) {
     return;
   }
 
+  const baselineByHorizon = new Map();
+  for (let horizon = 1; horizon <= 20; horizon += 1) {
+    const cells = [...byCell.values()].filter(
+      (cell) => cell.horizon === horizon && cell.forward_mean != null,
+    );
+    const total = cells.reduce((sum, cell) => sum + cell.observations, 0);
+    baselineByHorizon.set(
+      horizon,
+      total
+        ? cells.reduce(
+            (sum, cell) => sum + Number(cell.forward_mean) * cell.observations,
+            0,
+          ) / total
+        : 0,
+    );
+  }
+  eligible.forEach((cell) => {
+    cell.baselineMean = baselineByHorizon.get(cell.horizon) || 0;
+    cell.conditionalEdge = Number(cell.forward_mean) - cell.baselineMean;
+  });
   const scale = Math.max(
-    quantile(eligible.map((cell) => Math.abs(Number(cell.forward_mean))), 0.9) || 0,
+    quantile(eligible.map((cell) => Math.abs(cell.conditionalEdge)), 0.9) || 0,
     0.005,
   );
   const left = 92;
@@ -661,15 +681,15 @@ function renderReturnSurface(rows) {
     const cells = eligible.filter((cell) => Number(cell.move_bucket) === bucket);
     if (!cells.length) return;
     sellByBucket.set(bucket, cells.reduce((best, cell) =>
-      best == null || cell.conservativeLow > best.conservativeLow ? cell : best,
+      best == null || Number(cell.forward_mean) > Number(best.forward_mean) ? cell : best,
     null));
     buyByBucket.set(bucket, cells.reduce((best, cell) =>
-      best == null || cell.conservativeHigh < best.conservativeHigh ? cell : best,
+      best == null || Number(cell.forward_mean) < Number(best.forward_mean) ? cell : best,
     null));
   });
 
   svg.append(
-    svgNode("text", { x: left, y: 22, class: "report-chart-label" }, "期待リターン"),
+    svgNode("text", { x: left, y: 22, class: "report-chart-label" }, "同期間の通常平均との差"),
     svgNode("rect", { x: left + 82, y: 11, width: 42, height: 13, fill: "rgba(239,68,68,.65)" }),
     svgNode("text", { x: left + 130, y: 22, class: "report-chart-label" }, "低い"),
     svgNode("rect", { x: left + 174, y: 11, width: 42, height: 13, fill: "rgba(34,197,94,.65)" }),
@@ -689,7 +709,7 @@ function renderReturnSurface(rows) {
       const x = left + index * cellWidth;
       const cell = byCell.get(`${bucket}:${horizon}`);
       const reliable = cell && cell.effective >= 10 && cell.forward_mean != null;
-      const value = reliable ? Number(cell.forward_mean) : 0;
+      const value = reliable ? cell.conditionalEdge : 0;
       const intensity = reliable ? Math.min(Math.abs(value) / scale, 1) : 0;
       const rect = svgNode("rect", {
         x: x + 1,
@@ -707,8 +727,10 @@ function renderReturnSurface(rows) {
       if (cell) {
         const range = `${percent(cell.move_min, true)}〜${percent(cell.move_max, true)}`;
         rect.append(svgNode("title", {}, reliable
-          ? `${range} / ${horizon}日後 / 平均${percent(cell.forward_mean, true)} / ` +
+          ? `${range} / ${horizon}日後 / 絶対期待値${percent(cell.forward_mean, true)} / ` +
+            `通常平均${percent(cell.baselineMean, true)} / 差${percent(cell.conditionalEdge, true)} / ` +
             `中央値${percent(cell.forward_median, true)} / 上昇率${percent(cell.forward_win_rate)} / ` +
+            `80%下限${percent(cell.conservativeLow, true)} / ` +
             `n=${cell.observations} / 重複補正後n≈${number(cell.effective, 1)}`
           : `${range} / ${horizon}日後 / 実効標本不足`,
         ));
@@ -760,9 +782,15 @@ function renderReturnSurface(rows) {
     class: "report-chart-label",
   }, "初日の1日リターン（同銘柄内10分位）"));
 
-  elements.returnSurfaceInterpretation.textContent =
-    "各列のSは期待リターンの80%片側下限が最大となる日、Bは期待価格変化の80%片側上限が最小となる日です。" +
-    "Bは予想底値の目安であり、その後の反発を保証しません。セルにカーソルを合わせると全数値を確認できます。";
+  const strongestBucket = buckets.at(-1);
+  const strongestSell = sellByBucket.get(strongestBucket);
+  const strongestBuy = buyByBucket.get(strongestBucket);
+  elements.returnSurfaceInterpretation.textContent = strongestSell && strongestBuy
+    ? `最大上昇帯では、絶対期待値最大のSは${strongestSell.horizon}日後` +
+      `（${percent(strongestSell.forward_mean, true)}）、期待値最小のBは` +
+      `${strongestBuy.horizon}日後（${percent(strongestBuy.forward_mean, true)}）です。` +
+      "色は絶対値ではなく通常平均との差なので、初日変動に固有の強弱を確認できます。"
+    : "セルにカーソルを合わせると絶対期待値、通常平均との差、信頼下限を確認できます。";
 }
 
 function renderHorizonChart(studies) {

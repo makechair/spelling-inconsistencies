@@ -71,12 +71,14 @@
         </article>
         <article class="report-return-surface">
           <h3>初日変動率 × 保有日数の期待リターン</h3>
-          <p class="report-chart-description">横軸は初日の変動率を同銘柄内の10分位に分けた範囲、縦軸はその後1〜20取引日です。色は基準日終値からの平均リターンを示します。</p>
-          <svg id="return-surface-chart" viewBox="0 0 900 520" role="img"
-               aria-label="初日変動率と保有日数ごとの期待リターンヒートマップ"></svg>
+          <p class="report-chart-description">横軸は初日の変動率を同銘柄内の10分位に分けた範囲、縦軸はその後1〜20取引日です。色は同じN日後の通常平均を上回ったか下回ったかを示します。</p>
+          <div class="report-surface-scroll">
+            <svg id="return-surface-chart" viewBox="0 0 900 520" role="img"
+                 aria-label="初日変動率と保有日数ごとの条件付き期待リターンヒートマップ"></svg>
+          </div>
           <div class="report-chart-guide">
             <strong>判断の読み方</strong>
-            <p>緑ほど期待リターンが高く、赤ほど低い領域です。Sはばらつきと期間重複を差し引いた売却候補、Bは同様に補正した期待安値の買い待ち候補です。実効標本10件未満は空欄にします。</p>
+            <p>緑は通常の同期間リターンより強く、赤は弱かった領域です。Sは絶対リターンの平均が最大となる売却候補、Bは平均が最小となる買い待ち候補です。実効標本10件未満は空欄にします。</p>
             <p id="return-surface-interpretation" class="report-chart-interpretation"></p>
           </div>
         </article>
