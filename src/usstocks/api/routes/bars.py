@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -31,6 +32,12 @@ def get_bars(
     end: str | None = Query(None, description="ISO-8601; defaults to now"),
     days: int | None = Query(None, ge=1, le=3650, description="Shorthand for start"),
     source: str | None = Query(None, description="Restrict to one provider"),
+    interval: Literal["1m", "5m", "15m", "30m", "1h", "1d"] = Query(
+        "1m", description="Chart aggregation interval"
+    ),
+    session: Literal["all", "regular"] = Query(
+        "all", description="Include extended hours or regular session only"
+    ),
     repository: Repository = Depends(get_repository),
     settings: Settings = Depends(get_settings_dep),
 ) -> BarsResponse:
@@ -54,14 +61,17 @@ def get_bars(
     repository.mark_viewed([symbol])
 
     limit = settings.max_bars_per_request
-    bars = repository.get_bars(
-        symbol,
-        start_dt,
-        end_dt,
-        limit=limit + 1,
-        sources=[source] if source else None,
-        newest_first=True,
-    )
+    query = repository.get_bars if interval == "1m" else repository.get_aggregated_bars
+    query_kwargs = {
+        "limit": limit + 1,
+        "sources": [source] if source else None,
+        "sessions": ["regular"] if session == "regular" else None,
+        "newest_first": True,
+    }
+    if interval == "1m":
+        bars = query(symbol, start_dt, end_dt, **query_kwargs)
+    else:
+        bars = query(symbol, start_dt, end_dt, interval=interval, **query_kwargs)
     truncated = len(bars) > limit
     if truncated:
         # The repository returns chronological order even though the SQL limit

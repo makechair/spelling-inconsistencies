@@ -738,6 +738,7 @@ def _report_payload(
     summary_rows: list[dict[str, object]],
     event_rows: list[dict[str, object]],
     context_rows: list[dict[str, object]],
+    return_surface_rows: list[dict[str, object]],
     previous: dict[str, Any] | None,
 ) -> dict[str, object]:
     counts = {
@@ -753,6 +754,9 @@ def _report_payload(
     ticker_inventory = metadata["ticker_inventory"]
     assert isinstance(ticker_inventory, list)
     symbol_focus = _symbol_focus(case_studies, ticker_inventory)
+    return_surfaces: dict[str, list[dict[str, object]]] = {}
+    for row in return_surface_rows:
+        return_surfaces.setdefault(str(row["symbol"]), []).append(row)
     return _jsonable(
         {
             "version": 2,
@@ -778,6 +782,7 @@ def _report_payload(
             "findings": _analysis_findings(metadata, case_studies),
             "focus_symbol": symbol_focus[0]["symbol"] if symbol_focus else None,
             "symbol_focus": symbol_focus,
+            "return_surfaces": return_surfaces,
             "case_studies": case_studies,
             # JSON is deliberately complete enough for the API and future
             # historical comparisons, so the web process never imports
@@ -1494,6 +1499,9 @@ def run(
         event_case_context = connection.execute(
             "SELECT * FROM event_case_context ORDER BY event_key"
         ).to_arrow_table()
+        return_surface = connection.execute(
+            "SELECT * FROM return_surface ORDER BY symbol, move_bucket, horizon"
+        ).to_arrow_table()
         metadata = _metadata(connection, settings.analysis_min_peers)
     except duckdb.Error as exc:
         raise CorpusError(f"event study query failed: {exc}") from exc
@@ -1507,12 +1515,14 @@ def run(
     summary_rows = event_summary.to_pylist()
     event_rows = event_returns.to_pylist()
     context_rows = event_case_context.to_pylist()
+    return_surface_rows = return_surface.to_pylist()
     report_payload = _report_payload(
         report_date,
         metadata,
         summary_rows,
         event_rows,
         context_rows,
+        return_surface_rows,
         previous_report,
     )
     _write_text(

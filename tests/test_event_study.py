@@ -305,6 +305,10 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert "stddev" in move_context["forward_path"][4]
     assert move_context["forward_path"][4]["q1"] is not None
     assert move_context["forward_path"][4]["q3"] is not None
+    surface = report["return_surfaces"]["NVDA"]
+    assert {row["horizon"] for row in surface} == set(range(1, 21))
+    assert {row["move_bucket"] for row in surface}
+    assert all("forward_mean" in row for row in surface)
     assert (output / "manifest.json").exists()
     daily = tmp_path / "corpus" / "analysis" / "daily" / "date=2026-07-31"
     assert (daily / "report.json").exists()

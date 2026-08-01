@@ -592,10 +592,10 @@ sequenceDiagram
     UI->>API: GET /api/symbols?watched_only=true
     API->>M: watchlist read
     API-->>UI: symbol list
-    UI->>API: GET /api/bars/{symbol}?days=365
-    API->>M: source優先で最新側からhistory read
-    API-->>UI: 最大20,000 bars（時系列順）
-    UI->>UI: 最新足を終点に1D / 7D / 1M / 1Yへ分配して4分割描画
+    UI->>API: 1D / 7D / 1M / 1Yを期間別intervalで並列取得
+    API->>M: source優先解決後、SQLite内で時間足へ集約
+    API-->>UI: 1分 / 5分 / 30分 / 日足（各約250〜400本）
+    UI->>UI: 最新足を終点に各暦日幅で4分割描画
     opt chart選択
         UI->>UI: 選択期間の暦日幅を保ったまま拡大
     end
@@ -640,7 +640,7 @@ APIは1ワーカーで動作する。SQLiteコネクションはスレッドロ�
 
 | File | 役割 |
 |---|---|
-| `web/app.js` | watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、30秒の差分取得（`refreshTail`）、SSE、再接続判定。最新足を右端に各暦日幅を計算し、履歴不足時は最古データを左端にする |
+| `web/app.js` | watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、30秒の差分取得（`refreshTail`）、SSE、再接続判定。期間を変えず、1分／5分／30分／日足へ集約して各ペインを約250〜400本に保つ |
 | `web/chart.js` | Lightweight Charts。軸フォーマット、legend、出来高、MA描画。非取引日でも期間幅が縮まらないよう不可視anchorで時間軸を固定。拡大／4分割復帰時も同じ期間幅を再適用 |
 | `web/timezone.js` | 表示タイムゾーンの単一の情報源。既定 `America/New_York`、localStorage保存 |
 | `web/viewstate.js` | `{days, extended, barSpacing, rightOffset, movingAverages}` を保存 |

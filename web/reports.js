@@ -18,6 +18,8 @@ const elements = {
   analogChart: document.querySelector("#analog-chart"),
   analogDecision: document.querySelector("#analog-decision"),
   analogInterpretation: document.querySelector("#analog-interpretation"),
+  returnSurfaceChart: document.querySelector("#return-surface-chart"),
+  returnSurfaceInterpretation: document.querySelector("#return-surface-interpretation"),
   peerSummary: document.querySelector("#peer-summary"),
   peerChart: document.querySelector("#peer-chart"),
   peerInterpretation: document.querySelector("#peer-interpretation"),
@@ -602,6 +604,167 @@ function renderAnalogChart(studies, requestedDate = null) {
     `これはニュース内容ではなく、値動きだけを条件にした統計です。`;
 }
 
+function renderReturnSurface(rows) {
+  const svg = elements.returnSurfaceChart;
+  svg.replaceChildren();
+  elements.returnSurfaceInterpretation.textContent = "算出可能な日足履歴がありません。";
+  if (!Array.isArray(rows) || !rows.length) return;
+
+  const buckets = [...new Set(rows.map((row) => Number(row.move_bucket)))].sort(
+    (left, right) => left - right,
+  );
+  const byCell = new Map();
+  rows.forEach((row) => {
+    const observations = Number(row.observations || 0);
+    const horizon = Number(row.horizon);
+    const stddev = Number(row.forward_stddev);
+    const effective = Math.max(1, observations / horizon);
+    const standardError = Number.isFinite(stddev) && observations > 1
+      ? stddev / Math.sqrt(effective)
+      : null;
+    byCell.set(`${row.move_bucket}:${horizon}`, {
+      ...row,
+      horizon,
+      observations,
+      effective,
+      conservativeLow: standardError == null
+        ? null
+        : Number(row.forward_mean) - 1.2816 * standardError,
+      conservativeHigh: standardError == null
+        ? null
+        : Number(row.forward_mean) + 1.2816 * standardError,
+    });
+  });
+
+  const eligible = [...byCell.values()].filter(
+    (cell) => cell.effective >= 10 && cell.forward_mean != null,
+  );
+  if (!eligible.length) {
+    elements.returnSurfaceInterpretation.textContent =
+      "期間重複を補正した実効標本が10件以上の領域はまだありません。";
+    return;
+  }
+
+  const scale = Math.max(
+    quantile(eligible.map((cell) => Math.abs(Number(cell.forward_mean))), 0.9) || 0,
+    0.005,
+  );
+  const left = 92;
+  const top = 52;
+  const plotWidth = 780;
+  const plotHeight = 360;
+  const cellWidth = plotWidth / buckets.length;
+  const cellHeight = plotHeight / 20;
+  const sellByBucket = new Map();
+  const buyByBucket = new Map();
+  buckets.forEach((bucket) => {
+    const cells = eligible.filter((cell) => Number(cell.move_bucket) === bucket);
+    if (!cells.length) return;
+    sellByBucket.set(bucket, cells.reduce((best, cell) =>
+      best == null || cell.conservativeLow > best.conservativeLow ? cell : best,
+    null));
+    buyByBucket.set(bucket, cells.reduce((best, cell) =>
+      best == null || cell.conservativeHigh < best.conservativeHigh ? cell : best,
+    null));
+  });
+
+  svg.append(
+    svgNode("text", { x: left, y: 22, class: "report-chart-label" }, "期待リターン"),
+    svgNode("rect", { x: left + 82, y: 11, width: 42, height: 13, fill: "rgba(239,68,68,.65)" }),
+    svgNode("text", { x: left + 130, y: 22, class: "report-chart-label" }, "低い"),
+    svgNode("rect", { x: left + 174, y: 11, width: 42, height: 13, fill: "rgba(34,197,94,.65)" }),
+    svgNode("text", { x: left + 222, y: 22, class: "report-chart-label" }, "高い"),
+    svgNode("text", { x: left + 285, y: 22, class: "report-chart-label" }, "S 売却候補 / B 買い待ち候補"),
+  );
+
+  for (let horizon = 1; horizon <= 20; horizon += 1) {
+    const y = top + (horizon - 1) * cellHeight;
+    svg.append(svgNode("text", {
+      x: left - 12,
+      y: y + cellHeight * 0.72,
+      "text-anchor": "end",
+      class: "report-chart-label",
+    }, `${horizon}日`));
+    buckets.forEach((bucket, index) => {
+      const x = left + index * cellWidth;
+      const cell = byCell.get(`${bucket}:${horizon}`);
+      const reliable = cell && cell.effective >= 10 && cell.forward_mean != null;
+      const value = reliable ? Number(cell.forward_mean) : 0;
+      const intensity = reliable ? Math.min(Math.abs(value) / scale, 1) : 0;
+      const rect = svgNode("rect", {
+        x: x + 1,
+        y: y + 1,
+        width: Math.max(cellWidth - 2, 1),
+        height: Math.max(cellHeight - 2, 1),
+        rx: 2,
+        fill: reliable
+          ? value >= 0
+            ? `rgba(34,197,94,${0.15 + intensity * 0.75})`
+            : `rgba(239,68,68,${0.15 + intensity * 0.75})`
+          : "rgba(148,163,184,.05)",
+        stroke: "rgba(148,163,184,.16)",
+      });
+      if (cell) {
+        const range = `${percent(cell.move_min, true)}〜${percent(cell.move_max, true)}`;
+        rect.append(svgNode("title", {}, reliable
+          ? `${range} / ${horizon}日後 / 平均${percent(cell.forward_mean, true)} / ` +
+            `中央値${percent(cell.forward_median, true)} / 上昇率${percent(cell.forward_win_rate)} / ` +
+            `n=${cell.observations} / 重複補正後n≈${number(cell.effective, 1)}`
+          : `${range} / ${horizon}日後 / 実効標本不足`,
+        ));
+      }
+      svg.append(rect);
+      if (!reliable) return;
+      const sell = sellByBucket.get(bucket)?.horizon === horizon;
+      const buy = buyByBucket.get(bucket)?.horizon === horizon;
+      if (sell || buy) {
+        const marker = sell && buy ? "S/B" : sell ? "S" : "B";
+        svg.append(svgNode("text", {
+          x: x + cellWidth / 2,
+          y: y + cellHeight * 0.72,
+          "text-anchor": "middle",
+          class: "report-surface-marker",
+        }, marker));
+      }
+    });
+  }
+
+  buckets.forEach((bucket, index) => {
+    const sample = rows.find((row) => Number(row.move_bucket) === bucket);
+    const x = left + (index + 0.5) * cellWidth;
+    svg.append(
+      svgNode("text", {
+        x,
+        y: top + plotHeight + 22,
+        "text-anchor": "middle",
+        class: "report-chart-label",
+      }, `平均${percent(sample?.move_mean, true)}`),
+      svgNode("text", {
+        x,
+        y: top + plotHeight + 40,
+        "text-anchor": "middle",
+        class: "report-chart-sample",
+      }, `${percent(sample?.move_min, true)}〜`),
+      svgNode("text", {
+        x,
+        y: top + plotHeight + 55,
+        "text-anchor": "middle",
+        class: "report-chart-sample",
+      }, percent(sample?.move_max, true)),
+    );
+  });
+  svg.append(svgNode("text", {
+    x: left + plotWidth / 2,
+    y: 505,
+    "text-anchor": "middle",
+    class: "report-chart-label",
+  }, "初日の1日リターン（同銘柄内10分位）"));
+
+  elements.returnSurfaceInterpretation.textContent =
+    "各列のSは期待リターンの80%片側下限が最大となる日、Bは期待価格変化の80%片側上限が最小となる日です。" +
+    "Bは予想底値の目安であり、その後の反発を保証しません。セルにカーソルを合わせると全数値を確認できます。";
+}
+
 function renderHorizonChart(studies) {
   const svg = elements.focusHorizonChart;
   svg.replaceChildren();
@@ -873,6 +1036,7 @@ function renderFocusSymbol(report, symbol) {
   renderHorizonChart(studies);
   renderTimelineChart(studies);
   renderAnalogChart(studies);
+  renderReturnSurface(report.return_surfaces?.[symbol] || []);
 }
 
 function renderTickerFocus(report) {

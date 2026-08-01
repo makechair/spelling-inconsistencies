@@ -118,6 +118,38 @@ def test_time_range_filtering_is_half_open(repo: Repository):
     ]
 
 
+def test_aggregated_bars_preserve_ohlcv_and_apply_limit_after_bucketing(
+    repo: Repository,
+):
+    for minute in range(30):
+        repo.upsert_bar(
+            make_bar(
+                minute=minute,
+                close=100.0 + minute,
+                volume=100 + minute,
+            )
+        )
+
+    bars = repo.get_aggregated_bars(
+        "AAPL",
+        BASE,
+        BASE + timedelta(minutes=30),
+        interval="15m",
+        limit=3,
+        newest_first=True,
+        sessions=["regular"],
+    )
+
+    assert len(bars) == 2
+    assert bars[0].timestamp == BASE
+    assert bars[0].open == 100.0
+    assert bars[0].close == 114.0
+    assert bars[0].high == 114.0
+    assert bars[0].low == 100.0
+    assert bars[0].volume == sum(100 + minute for minute in range(15))
+    assert bars[1].close == 129.0
+
+
 def test_last_bar_timestamp_is_per_source(repo: Repository):
     repo.upsert_bar(make_bar(minute=0, source="tiingo"))
     repo.upsert_bar(make_bar(minute=9, source="alpaca"))

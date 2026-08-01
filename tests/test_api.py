@@ -112,6 +112,28 @@ def test_truncated_bars_keep_the_newest_edge(settings: Settings):
     ]
 
 
+def test_bars_can_be_aggregated_for_wider_chart_periods(
+    client: TestClient, settings: Settings
+):
+    with Repository(settings.db_path) as repo:
+        seed_bars(repo, count=30)
+
+    payload = client.get(
+        "/api/bars/AAPL",
+        params={
+            "start": BASE.isoformat(),
+            "end": (BASE + timedelta(minutes=30)).isoformat(),
+            "interval": "15m",
+            "session": "regular",
+        },
+    ).json()
+
+    assert payload["count"] == 2
+    assert payload["bars"][0]["open"] == 100.0
+    assert payload["bars"][0]["close"] == 114.5
+    assert payload["bars"][1]["close"] == 129.5
+
+
 def test_bars_report_the_last_fetch_even_when_the_range_is_empty(
     client: TestClient, settings: Settings
 ):

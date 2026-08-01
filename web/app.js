@@ -18,10 +18,10 @@ import { formatTime, onChange, selected, setZone, zoneLabel } from './timezone.j
 import { save as saveView, view } from './viewstate.js';
 
 const PERIODS = [
-  { days: 1, label: '1D' },
-  { days: 7, label: '7D' },
-  { days: 30, label: '1M' },
-  { days: 365, label: '1Y' },
+  { days: 1, label: '1D', interval: '1m', intervalLabel: '1分足' },
+  { days: 7, label: '7D', interval: '5m', intervalLabel: '5分足' },
+  { days: 30, label: '1M', interval: '30m', intervalLabel: '30分足' },
+  { days: 365, label: '1Y', interval: '1d', intervalLabel: '日足' },
 ];
 const PERIOD_DAYS = new Set(PERIODS.map(({ days }) => days));
 const MAX_PERIOD_DAYS = PERIODS.at(-1).days;
@@ -35,7 +35,7 @@ const state = {
   days: PERIOD_DAYS.has(rememberedDays) ? rememberedDays : 1,
   chartMode: 'grid',
   extended: view().extended,
-  barsPayload: null,
+  barsPayloads: new Map(),
   periodNotes: new Map(),
   live: new Map(),      // ticker -> latest LiveOut
   names: new Map(),
@@ -154,7 +154,7 @@ async function loadWatchlist() {
     await select(state.symbols[0].symbol);
   } else if (!state.symbols.length) {
     state.selected = null;
-    state.barsPayload = null;
+    state.barsPayloads.clear();
     for (const chart of charts.values()) chart.clear();
   }
   connectStream();
@@ -292,7 +292,7 @@ async function addSymbol(entry) {
 
 async function select(symbol) {
   state.selected = symbol;
-  state.barsPayload = null;
+  state.barsPayloads.clear();
   renderWatchlist();
   el.quoteSymbol.textContent = symbol;
   el.quoteName.textContent = state.names.get(symbol) || '';
@@ -306,12 +306,19 @@ async function loadBars({ quiet = false } = {}) {
   if (!quiet) el.chartNote.textContent = '読み込み中…';
   const symbol = state.selected;
   try {
-    // One widest-range read feeds all four panes. Four overlapping requests
-    // would roughly double the browser payload while returning the same bars.
-    const payload = await api(`/api/bars/${symbol}?days=${MAX_PERIOD_DAYS}`);
+    const session = state.extended ? 'all' : 'regular';
+    // Aggregate before returning data. This keeps a 1Y chart to roughly 252
+    // daily rows instead of truncating a huge 1-minute response at 20,000.
+    const loaded = await Promise.all(PERIODS.map(async (period) => [
+      period.days,
+      await api(
+        `/api/bars/${symbol}?days=${period.days + 7}` +
+        `&interval=${period.interval}&session=${session}`,
+      ),
+    ]));
     if (state.selected !== symbol) return;
-    state.barsPayload = payload;
-    state.checkedAt.set(symbol, payload.checked_at || null);
+    state.barsPayloads = new Map(loaded);
+    state.checkedAt.set(symbol, state.barsPayloads.get(1)?.checked_at || null);
     renderLoadedBars();
     renderQuote();
   } catch (error) {
@@ -321,16 +328,14 @@ async function loadBars({ quiet = false } = {}) {
 }
 
 function renderLoadedBars() {
-  const payload = state.barsPayload;
-  if (!payload || !state.selected) return;
-  const visible = state.extended
-    ? payload.bars
-    : payload.bars.filter((bar) => bar.session === 'regular');
-  const latestTime = visible.at(-1)?.time ?? null;
-  const oldestTime = visible[0]?.time ?? null;
+  if (!state.barsPayloads.size || !state.selected) return;
 
   state.periodNotes.clear();
-  for (const { days, label } of PERIODS) {
+  for (const { days, label, intervalLabel } of PERIODS) {
+    const payload = state.barsPayloads.get(days);
+    const visible = payload?.bars || [];
+    const latestTime = visible.at(-1)?.time ?? null;
+    const oldestTime = visible[0]?.time ?? null;
     const periodSeconds = days * 86400;
     const desiredFrom = latestTime == null ? null : latestTime - periodSeconds;
     // Anchor every pane at the newest stored bar rather than wall-clock time.
@@ -354,7 +359,7 @@ function renderLoadedBars() {
     // IEX and SIP volume are not comparable, so a mixed range must not be
     // blended silently (spec 5.2).
     const sources = [...new Set(bars.map((bar) => bar.source))];
-    const notes = [`${bars.length.toLocaleString()} 本`];
+    const notes = [`${intervalLabel} ${bars.length.toLocaleString()}本`];
     if (sources.length > 1) notes.push(`提供元が混在: ${sources.join(' / ')}`);
     const clipped =
       payload.truncated && desiredFrom != null && oldestTime > desiredFrom;
@@ -362,12 +367,13 @@ function renderLoadedBars() {
     if (!bars.length) notes.push('データなし');
     state.periodNotes.set(days, notes.join(' · '));
     chartSummaries.get(days).textContent =
-      `${bars.length.toLocaleString()}本${clipped ? ' · 上限' : ''}`;
+      `${intervalLabel} · ${bars.length.toLocaleString()}本${clipped ? ' · 上限' : ''}`;
     chartPanels.get(days).dataset.periodLabel = label;
   }
 
-  if (visible.length) {
-    state.lastBar.set(state.selected, visible[visible.length - 1]);
+  const oneDayBars = state.barsPayloads.get(1)?.bars || [];
+  if (oneDayBars.length) {
+    state.lastBar.set(state.selected, oneDayBars[oneDayBars.length - 1]);
   } else {
     state.lastBar.delete(state.selected);
   }
@@ -376,7 +382,7 @@ function renderLoadedBars() {
 
 function renderChartNote() {
   if (state.chartMode === 'grid') {
-    el.chartNote.textContent = '1D・7D・1M・1Yを表示 · チャートを選択すると拡大します';
+    el.chartNote.textContent = '期間別に約250〜400本へ集約 · 選択すると拡大します';
     return;
   }
   el.chartNote.textContent = state.periodNotes.get(state.days) || '';
@@ -428,7 +434,7 @@ function setChartMode(mode, days = state.days) {
 const TAIL_REFRESH_MS = 30_000;
 
 function upsertCachedBar(bar) {
-  const cached = state.barsPayload?.bars;
+  const cached = state.barsPayloads.get(1)?.bars;
   if (!cached || !bar) return;
   const last = cached[cached.length - 1];
   if (last?.time === bar.time) {
@@ -441,10 +447,10 @@ function upsertCachedBar(bar) {
 function updateChartsWithBar(bar) {
   upsertCachedBar(bar);
   if (!bar || (!state.extended && bar.session !== 'regular')) return;
-  const now = Math.floor(Date.now() / 1000);
-  for (const { days } of PERIODS) {
-    if (bar.time >= now - days * 86400) charts.get(days).updateBar(bar);
-  }
+  // The other panes are server-aggregated 15-minute/daily bars. Adding a raw
+  // minute directly would corrupt their scale, so the live stream updates the
+  // 1D pane only; symbol/period reloads refresh every aggregate.
+  charts.get(1).updateBar(bar);
 }
 
 async function refreshTail() {
@@ -517,8 +523,7 @@ el.gridViewButton.addEventListener('click', () => setChartMode('grid'));
 el.extendedToggle.addEventListener('change', () => {
   state.extended = el.extendedToggle.checked;
   saveView({ extended: state.extended });
-  renderLoadedBars();
-  renderQuote();
+  loadBars();
 });
 
 // The remembered period is used on the first expansion, while the initial

@@ -418,6 +418,52 @@ FROM event_similar_move_counts AS counts
 INNER JOIN event_case_context_long AS context USING (event_key, move_direction)
 GROUP BY counts.event_key, counts.move_direction, counts.similar_move_count;
 
+-- A two-dimensional response surface for planning after a price move.  Decile
+-- buckets are used instead of arbitrary round percentage bands so every
+-- symbol has comparable sample support even when its volatility is different.
+CREATE OR REPLACE TEMP TABLE daily_move_buckets AS
+WITH moves AS (
+    SELECT
+        reaction.symbol,
+        reaction.trading_index,
+        reaction.date,
+        reaction.adj_close,
+        reaction.adj_close / base.adj_close - 1 AS move_return
+    FROM daily_indexed AS reaction
+    INNER JOIN daily_indexed AS base
+        ON base.symbol = reaction.symbol
+       AND base.trading_index = reaction.trading_index - 1
+    INNER JOIN (SELECT DISTINCT symbol FROM events_timed_input) AS relevant
+        ON relevant.symbol = reaction.symbol
+    WHERE base.adj_close <> 0
+)
+SELECT
+    *,
+    ntile(10) OVER (PARTITION BY symbol ORDER BY move_return) AS move_bucket
+FROM moves;
+
+CREATE OR REPLACE TEMP TABLE return_surface AS
+SELECT
+    move.symbol,
+    move.move_bucket,
+    min(move.move_return) AS move_min,
+    max(move.move_return) AS move_max,
+    avg(move.move_return) AS move_mean,
+    horizon.horizon,
+    count(*) AS observations,
+    avg(endpoint.adj_close / move.adj_close - 1) AS forward_mean,
+    median(endpoint.adj_close / move.adj_close - 1) AS forward_median,
+    stddev_samp(endpoint.adj_close / move.adj_close - 1) AS forward_stddev,
+    avg(CAST(endpoint.adj_close / move.adj_close - 1 > 0 AS INTEGER))
+        AS forward_win_rate
+FROM daily_move_buckets AS move
+CROSS JOIN range(1, 21) AS horizon(horizon)
+INNER JOIN daily_indexed AS endpoint
+    ON endpoint.symbol = move.symbol
+   AND endpoint.trading_index = move.trading_index + horizon.horizon
+WHERE move.adj_close <> 0
+GROUP BY move.symbol, move.move_bucket, horizon.horizon;
+
 CREATE OR REPLACE TEMP TABLE event_summary AS
 WITH samples AS (
     SELECT 'all' AS sample, *

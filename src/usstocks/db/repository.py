@@ -142,6 +142,7 @@ class Repository:
         *,
         limit: int | None = None,
         sources: Sequence[str] | None = None,
+        sessions: Sequence[str] | None = None,
         newest_first: bool = False,
     ) -> list[Bar]:
         """One bar per minute, resolved by source priority (spec-review B-1).
@@ -162,6 +163,11 @@ class Repository:
             clauses.append(f"b.source IN ({placeholders})")
             for index, source in enumerate(sources):
                 params[f"src{index}"] = source
+        if sessions:
+            placeholders = ", ".join(f":session{i}" for i in range(len(sessions)))
+            clauses.append(f"b.session IN ({placeholders})")
+            for index, session in enumerate(sessions):
+                params[f"session{index}"] = session
 
         # Rank inside each minute, keep rank 1. A window function is cheaper
         # here than post-filtering in Python for multi-thousand-bar ranges.
@@ -175,6 +181,105 @@ class Repository:
             WHERE {" AND ".join(clauses)}
         )
         SELECT * FROM ranked WHERE rank = 1
+        ORDER BY timestamp_utc {"DESC" if newest_first else "ASC"}
+        """
+        if limit is not None:
+            sql += " LIMIT :limit"
+            params["limit"] = int(limit)
+        bars = [_row_to_bar(row) for row in self.connection.execute(sql, params)]
+        return list(reversed(bars)) if newest_first else bars
+
+    def get_aggregated_bars(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        *,
+        interval: str,
+        limit: int | None = None,
+        sources: Sequence[str] | None = None,
+        sessions: Sequence[str] | None = None,
+        newest_first: bool = False,
+    ) -> list[Bar]:
+        """Aggregate resolved minute bars before applying the response limit.
+
+        Doing this in SQLite is important for 1Y charts: returning tens of
+        thousands of minute rows only to collapse them in the browser wastes
+        both Lightsail memory and network bandwidth.
+        """
+        interval_seconds = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600}
+        if interval not in {*interval_seconds, "1d"}:
+            raise ValueError(f"unsupported aggregate interval: {interval}")
+        clauses = [
+            "b.symbol = :symbol",
+            "b.timestamp_utc >= :start",
+            "b.timestamp_utc < :end",
+        ]
+        params: dict[str, object] = {
+            "symbol": symbol.upper(),
+            "start": start.astimezone(UTC).isoformat(),
+            "end": end.astimezone(UTC).isoformat(),
+        }
+        if sources:
+            placeholders = ", ".join(f":src{i}" for i in range(len(sources)))
+            clauses.append(f"b.source IN ({placeholders})")
+            for index, source in enumerate(sources):
+                params[f"src{index}"] = source
+        if sessions:
+            placeholders = ", ".join(f":session{i}" for i in range(len(sessions)))
+            clauses.append(f"b.session IN ({placeholders})")
+            for index, session in enumerate(sessions):
+                params[f"session{index}"] = session
+
+        bucket = (
+            "CAST(CAST(strftime('%s', timestamp_utc) AS INTEGER) / "
+            f"{interval_seconds[interval]} AS INTEGER)"
+            if interval != "1d"
+            # -5h keeps US pre/regular/post-market prints on their market date.
+            else "date(timestamp_utc, '-5 hours')"
+        )
+        sql = f"""
+        WITH ranked AS (
+            SELECT b.*, ROW_NUMBER() OVER (
+                PARTITION BY b.timestamp_utc
+                ORDER BY {self._priority_case()} ASC, b.is_final DESC, b.received_at DESC
+            ) AS source_rank
+            FROM bars_1m AS b
+            WHERE {" AND ".join(clauses)}
+        ), resolved AS (
+            SELECT * FROM ranked WHERE source_rank = 1
+        ), bucketed AS (
+            SELECT resolved.*, {bucket} AS time_bucket
+            FROM resolved
+        ), sequenced AS (
+            SELECT bucketed.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY symbol, time_bucket ORDER BY timestamp_utc ASC
+                ) AS first_rank,
+                ROW_NUMBER() OVER (
+                    PARTITION BY symbol, time_bucket ORDER BY timestamp_utc DESC
+                ) AS last_rank
+            FROM bucketed
+        )
+        SELECT
+            symbol,
+            MIN(timestamp_utc) AS timestamp_utc,
+            CASE WHEN COUNT(DISTINCT session) = 1 THEN MIN(session) ELSE 'regular' END AS session,
+            MAX(CASE WHEN first_rank = 1 THEN open END) AS open,
+            MAX(high) AS high,
+            MIN(low) AS low,
+            MAX(CASE WHEN last_rank = 1 THEN close END) AS close,
+            SUM(volume) AS volume,
+            CASE WHEN SUM(volume) > 0
+                THEN SUM(COALESCE(vwap, close) * volume) / SUM(volume)
+                ELSE AVG(COALESCE(vwap, close))
+            END AS vwap,
+            SUM(trade_count) AS trade_count,
+            CASE WHEN COUNT(DISTINCT source) = 1 THEN MIN(source) ELSE 'mixed' END AS source,
+            MIN(is_final) AS is_final,
+            MAX(received_at) AS received_at
+        FROM sequenced
+        GROUP BY symbol, time_bucket
         ORDER BY timestamp_utc {"DESC" if newest_first else "ASC"}
         """
         if limit is not None:

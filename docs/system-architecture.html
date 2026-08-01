@@ -1162,8 +1162,8 @@
       <section id="api">
         <h2>8. API／SSE／ブラウザ</h2>
         <p class="section-intro">
-          初期画面はwatchlistと最新側の1年historyをRESTで1回取得し、同じ応答から
-          1D・7D・1M・1Yの4画面を描画する。その後は
+          初期画面はwatchlistと1D・7D・1M・1Yを期間別intervalで並列取得し、
+          SQLite側で1分・5分・30分・日足へ集約して4画面を描画する。その後は
           <strong>30秒ごとの差分取得</strong>と、EventSourceによるsnapshot／status受信を
           並行して回す。SSEは最大1時間で意図的にcycleし、ブラウザが自動再接続する。
         </p>
@@ -1172,8 +1172,8 @@
             <h3>初期表示</h3>
             <ol>
               <li><code>/api/symbols?watched_only=true</code></li>
-              <li><code>/api/bars/{symbol}?days=365</code>を<strong>1回だけ</strong>取得</li>
-              <li>最新側の最大20,000 barsを、最新足を右端に1D・7D・1M・1Yへ分配して4分割描画</li>
+              <li><code>/api/bars/{symbol}</code>を1D・7D・1M・1Yの期間別intervalで並列取得</li>
+              <li>1分・5分・30分・日足へDB内集約し、各ペイン約250〜400本で4分割描画</li>
               <li>非取引日を含む暦日幅を不可視anchorで固定。履歴不足時だけ最古データを左端にする</li>
               <li>チャート選択時は同じ期間幅のまま単一画面へ拡大</li>
               <li>「4分割」で高さ固定の2×2 overviewへ戻す</li>
@@ -1207,7 +1207,7 @@
           <table>
             <thead><tr><th>File</th><th>役割</th></tr></thead>
             <tbody>
-              <tr><td><code>web/app.js</code></td><td>watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、差分取得、SSE、再接続判定。最新足を右端に各暦日幅を計算し、履歴不足時は最古データを左端にする</td></tr>
+              <tr><td><code>web/app.js</code></td><td>watchlist、検索、1D／7D／1M／1Yの4分割、拡大切替、差分取得、SSE、再接続判定。期間を変えず、1分／5分／30分／日足へ集約して各ペインを約250〜400本に保つ</td></tr>
               <tr><td><code>web/chart.js</code></td><td>Lightweight Charts。軸フォーマット、legend、出来高、MA描画。不可視anchorで時間軸を固定し、拡大／4分割復帰時も期間幅を再適用。provider帰属表示は無効化</td></tr>
               <tr><td><code>web/timezone.js</code></td><td>表示タイムゾーンの単一の情報源。既定<code>America/New_York</code>、localStorage保存。軸とパネルが別々のzoneになる問題への対応</td></tr>
               <tr><td><code>web/viewstate.js</code></td><td><code>{days, extended, barSpacing, rightOffset, movingAverages}</code>を保存。読み込みや銘柄切替でzoomを失わない</td></tr>
@@ -1220,7 +1220,7 @@
           <table>
             <thead><tr><th>Endpoint</th><th>役割</th><th>Store</th></tr></thead>
             <tbody>
-              <tr><td><code>GET /api/bars/{symbol}</code></td><td>source優先解決済み1分足。<strong>副作用として<code>last_viewed_at</code>を打刻</strong></td><td>market.db</td></tr>
+              <tr><td><code>GET /api/bars/{symbol}</code></td><td>source優先解決済み足。<code>interval=1m/5m/15m/30m/1h/1d</code>をDB内集約。<strong>副作用として<code>last_viewed_at</code>を打刻</strong></td><td>market.db</td></tr>
               <tr><td><code>GET /api/live</code></td><td>SSE snapshot / update / status / heartbeat</td><td>live.db</td></tr>
               <tr><td><code>GET /api/live/snapshot</code></td><td>SSEを張らない一括読み出し</td><td>live.db</td></tr>
               <tr><td><code>GET /api/symbols</code></td><td>watchlist</td><td>market.db</td></tr>
@@ -1589,6 +1589,8 @@
             上昇率・peer差平均を表示し、URL queryから別銘柄も選べる。
             同規模変動後1〜20取引日の上昇率を連続曲線で先に見せ、平均期待リターン最大の
             期間と、期間重複・ばらつきを補正した80%片側下限最大の保守候補を併記する。
+            さらに初日変動率10分位×1〜20取引日の期待リターン面をヒートマップにし、
+            売却候補Sと期待安値の買い待ち候補Bを重ねる。
             続いて選択した反応日の
             銘柄return・同業平均・差分、全ニュース反応日の期間別分布、反応日の
             1日return時系列を続ける。全数値表は検算用に残し、記事別の長い明細は
