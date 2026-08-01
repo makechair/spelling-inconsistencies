@@ -17,6 +17,9 @@ const elements = {
   analogSummary: document.querySelector("#analog-summary"),
   analogChart: document.querySelector("#analog-chart"),
   analogInterpretation: document.querySelector("#analog-interpretation"),
+  peerSummary: document.querySelector("#peer-summary"),
+  peerChart: document.querySelector("#peer-chart"),
+  peerInterpretation: document.querySelector("#peer-interpretation"),
   caseStudyBody: document.querySelector("#case-study-body"),
   caseStudyWrap: document.querySelector("#case-study-table-wrap"),
   caseStudyEmpty: document.querySelector("#case-study-empty"),
@@ -270,6 +273,113 @@ function drawChartGrid(svg, geometry) {
   }));
 }
 
+function renderPeerChart(study) {
+  const svg = elements.peerChart;
+  svg.replaceChildren();
+  elements.peerSummary.textContent = "";
+  elements.peerInterpretation.textContent = "同業比較に必要な日足がありません。";
+  if (!study) return;
+
+  const points = HORIZONS.map((horizon) => ({
+    horizon,
+    subject: study[`raw_return_${horizon}d`],
+    peer: study[`exploratory_benchmark_return_${horizon}d`],
+    relative: study[`exploratory_relative_return_${horizon}d`],
+    peerCount: Number(study[`peer_count_${horizon}d`] || 0),
+  })).filter((point) => point.subject != null && point.peer != null);
+  if (!points.length) return;
+
+  const peerCount = Math.max(...points.map((point) => point.peerCount));
+  elements.peerSummary.textContent =
+    `${study.symbol}の${study.reaction_date}を基準に、前取引日終値からの累計リターンを` +
+    `同subsectorの他${peerCount}社平均と比較しています。`;
+  const values = points.flatMap((point) => [Number(point.subject), Number(point.peer)]);
+  const geometry = chartGeometry(values);
+  drawChartGrid(svg, geometry);
+  const zeroY = geometry.y(0);
+  const slot = geometry.width / HORIZONS.length;
+  const barWidth = Math.min(24, slot * 0.23);
+  const x = (horizon) => {
+    const index = HORIZONS.indexOf(horizon);
+    return geometry.left + slot * (index + 0.5);
+  };
+
+  points.forEach((point) => {
+    const pointX = x(point.horizon);
+    [
+      { value: Number(point.subject), offset: -barWidth * 0.65, className: "report-chart-subject", label: study.symbol },
+      { value: Number(point.peer), offset: barWidth * 0.65, className: "report-chart-peer-bar", label: "同業平均" },
+    ].forEach((barSpec) => {
+      const valueY = geometry.y(barSpec.value);
+      const bar = svgNode("rect", {
+        x: pointX + barSpec.offset - barWidth / 2,
+        y: Math.min(zeroY, valueY),
+        width: barWidth,
+        height: Math.max(Math.abs(zeroY - valueY), 1),
+        rx: 3,
+        class: barSpec.className,
+      });
+      bar.append(svgNode("title", {},
+        `${horizonLabel(point.horizon)} ${barSpec.label} ${percent(barSpec.value, true)}`,
+      ));
+      svg.append(
+        bar,
+        svgNode("text", {
+          x: pointX + barSpec.offset,
+          y: valueY + (barSpec.value >= 0 ? -7 : 15),
+          "text-anchor": "middle",
+          class: "report-chart-bar-value",
+        }, percent(barSpec.value, true)),
+      );
+    });
+  });
+
+  HORIZONS.forEach((horizon) => {
+    const point = points.find((item) => item.horizon === horizon);
+    svg.append(
+      svgNode("text", {
+        x: x(horizon),
+        y: geometry.top + geometry.height + 23,
+        "text-anchor": "middle",
+        class: "report-chart-label",
+      }, horizon === 0 ? "反応日" : `+${horizon}日`),
+      svgNode("text", {
+        x: x(horizon),
+        y: geometry.top + geometry.height + 42,
+        "text-anchor": "middle",
+        class: "report-chart-relative",
+      }, point?.relative == null ? "—" : `個別差 ${percent(point.relative, true)}`),
+    );
+  });
+  svg.append(
+    svgNode("rect", { x: geometry.left, y: 10, width: 13, height: 13, rx: 2, class: "report-chart-subject" }),
+    svgNode("text", { x: geometry.left + 19, y: 21, class: "report-chart-label" }, study.symbol),
+    svgNode("rect", { x: geometry.left + 95, y: 10, width: 13, height: 13, rx: 2, class: "report-chart-peer-bar" }),
+    svgNode("text", { x: geometry.left + 114, y: 21, class: "report-chart-label" }, `同業${peerCount}社平均`),
+  );
+
+  const primary = points.find((point) => point.horizon === 5) || points.at(-1);
+  const subject = Number(primary.subject);
+  const peer = Number(primary.peer);
+  const relative = primary.relative == null
+    ? subject - peer
+    : Number(primary.relative);
+  let reading;
+  if (Math.sign(subject) !== Math.sign(peer) && subject !== 0 && peer !== 0) {
+    reading = "銘柄と同業が逆方向で、セクター共通要因だけでは説明しにくい動きです。";
+  } else if (Math.abs(relative) <= Math.max(Math.abs(subject) * 0.35, 0.01)) {
+    reading = "銘柄と同業が同方向かつ差が比較的小さく、セクター共通要因の寄与が大きい動きです。";
+  } else {
+    reading = `同業と方向は共通しますが、${study.symbol}が${percent(relative, true)}乖離し、個別要因の候補が残ります。`;
+  }
+  const formal = primary.peerCount >= 3
+    ? "正式なsubsector差として扱える最低3社を満たします。"
+    : `比較対象は${primary.peerCount}社のため探索的な比較です。`;
+  elements.peerInterpretation.textContent =
+    `今回：${horizonLabel(primary.horizon)}で${study.symbol}${percent(subject, true)}、` +
+    `同業平均${percent(peer, true)}、差${percent(relative, true)}。${reading}${formal}`;
+}
+
 function renderAnalogChart(studies, requestedDate = null) {
   const byDate = new Map();
   studies.forEach((study) => {
@@ -288,6 +398,7 @@ function renderAnalogChart(studies, requestedDate = null) {
   elements.analogChart.replaceChildren();
   elements.analogSummary.textContent = "";
   elements.analogInterpretation.textContent = "同規模変動の過去統計がありません。";
+  renderPeerChart(null);
   elements.analogEvent.disabled = !candidates.length;
   if (!candidates.length) return;
 
@@ -305,6 +416,7 @@ function renderAnalogChart(studies, requestedDate = null) {
   const selected = candidates.find((study) => study.reaction_date === requestedDate) ||
     adequate || candidates[0];
   elements.analogEvent.value = selected.reaction_date;
+  renderPeerChart(selected);
 
   const context = selected.historical_move_context;
   const count = Number(context.similar_move_count || 0);

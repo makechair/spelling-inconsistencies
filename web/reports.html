@@ -64,13 +64,25 @@
                aria-label="同規模変動後の1日、5日、20日上昇率"></svg>
           <div class="report-chart-guide">
             <strong>判断の読み方</strong>
-            <p>棒が50%より上なら過去は上昇優勢、下なら下落優勢です。平均・中央値が同じ方向か、過去事例が20件以上あるかも併せて確認します。</p>
+            <p>棒が50%より上なら各期日の終値は基準日終値より上になった例が多く、下なら少なかったことを示します。途中で上げ下げした経路は表しません。平均・中央値と過去事例数も併せて確認します。</p>
             <p id="analog-interpretation" class="report-chart-interpretation"></p>
           </div>
         </article>
         <article>
+          <h3>個別銘柄と同業要因の分解</h3>
+          <p class="report-chart-description">選択した反応日について、銘柄自身の累計リターンと同subsector銘柄の平均を並べ、差分を個別要因の候補として表示します。</p>
+          <p id="peer-summary" class="report-analog-summary"></p>
+          <svg id="peer-chart" viewBox="0 0 720 320" role="img"
+               aria-label="選択銘柄と同業平均の期間別累計リターン比較"></svg>
+          <div class="report-chart-guide">
+            <strong>判断の読み方</strong>
+            <p>銘柄と同業平均が同方向・同程度ならセクター要因が強く、差分が大きければ個別要因の可能性が高まります。差分は因果関係の証明ではありません。</p>
+            <p id="peer-interpretation" class="report-chart-interpretation"></p>
+          </div>
+        </article>
+        <article>
           <h3>期間別のリターン分布</h3>
-          <p class="report-chart-description">ニュース反応日から各期間までの累計リターンについて、典型値・ばらつき・再現性を比較します。</p>
+          <p class="report-chart-description">選択レポート時点までに接続した、この銘柄の全ニュース反応日を母集団として、期間別の典型値・ばらつき・再現性を比較します。上の基準日選択には連動しません。</p>
           <svg id="focus-horizon-chart" viewBox="0 0 720 300" role="img"
                aria-label="期間別リターンの中央値、中央50パーセント範囲、観測全範囲"></svg>
           <div class="report-chart-guide">
