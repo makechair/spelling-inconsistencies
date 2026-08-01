@@ -736,6 +736,13 @@ FROM aggregated;
 CREATE OR REPLACE TEMP TABLE return_trade_plan AS
 SELECT
     *,
+    row_number() OVER (
+        PARTITION BY symbol, move_bucket
+        ORDER BY
+            conservative_return DESC NULLS LAST,
+            expected_return_after_cost DESC,
+            holding_days ASC
+    ) AS plan_rank,
     sell_day = 20 AS sell_at_window_boundary,
     CASE
         WHEN effective_observations < 10 THEN 'insufficient'
@@ -860,6 +867,13 @@ WITH weighted AS (
 )
 SELECT
     *,
+    row_number() OVER (
+        PARTITION BY symbol, move_bucket
+        ORDER BY
+            conservative_return DESC NULLS LAST,
+            expected_return_after_cost DESC,
+            holding_days ASC
+    ) AS plan_rank,
     sell_day = 20 AS sell_at_window_boundary,
     'normal_approximation' AS downside_method,
     CASE
@@ -869,13 +883,7 @@ SELECT
     END AS evidence_level
 FROM candidates
 WHERE effective_observations >= 10
-QUALIFY row_number() OVER (
-    PARTITION BY symbol, move_bucket
-    ORDER BY
-        conservative_return DESC NULLS LAST,
-        expected_return_after_cost DESC,
-        holding_days ASC
-) = 1;
+QUALIFY plan_rank <= 3;
 
 -- Out-of-sample validation for a representative subset of the response
 -- surface.  Each fold learns its move thresholds and B/S pair from data that

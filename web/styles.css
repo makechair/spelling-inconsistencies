@@ -654,6 +654,9 @@ body {
 .report-decision strong { display: block; margin-bottom: 5px; font-size: 15px; }
 .report-decision p { margin: 3px 0; color: var(--text); font-size: 13px; line-height: 1.55; }
 .report-decision .report-decision-caution { color: var(--muted); font-size: 12px; }
+.report-plan-ranking { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.report-plan-ranking strong { font-size: 13px; }
+.report-plan-ranking p { font-variant-numeric: tabular-nums; }
 
 .report-validation {
   margin: 20px 0;

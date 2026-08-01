@@ -873,9 +873,18 @@ function renderReturnSurface(rows, tradePlans) {
   const plotHeight = 360;
   const cellWidth = plotWidth / buckets.length;
   const cellHeight = plotHeight / 20;
-  const planByBucket = new Map((tradePlans || []).map(
-    (plan) => [Number(plan.move_bucket), plan],
+  const plansByBucket = new Map();
+  (tradePlans || []).forEach((plan) => {
+    const bucket = Number(plan.move_bucket);
+    if (!plansByBucket.has(bucket)) plansByBucket.set(bucket, []);
+    plansByBucket.get(bucket).push(plan);
+  });
+  plansByBucket.forEach((plans) => plans.sort(
+    (left, right) => Number(left.plan_rank || 1) - Number(right.plan_rank || 1),
   ));
+  const planByBucket = new Map(
+    [...plansByBucket.entries()].map(([bucket, plans]) => [bucket, plans[0]]),
+  );
 
   svg.append(
     svgNode("text", { x: left, y: 22, class: "report-chart-label" }, "同期間の通常平均との差"),
@@ -1091,11 +1100,26 @@ function renderReturnSurface(rows, tradePlans) {
       `80%信頼下限 ${percent(plan.conservative_return, true)} / ` +
       `実効標本 ${number(plan.effective_observations, 1)} / ` +
       `ペア内判定 ${evidenceLabels[plan.evidence_level] || "—"}`;
+    const ranking = document.createElement("div");
+    ranking.className = "report-plan-ranking";
+    const rankingTitle = document.createElement("strong");
+    rankingTitle.textContent = "リスク補正後の上位3候補";
+    ranking.append(rankingTitle);
+    (plansByBucket.get(bucket) || [plan]).slice(0, 3).forEach((candidate, index) => {
+      const candidateLine = document.createElement("p");
+      candidateLine.textContent =
+        `#${candidate.plan_rank || index + 1}  +${candidate.buy_day}日買い → ` +
+        `+${candidate.sell_day}日売り：期待${percent(candidate.expected_return_after_cost, true)} / ` +
+        `勝率${percent(candidate.win_rate)} / 下振れ10%点` +
+        `${percent(candidate.downside_p10_after_cost, true)} / 80%下限` +
+        `${percent(candidate.conservative_return, true)}`;
+      ranking.append(candidateLine);
+    });
     const caution = document.createElement("p");
     caution.className = "report-decision-caution";
     caution.textContent =
       "多数のB→S候補から最良値を選んだ探索結果です。隣接帯の安定性と、下段の未使用期間における検証実績を確認してから判断します。";
-    elements.returnSurfaceDecision.append(heading, timing, expected, evidence, caution);
+    elements.returnSurfaceDecision.append(heading, timing, expected, evidence, ranking, caution);
     elements.returnSurfaceInterpretation.textContent = plan.sell_at_window_boundary
       ? "Sが20日後にあるためピークは未確認です。20日後を機械的な売却日とはせず、観測窓を延ばして再検証します。"
       : `選択帯は${regime.label}です。折れ線の青と破線の間隔、BからSまでの経路、下振れ10%点を順に確認します。`;
