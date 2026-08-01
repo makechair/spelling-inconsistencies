@@ -608,6 +608,15 @@ body {
 .report-chart-analog-line { fill: none; stroke: var(--accent); stroke-width: 3; }
 .report-chart-analog-positive { fill: #22c55e; stroke: var(--bg); stroke-width: 2; }
 .report-chart-analog-negative { fill: #ef4444; stroke: var(--bg); stroke-width: 2; }
+.report-decision {
+  margin: 8px 0 12px;
+  padding: 13px 15px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.report-decision strong { display: block; margin-bottom: 5px; font-size: 15px; }
+.report-decision p { margin: 3px 0; color: var(--text); font-size: 13px; line-height: 1.55; }
 .report-chart-subject { fill: var(--accent); }
 .report-chart-peer-bar { fill: #94a3b8; }
 .report-chart-bar-value { fill: var(--text); font-size: 10px; font-weight: 700; }

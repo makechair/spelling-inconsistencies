@@ -91,7 +91,13 @@ export class PriceChart {
     // them fitContent() collapses (for example) a 7D pane to the timestamps on
     // which trades happened, so its axis can appear to cover only five days.
     this.rangeAnchors = this.chart.addLineSeries({
-      visible: false,
+      // Keep the series itself active so its whitespace points participate in
+      // fitContent(). `visible: false` also removes the series from time-scale
+      // fitting in Lightweight Charts, which made 7D/1M/1Y collapse to the
+      // same range when no trade existed exactly on a calendar boundary.
+      visible: true,
+      lineVisible: false,
+      crosshairMarkerVisible: false,
       priceLineVisible: false,
       lastValueVisible: false,
     });
@@ -176,7 +182,10 @@ export class PriceChart {
     const { from, to } = this.periodWindow;
     this.rangeAnchors.setData(from < to ? [{ time: from }, { time: to }] : [{ time: to }]);
     if (from < to) {
-      this.chart.timeScale().setVisibleRange({ from, to });
+      // Each pane owns a different pair of calendar anchors. Fitting those
+      // anchors is more reliable than setVisibleRange(), which clamps to the
+      // nearest plotted candle and can erase weekend/holiday portions.
+      this.chart.timeScale().fitContent();
     } else {
       this.chart.timeScale().fitContent();
     }

@@ -370,6 +370,9 @@ SELECT
     count(*) AS forward_observations,
     avg(endpoint.adj_close / move.adj_close - 1) AS forward_mean,
     median(endpoint.adj_close / move.adj_close - 1) AS forward_median,
+    stddev_samp(endpoint.adj_close / move.adj_close - 1) AS forward_stddev,
+    quantile_cont(endpoint.adj_close / move.adj_close - 1, 0.25) AS forward_q1,
+    quantile_cont(endpoint.adj_close / move.adj_close - 1, 0.75) AS forward_q3,
     avg(CAST(endpoint.adj_close / move.adj_close - 1 > 0 AS INTEGER))
         AS forward_win_rate
 FROM event_similar_moves AS move
@@ -404,6 +407,9 @@ SELECT
             observations := context.forward_observations,
             mean := context.forward_mean,
             median := context.forward_median,
+            stddev := context.forward_stddev,
+            q1 := context.forward_q1,
+            q3 := context.forward_q3,
             win_rate := context.forward_win_rate
         )
         ORDER BY context.horizon

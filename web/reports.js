@@ -16,6 +16,7 @@ const elements = {
   analogEvent: document.querySelector("#analog-event"),
   analogSummary: document.querySelector("#analog-summary"),
   analogChart: document.querySelector("#analog-chart"),
+  analogDecision: document.querySelector("#analog-decision"),
   analogInterpretation: document.querySelector("#analog-interpretation"),
   peerSummary: document.querySelector("#peer-summary"),
   peerChart: document.querySelector("#peer-chart"),
@@ -396,6 +397,8 @@ function renderAnalogChart(studies, requestedDate = null) {
   );
   elements.analogEvent.replaceChildren();
   elements.analogChart.replaceChildren();
+  elements.analogDecision.hidden = true;
+  elements.analogDecision.replaceChildren();
   elements.analogSummary.textContent = "";
   elements.analogInterpretation.textContent = "同規模変動の過去統計がありません。";
   renderPeerChart(null);
@@ -441,6 +444,9 @@ function renderAnalogChart(studies, requestedDate = null) {
           winRate: point.win_rate,
           mean: point.mean,
           median: point.median,
+          stddev: point.stddev,
+          q1: point.q1,
+          q3: point.q3,
         }))
       : legacyHorizons
   ).filter((item) => item.winRate != null);
@@ -525,6 +531,63 @@ function renderAnalogChart(studies, requestedDate = null) {
   const best = horizons.reduce((highest, item) =>
     Number(item.winRate) > Number(highest.winRate) ? item : highest,
   );
+  const expectedCandidates = horizons
+    .filter((item) => item.mean != null && Number(item.observations) >= 20)
+    .map((item) => {
+      const stddev = Number(item.stddev);
+      // Forward windows overlap (especially at 20D), so treating every daily
+      // starting point as independent would make uncertainty look too small.
+      // n / horizon is a deliberately conservative effective sample size.
+      const effectiveObservations = Math.max(1, item.observations / item.days);
+      const standardError = Number.isFinite(stddev) && item.observations > 1
+        ? stddev / Math.sqrt(effectiveObservations)
+        : null;
+      return {
+        ...item,
+        effectiveObservations,
+        // One-sided 80% lower confidence bound. This deliberately penalises
+        // a high sample mean when its historical outcomes are widely spread.
+        conservativeMean: standardError == null
+          ? null
+          : Number(item.mean) - 1.2816 * standardError,
+      };
+    });
+  const bestExpected = expectedCandidates.reduce(
+    (highest, item) => highest == null || Number(item.mean) > Number(highest.mean)
+      ? item
+      : highest,
+    null,
+  );
+  const bestConservative = expectedCandidates
+    .filter((item) => item.conservativeMean != null)
+    .reduce(
+      (highest, item) => highest == null || item.conservativeMean > highest.conservativeMean
+        ? item
+        : highest,
+      null,
+    );
+  if (bestExpected) {
+    const threshold = `${percent(move, true)}${move < 0 ? "以下" : "以上"}`;
+    const heading = document.createElement("strong");
+    heading.textContent = `${threshold}動いた後の期待リターン最大：${bestExpected.days}日後`;
+    const detail = document.createElement("p");
+    detail.textContent =
+      `平均${percent(bestExpected.mean, true)}、中央値${percent(bestExpected.median, true)}、` +
+      `中央50% ${percent(bestExpected.q1, true)}〜${percent(bestExpected.q3, true)}、` +
+      `上昇率${percent(bestExpected.winRate)}、n=${number(bestExpected.observations, 0)}。`;
+    const caution = document.createElement("p");
+    if (bestConservative) {
+      const positive = bestConservative.conservativeMean > 0;
+      caution.textContent =
+        `ばらつきを差し引いた保守的な候補は${bestConservative.days}日後` +
+        `（80%片側下限 ${percent(bestConservative.conservativeMean, true)}）です。` +
+        `${positive ? "下限もプラスです。" : "下限はマイナスのため、優位性はまだ確実ではありません。"}`;
+    } else {
+      caution.textContent = "ばらつきを評価するための観測数が不足しています。";
+    }
+    elements.analogDecision.append(heading, detail, caution);
+    elements.analogDecision.hidden = false;
+  }
   const day5 = horizons.find((item) => item.days === 5);
   const sampleWarning = count < 20
     ? `過去${count}件のみなので参考値です。`
@@ -534,7 +597,9 @@ function renderAnalogChart(studies, requestedDate = null) {
     : "";
   elements.analogInterpretation.textContent =
     `今回：${day5Read}最も上昇率が高いのは${best.days}日後の${percent(best.winRate)}です。` +
-    `${sampleWarning}これはニュース内容ではなく、値動きだけを条件にした統計です。`;
+    `${sampleWarning}平均リターンは利益・損失と発生回数をすでに反映した期待値です。` +
+    `保守候補は期間の重複を考慮した標準誤差を差し引いて選びます。` +
+    `これはニュース内容ではなく、値動きだけを条件にした統計です。`;
 }
 
 function renderHorizonChart(studies) {
