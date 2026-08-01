@@ -18,7 +18,10 @@ const elements = {
   analogChart: document.querySelector("#analog-chart"),
   analogDecision: document.querySelector("#analog-decision"),
   analogInterpretation: document.querySelector("#analog-interpretation"),
+  returnSurfaceBucket: document.querySelector("#return-surface-bucket"),
+  returnSurfaceSummary: document.querySelector("#return-surface-summary"),
   returnSurfaceChart: document.querySelector("#return-surface-chart"),
+  returnPathChart: document.querySelector("#return-path-chart"),
   returnSurfaceDecision: document.querySelector("#return-surface-decision"),
   returnSurfaceInterpretation: document.querySelector("#return-surface-interpretation"),
   peerSummary: document.querySelector("#peer-summary"),
@@ -605,9 +608,187 @@ function renderAnalogChart(studies, requestedDate = null) {
     `これはニュース内容ではなく、値動きだけを条件にした統計です。`;
 }
 
+function averageFinite(values) {
+  const finite = values.map(Number).filter(Number.isFinite);
+  return finite.length
+    ? finite.reduce((sum, value) => sum + value, 0) / finite.length
+    : null;
+}
+
+function pearsonCorrelation(left, right) {
+  const pairs = left.map((value, index) => [Number(value), Number(right[index])])
+    .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b));
+  if (pairs.length < 5) return null;
+  const leftMean = averageFinite(pairs.map(([value]) => value));
+  const rightMean = averageFinite(pairs.map(([, value]) => value));
+  const numerator = pairs.reduce(
+    (sum, [a, b]) => sum + (a - leftMean) * (b - rightMean),
+    0,
+  );
+  const leftScale = Math.sqrt(pairs.reduce(
+    (sum, [a]) => sum + (a - leftMean) ** 2,
+    0,
+  ));
+  const rightScale = Math.sqrt(pairs.reduce(
+    (sum, [, b]) => sum + (b - rightMean) ** 2,
+    0,
+  ));
+  return leftScale && rightScale ? numerator / (leftScale * rightScale) : null;
+}
+
+function surfaceRegime(cells) {
+  const edge = (from, to) => averageFinite(cells
+    .filter((cell) => cell.horizon >= from && cell.horizon <= to)
+    .map((cell) => cell.conditionalEdge));
+  const early = edge(1, 5);
+  const middle = edge(6, 13);
+  const late = edge(14, 20);
+  const threshold = 0.001;
+  let label = "方向不安定型";
+  let reading = "期間によって通常平均との差が入れ替わり、単純な方向判断には向きません。";
+  if (early < -threshold && late > threshold) {
+    label = "短期調整後の回復型";
+    reading = "短期は通常より弱く、その後に相対的な回復が表れています。";
+  } else if (early > threshold && late < -threshold) {
+    label = "初動優位後の失速型";
+    reading = "短期の優位が後半に失われるため、長期保有には慎重さが必要です。";
+  } else if ([early, middle, late].every((value) => value > threshold)) {
+    label = "継続優位型";
+    reading = "全期間で通常平均を上回り、相対的な強さが継続しています。";
+  } else if ([early, middle, late].every((value) => value < -threshold)) {
+    label = "継続劣位型";
+    reading = "全期間で通常平均を下回り、反発より弱さの継続を警戒する帯です。";
+  } else if (late != null && early != null && late - early > threshold * 2) {
+    label = "改善型";
+    reading = "日数の経過とともに通常平均との差が改善しています。";
+  } else if (late != null && early != null && early - late > threshold * 2) {
+    label = "悪化型";
+    reading = "日数の経過とともに通常平均との差が悪化しています。";
+  }
+  return { label, reading, early, middle, late };
+}
+
+function surfaceStability(bucket, buckets, byCell, planByBucket) {
+  const selected = Array.from({ length: 20 }, (_, index) =>
+    byCell.get(`${bucket}:${index + 1}`)?.conditionalEdge,
+  );
+  const adjacent = buckets.filter((candidate) => Math.abs(candidate - bucket) === 1);
+  const correlations = adjacent.map((candidate) => pearsonCorrelation(
+    selected,
+    Array.from({ length: 20 }, (_, index) =>
+      byCell.get(`${candidate}:${index + 1}`)?.conditionalEdge,
+    ),
+  )).filter(Number.isFinite);
+  const correlation = averageFinite(correlations);
+  const plan = planByBucket.get(bucket);
+  const comparablePlans = adjacent.map((candidate) => planByBucket.get(candidate)).filter(Boolean);
+  const matchingPlans = plan
+    ? comparablePlans.filter((candidate) =>
+      Math.abs(Number(candidate.buy_day) - Number(plan.buy_day)) <= 3 &&
+      Math.abs(Number(candidate.sell_day) - Number(plan.sell_day)) <= 3,
+    ).length
+    : 0;
+  let label = "低い";
+  if (correlation >= 0.65 && matchingPlans === comparablePlans.length && comparablePlans.length) {
+    label = "高い";
+  } else if (correlation >= 0.3 || matchingPlans > 0) {
+    label = "中程度";
+  }
+  return { label, correlation, matchingPlans, comparablePlans: comparablePlans.length };
+}
+
+function renderReturnPath(cells, plan) {
+  const svg = elements.returnPathChart;
+  svg.replaceChildren();
+  if (!cells.length) return;
+  const width = 720;
+  const height = 300;
+  const left = 66;
+  const right = 20;
+  const top = 42;
+  const bottom = 46;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const values = [0, ...cells.flatMap((cell) => [
+    Number(cell.forward_mean),
+    Number(cell.baselineMean),
+  ]).filter(Number.isFinite)];
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const span = Math.max(rawMax - rawMin, 0.01);
+  const minimum = rawMin - span * 0.15;
+  const maximum = rawMax + span * 0.15;
+  const x = (horizon) => left + ((horizon - 1) / 19) * plotWidth;
+  const y = (value) => top + ((maximum - value) / (maximum - minimum)) * plotHeight;
+
+  for (let index = 0; index <= 4; index += 1) {
+    const value = maximum - ((maximum - minimum) * index) / 4;
+    const pointY = y(value);
+    svg.append(
+      svgNode("line", {
+        x1: left,
+        y1: pointY,
+        x2: width - right,
+        y2: pointY,
+        class: Math.abs(value) < span / 12 ? "report-chart-zero" : "report-chart-grid",
+      }),
+      svgNode("text", {
+        x: left - 10,
+        y: pointY + 4,
+        "text-anchor": "end",
+        class: "report-chart-label",
+      }, percent(value, true)),
+    );
+  }
+  [1, 5, 10, 15, 20].forEach((horizon) => {
+    svg.append(svgNode("text", {
+      x: x(horizon),
+      y: height - 14,
+      "text-anchor": "middle",
+      class: "report-chart-label",
+    }, `${horizon}日`));
+  });
+  const pathFor = (key) => cells.map((cell, index) =>
+    `${index ? "L" : "M"}${x(cell.horizon).toFixed(1)},${y(Number(cell[key])).toFixed(1)}`,
+  ).join(" ");
+  svg.append(
+    svgNode("path", { d: pathFor("baselineMean"), class: "report-surface-path-baseline" }),
+    svgNode("path", { d: pathFor("forward_mean"), class: "report-surface-path-expected" }),
+    svgNode("text", { x: left, y: 20, class: "report-chart-label" }, "青: 選択帯の絶対期待値"),
+    svgNode("text", { x: left + 180, y: 20, class: "report-chart-label" }, "破線: 同期間の通常平均"),
+  );
+  if (!plan) return;
+  [["B", Number(plan.buy_day), "report-surface-path-buy"],
+    ["S", Number(plan.sell_day), "report-surface-path-sell"]].forEach(([label, horizon, className]) => {
+    const cell = cells.find((item) => item.horizon === horizon);
+    if (!cell) return;
+    const markerX = x(horizon);
+    const markerY = y(Number(cell.forward_mean));
+    svg.append(
+      svgNode("line", {
+        x1: markerX,
+        y1: top,
+        x2: markerX,
+        y2: top + plotHeight,
+        class: `report-surface-path-marker ${className}`,
+      }),
+      svgNode("circle", { cx: markerX, cy: markerY, r: 6, class: className }),
+      svgNode("text", {
+        x: markerX,
+        y: top - 8,
+        "text-anchor": "middle",
+        class: "report-chart-value",
+      }, `${label} ${horizon}日`),
+    );
+  });
+}
+
 function renderReturnSurface(rows, tradePlans) {
   const svg = elements.returnSurfaceChart;
   svg.replaceChildren();
+  elements.returnPathChart.replaceChildren();
+  elements.returnSurfaceBucket.replaceChildren();
+  elements.returnSurfaceSummary.textContent = "";
   elements.returnSurfaceDecision.replaceChildren();
   elements.returnSurfaceDecision.hidden = true;
   elements.returnSurfaceInterpretation.textContent = "算出可能な日足履歴がありません。";
@@ -664,7 +845,8 @@ function renderReturnSurface(rows, tradePlans) {
         : 0,
     );
   }
-  eligible.forEach((cell) => {
+  [...byCell.values()].forEach((cell) => {
+    if (cell.forward_mean == null) return;
     cell.baselineMean = baselineByHorizon.get(cell.horizon) || 0;
     cell.conditionalEdge = Number(cell.forward_mean) - cell.baselineMean;
   });
@@ -717,6 +899,18 @@ function renderReturnSurface(rows, tradePlans) {
             : `rgba(239,68,68,${0.15 + intensity * 0.75})`
           : "rgba(148,163,184,.05)",
         stroke: "rgba(148,163,184,.16)",
+        class: "report-surface-cell",
+        tabindex: 0,
+        role: "button",
+        "aria-label": `変動帯${bucket}、${horizon}日後を選択`,
+      });
+      const chooseBucket = () => {
+        elements.returnSurfaceBucket.value = String(bucket);
+        updateSelection(bucket);
+      };
+      rect.addEventListener("click", chooseBucket);
+      rect.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") chooseBucket();
       });
       if (cell) {
         const range = `${percent(cell.move_min, true)}〜${percent(cell.move_max, true)}`;
@@ -784,9 +978,57 @@ function renderReturnSurface(rows, tradePlans) {
     class: "report-chart-label",
   }, "初日の1日リターン（同銘柄内10分位）"));
 
-  const strongestBucket = buckets.at(-1);
-  const strongestPlan = planByBucket.get(strongestBucket);
-  if (strongestPlan) {
+  const selectionOutline = svgNode("rect", {
+    x: left + 1,
+    y: top + 1,
+    width: Math.max(cellWidth - 2, 1),
+    height: plotHeight - 2,
+    rx: 3,
+    class: "report-surface-selection",
+  });
+  svg.append(selectionOutline);
+
+  const samplesByBucket = new Map(buckets.map((bucket) => [
+    bucket,
+    rows.find((row) => Number(row.move_bucket) === bucket),
+  ]));
+  buckets.forEach((bucket) => {
+    const sample = samplesByBucket.get(bucket);
+    const option = document.createElement("option");
+    option.value = String(bucket);
+    option.textContent =
+      `平均 ${percent(sample?.move_mean, true)}（${percent(sample?.move_min, true)}〜` +
+      `${percent(sample?.move_max, true)}）`;
+    elements.returnSurfaceBucket.append(option);
+  });
+
+  function updateSelection(bucket) {
+    const index = buckets.indexOf(bucket);
+    if (index < 0) return;
+    selectionOutline.setAttribute("x", String(left + index * cellWidth + 1));
+    const selectedCells = Array.from({ length: 20 }, (_, horizonIndex) =>
+      byCell.get(`${bucket}:${horizonIndex + 1}`),
+    ).filter((cell) => cell?.forward_mean != null);
+    const plan = planByBucket.get(bucket);
+    const sample = samplesByBucket.get(bucket);
+    const regime = surfaceRegime(selectedCells);
+    const stability = surfaceStability(bucket, buckets, byCell, planByBucket);
+    const correlationText = stability.correlation == null
+      ? "算出不可"
+      : stability.correlation.toFixed(2);
+    elements.returnSurfaceSummary.textContent =
+      `${percent(sample?.move_min, true)}〜${percent(sample?.move_max, true)}の初日変動：` +
+      `${regime.label}。${regime.reading} 隣接帯との安定性は${stability.label}` +
+      `（経路相関 ${correlationText}、近いB/S ${stability.matchingPlans}/` +
+      `${stability.comparablePlans}帯）です。`;
+    renderReturnPath(selectedCells, plan);
+    elements.returnSurfaceDecision.replaceChildren();
+    elements.returnSurfaceDecision.hidden = !plan;
+    if (!plan) {
+      elements.returnSurfaceInterpretation.textContent =
+        "この帯は実効標本10件以上の売買ペアがなく、B/Sを表示していません。";
+      return;
+    }
     const evidenceLabels = {
       strong: "強い（80%信頼下限もプラス）",
       moderate: "中程度（平均と勝率はプラス）",
@@ -794,31 +1036,39 @@ function renderReturnSurface(rows, tradePlans) {
       insufficient: "標本不足",
     };
     const heading = document.createElement("strong");
-    heading.textContent = "最大上昇帯の売買計画";
+    heading.textContent = `${regime.label}の売買候補`;
     const timing = document.createElement("p");
     timing.textContent =
-      `推奨待機 ${strongestPlan.buy_day}日 → ${strongestPlan.holding_days}日間保有 → ` +
-      `${strongestPlan.sell_day}日後に売却${strongestPlan.sell_at_window_boundary ? "（観測期間末）" : ""}`;
+      `推奨待機 ${plan.buy_day}日 → ${plan.holding_days}日間保有 → ` +
+      `${plan.sell_day}日後に売却${plan.sell_at_window_boundary ? "（観測期間末）" : ""}`;
     const expected = document.createElement("p");
     expected.textContent =
-      `コスト後期待リターン ${percent(strongestPlan.expected_return_after_cost, true)} / ` +
-      `勝率 ${percent(strongestPlan.win_rate)} / 下振れ10%点 ` +
-      `${percent(strongestPlan.downside_p10_after_cost, true)}`;
+      `コスト後期待リターン ${percent(plan.expected_return_after_cost, true)} / ` +
+      `勝率 ${percent(plan.win_rate)} / 下振れ10%点 ` +
+      `${percent(plan.downside_p10_after_cost, true)}`;
     const evidence = document.createElement("p");
     evidence.textContent =
-      `同subsector超過 ${percent(strongestPlan.sector_excess_return, true)} / ` +
-      `80%信頼下限 ${percent(strongestPlan.conservative_return, true)} / ` +
-      `実効標本 ${number(strongestPlan.effective_observations, 1)} / ` +
-      `判定 ${evidenceLabels[strongestPlan.evidence_level] || "—"}`;
-    elements.returnSurfaceDecision.append(heading, timing, expected, evidence);
-    elements.returnSurfaceDecision.hidden = false;
-    elements.returnSurfaceInterpretation.textContent = strongestPlan.sell_at_window_boundary
-      ? "Sが20日後にあるため、20日後が天井という意味ではありません。観測期間末でも期待経路が上向きで、ピーク未確認です。"
-      : "B/Sは買いを先、売りを後に固定した実現可能な組み合わせです。色は通常平均との差、B/Sは実際の売買区間リターンを使っています。";
-  } else {
-    elements.returnSurfaceInterpretation.textContent =
-      "売買ペア統計が未生成です。次回の分析更新後にB/Sと勝率を表示します。";
+      `同subsector超過 ${percent(plan.sector_excess_return, true)} / ` +
+      `80%信頼下限 ${percent(plan.conservative_return, true)} / ` +
+      `実効標本 ${number(plan.effective_observations, 1)} / ` +
+      `ペア内判定 ${evidenceLabels[plan.evidence_level] || "—"}`;
+    const caution = document.createElement("p");
+    caution.className = "report-decision-caution";
+    caution.textContent =
+      "多数のB→S候補から最良値を選んだ探索結果です。隣接帯の安定性と将来のウォークフォワード成績を確認してから判断します。";
+    elements.returnSurfaceDecision.append(heading, timing, expected, evidence, caution);
+    elements.returnSurfaceInterpretation.textContent = plan.sell_at_window_boundary
+      ? "Sが20日後にあるためピークは未確認です。20日後を機械的な売却日とはせず、観測窓を延ばして再検証します。"
+      : `選択帯は${regime.label}です。折れ線の青と破線の間隔、BからSまでの経路、下振れ10%点を順に確認します。`;
   }
+
+  const initialBucket = planByBucket.has(buckets.at(-1))
+    ? buckets.at(-1)
+    : buckets.find((bucket) => planByBucket.has(bucket)) ?? buckets.at(-1);
+  elements.returnSurfaceBucket.value = String(initialBucket);
+  elements.returnSurfaceBucket.onchange = () =>
+    updateSelection(Number(elements.returnSurfaceBucket.value));
+  updateSelection(initialBucket);
 }
 
 function renderHorizonChart(studies) {

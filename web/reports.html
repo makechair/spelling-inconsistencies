@@ -70,16 +70,30 @@
           </div>
         </article>
         <article class="report-return-surface">
-          <h3>初日変動率 × 保有日数の期待リターン</h3>
-          <p class="report-chart-description">横軸は初日の変動率を同銘柄内の10分位に分けた範囲、縦軸はその後1〜20取引日です。色は同じN日後の通常平均を上回ったか下回ったかを示します。</p>
+          <div class="report-chart-heading">
+            <div>
+              <h3>初日変動率 × 保有日数の期待リターン</h3>
+              <p class="report-chart-description">横軸は初日の変動率を同銘柄内の10分位に分けた範囲、縦軸はその後1〜20取引日です。色は同じN日後の通常平均を上回ったか下回ったかを示します。</p>
+            </div>
+            <label class="report-analog-picker" for="return-surface-bucket">
+              考察する変動帯
+              <select id="return-surface-bucket"></select>
+            </label>
+          </div>
+          <p id="return-surface-summary" class="report-analog-summary"></p>
+          <div id="return-surface-decision" class="report-decision" hidden></div>
+          <section class="report-surface-path" aria-labelledby="return-path-title">
+            <h4 id="return-path-title">選択帯の期待経路</h4>
+            <svg id="return-path-chart" viewBox="0 0 720 300" role="img"
+                 aria-label="選択した初日変動帯の期待リターンと通常平均の推移"></svg>
+          </section>
           <div class="report-surface-scroll">
             <svg id="return-surface-chart" viewBox="0 0 900 520" role="img"
                  aria-label="初日変動率と保有日数ごとの条件付き期待リターンヒートマップ"></svg>
           </div>
-          <div id="return-surface-decision" class="report-decision" hidden></div>
           <div class="report-chart-guide">
             <strong>判断の読み方</strong>
-            <p>緑は通常の同期間リターンより強く、赤は弱かった領域です。BとSは各列で独立した最小・最大ではなく、Bで買ってからSで売る順序を守った全組み合わせのうち、期間重複・ばらつき・往復コスト0.10%を差し引いた80%信頼下限が最も高いペアです。実効標本10件未満は候補から除外します。</p>
+            <p>上の折れ線で絶対期待値と通常平均の差を確認し、下のヒートマップで他の変動帯と比較します。B/Sは、買いを先・売りを後にした全組み合わせから、期間重複・ばらつき・往復コスト0.10%を差し引いた80%信頼下限が最も高いペアです。</p>
             <p id="return-surface-interpretation" class="report-chart-interpretation"></p>
           </div>
         </article>
