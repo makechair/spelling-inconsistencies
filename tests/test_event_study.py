@@ -309,9 +309,22 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
     assert {row["horizon"] for row in surface} == set(range(1, 21))
     assert {row["move_bucket"] for row in surface}
     assert all("forward_mean" in row for row in surface)
+    smoothed = report["smoothed_return_surfaces"]["NVDA"]
+    assert {row["move_bucket"] for row in smoothed} == set(range(1, 20))
+    assert {row["surface_method"] for row in smoothed} == {
+        "lower_tail",
+        "kernel",
+        "upper_tail",
+    }
+    assert all("effective_observations" in row for row in smoothed)
+    assert all("conditional_edge" in row for row in smoothed)
     # The compact fixture has fewer than 10 overlap-adjusted observations per
-    # trade window, so it must not manufacture a B/S recommendation.
+    # hard decile, so it must not manufacture a decile B/S recommendation.
     assert report["return_trade_plans"].get("NVDA", []) == []
+    smoothed_plans = report["smoothed_trade_plans"]["NVDA"]
+    assert all(row["buy_day"] < row["sell_day"] for row in smoothed_plans)
+    assert all(row["effective_observations"] >= 10 for row in smoothed_plans)
+    assert all(row["surface_method"] == "kernel" for row in smoothed_plans)
     assert (output / "manifest.json").exists()
     daily = tmp_path / "corpus" / "analysis" / "daily" / "date=2026-07-31"
     assert (daily / "report.json").exists()

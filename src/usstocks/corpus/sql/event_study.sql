@@ -464,6 +464,163 @@ INNER JOIN daily_indexed AS endpoint
 WHERE move.adj_close <> 0
 GROUP BY move.symbol, move.move_bucket, horizon.horizon;
 
+-- Continuous move-rate grid. The inner 90% is kernel-smoothed so adjacent
+-- returns share information instead of changing abruptly at a decile border.
+-- The outer 5% tails remain explicit crash/spike bands and are allowed to be
+-- blank when their effective support is too small.
+CREATE OR REPLACE TEMP TABLE return_surface_grid AS
+WITH stats AS (
+    SELECT
+        symbol,
+        min(move_return) AS move_minimum,
+        max(move_return) AS move_maximum,
+        quantile_cont(move_return, 0.05) AS move_q05,
+        quantile_cont(move_return, 0.25) AS move_q25,
+        quantile_cont(move_return, 0.75) AS move_q75,
+        quantile_cont(move_return, 0.95) AS move_q95,
+        greatest(
+            0.003,
+            0.9 * least(
+                stddev_samp(move_return),
+                (quantile_cont(move_return, 0.75)
+                    - quantile_cont(move_return, 0.25)) / 1.34
+            ) * pow(count(*)::DOUBLE, -0.2)
+        ) AS bandwidth
+    FROM daily_move_buckets
+    GROUP BY symbol
+), inner_grid AS (
+    SELECT
+        stats.*,
+        grid.grid_index,
+        stats.move_q05
+            + (stats.move_q95 - stats.move_q05)
+            * (grid.grid_index - 2)::DOUBLE / 16 AS target_move
+    FROM stats
+    CROSS JOIN range(2, 19) AS grid(grid_index)
+)
+SELECT
+    symbol,
+    1 AS move_bucket,
+    'lower_tail' AS surface_method,
+    move_q05 AS target_move,
+    move_minimum AS move_min,
+    move_q05 AS move_max,
+    bandwidth
+FROM stats
+UNION ALL
+SELECT
+    symbol,
+    grid_index AS move_bucket,
+    'kernel' AS surface_method,
+    target_move,
+    target_move - bandwidth AS move_min,
+    target_move + bandwidth AS move_max,
+    bandwidth
+FROM inner_grid
+UNION ALL
+SELECT
+    symbol,
+    19 AS move_bucket,
+    'upper_tail' AS surface_method,
+    move_q95 AS target_move,
+    move_q95 AS move_min,
+    move_maximum AS move_max,
+    bandwidth
+FROM stats;
+
+CREATE OR REPLACE TEMP TABLE return_surface_baseline AS
+SELECT
+    move.symbol,
+    horizon.horizon,
+    avg(endpoint.adj_close / move.adj_close - 1) AS baseline_mean
+FROM daily_move_buckets AS move
+CROSS JOIN range(1, 21) AS horizon(horizon)
+INNER JOIN daily_indexed AS endpoint
+    ON endpoint.symbol = move.symbol
+   AND endpoint.trading_index = move.trading_index + horizon.horizon
+WHERE move.adj_close <> 0
+GROUP BY move.symbol, horizon.horizon;
+
+CREATE OR REPLACE TEMP TABLE return_surface_smoothed AS
+WITH weighted AS (
+    SELECT
+        grid.symbol,
+        grid.move_bucket,
+        grid.surface_method,
+        grid.target_move,
+        grid.move_min,
+        grid.move_max,
+        grid.bandwidth,
+        horizon.horizon,
+        endpoint.adj_close / move.adj_close - 1 AS forward_return,
+        CASE
+            WHEN grid.surface_method = 'lower_tail'
+                THEN CAST(move.move_return <= grid.target_move AS DOUBLE)
+            WHEN grid.surface_method = 'upper_tail'
+                THEN CAST(move.move_return >= grid.target_move AS DOUBLE)
+            ELSE exp(
+                -0.5 * pow(
+                    (move.move_return - grid.target_move) / grid.bandwidth,
+                    2
+                )
+            )
+        END AS kernel_weight
+    FROM return_surface_grid AS grid
+    INNER JOIN daily_move_buckets AS move USING (symbol)
+    CROSS JOIN range(1, 21) AS horizon(horizon)
+    INNER JOIN daily_indexed AS endpoint
+        ON endpoint.symbol = move.symbol
+       AND endpoint.trading_index = move.trading_index + horizon.horizon
+    WHERE move.adj_close <> 0
+      AND (
+            grid.surface_method <> 'kernel'
+         OR abs(move.move_return - grid.target_move) <= 3 * grid.bandwidth
+      )
+), aggregated AS (
+    SELECT
+        symbol,
+        move_bucket,
+        surface_method,
+        target_move,
+        move_min,
+        move_max,
+        bandwidth,
+        horizon,
+        count(*) FILTER (WHERE kernel_weight > 0) AS observations,
+        sum(kernel_weight) AS weight_sum,
+        pow(sum(kernel_weight), 2) / nullif(sum(pow(kernel_weight, 2)), 0)
+            AS local_effective_observations,
+        sum(kernel_weight * forward_return) / nullif(sum(kernel_weight), 0)
+            AS forward_mean,
+        sum(kernel_weight * pow(forward_return, 2)) / nullif(sum(kernel_weight), 0)
+            AS forward_second_moment,
+        sum(kernel_weight * CAST(forward_return > 0 AS INTEGER))
+            / nullif(sum(kernel_weight), 0) AS forward_win_rate
+    FROM weighted
+    WHERE kernel_weight > 0
+    GROUP BY
+        symbol,
+        move_bucket,
+        surface_method,
+        target_move,
+        move_min,
+        move_max,
+        bandwidth,
+        horizon
+)
+SELECT
+    aggregated.* EXCLUDE (forward_second_moment),
+    sqrt(greatest(
+        forward_second_moment - pow(forward_mean, 2),
+        0
+    )) AS forward_stddev,
+    CAST(NULL AS DOUBLE) AS forward_median,
+    baseline.baseline_mean,
+    forward_mean - baseline.baseline_mean AS conditional_edge,
+    local_effective_observations / horizon AS effective_observations
+FROM aggregated
+INNER JOIN return_surface_baseline AS baseline USING (symbol, horizon);
+
 -- A trade plan must preserve the order of the decision: wait first, buy, and
 -- only then sell.  Computing the return between those two endpoints directly
 -- also lets us report a real win rate and downside quantile; neither can be
@@ -585,6 +742,130 @@ SELECT
         ELSE 'weak'
     END AS evidence_level
 FROM return_trade_candidates
+WHERE effective_observations >= 10
+QUALIFY row_number() OVER (
+    PARTITION BY symbol, move_bucket
+    ORDER BY
+        conservative_return DESC NULLS LAST,
+        expected_return_after_cost DESC,
+        holding_days ASC
+) = 1;
+
+CREATE OR REPLACE TEMP TABLE return_trade_plan_smoothed AS
+WITH weighted AS (
+    SELECT
+        grid.symbol,
+        grid.move_bucket,
+        grid.surface_method,
+        grid.target_move,
+        grid.move_min,
+        grid.move_max,
+        grid.bandwidth,
+        trade.buy_day,
+        trade.sell_day,
+        trade.holding_days,
+        trade.trade_return,
+        peer.peer_return,
+        peer.peer_count,
+        parameters.min_peers,
+        CASE
+            WHEN grid.surface_method = 'lower_tail'
+                THEN CAST(move.move_return <= grid.target_move AS DOUBLE)
+            WHEN grid.surface_method = 'upper_tail'
+                THEN CAST(move.move_return >= grid.target_move AS DOUBLE)
+            ELSE exp(
+                -0.5 * pow(
+                    (move.move_return - grid.target_move) / grid.bandwidth,
+                    2
+                )
+            )
+        END AS kernel_weight
+    FROM return_surface_grid AS grid
+    INNER JOIN return_trade_observations AS trade USING (symbol)
+    INNER JOIN daily_move_buckets AS move
+        ON move.symbol = trade.symbol
+       AND move.date = trade.signal_date
+    LEFT JOIN return_trade_peer_observations AS peer
+        ON peer.symbol = trade.symbol
+       AND peer.move_bucket = trade.move_bucket
+       AND peer.signal_date = trade.signal_date
+       AND peer.buy_day = trade.buy_day
+       AND peer.sell_day = trade.sell_day
+    CROSS JOIN analysis_parameters AS parameters
+    WHERE grid.surface_method <> 'kernel'
+       OR abs(move.move_return - grid.target_move) <= 3 * grid.bandwidth
+), aggregated AS (
+    SELECT
+        symbol,
+        move_bucket,
+        surface_method,
+        target_move,
+        move_min,
+        move_max,
+        bandwidth,
+        buy_day,
+        sell_day,
+        holding_days,
+        count(*) FILTER (WHERE kernel_weight > 0) AS observations,
+        pow(sum(kernel_weight), 2) / nullif(sum(pow(kernel_weight, 2)), 0)
+            AS local_effective_observations,
+        sum(kernel_weight * trade_return) / nullif(sum(kernel_weight), 0)
+            AS expected_return,
+        sum(kernel_weight * pow(trade_return, 2)) / nullif(sum(kernel_weight), 0)
+            AS return_second_moment,
+        sum(kernel_weight * CAST(trade_return > 0 AS INTEGER))
+            / nullif(sum(kernel_weight), 0) AS win_rate,
+        sum(kernel_weight * (trade_return - peer_return)) FILTER (
+            WHERE peer_count >= min_peers
+        ) / nullif(sum(kernel_weight) FILTER (
+            WHERE peer_count >= min_peers
+        ), 0) AS sector_excess_return,
+        count(*) FILTER (WHERE peer_count >= min_peers AND kernel_weight > 0)
+            AS sector_observations
+    FROM weighted
+    WHERE kernel_weight > 0
+    GROUP BY
+        symbol,
+        move_bucket,
+        surface_method,
+        target_move,
+        move_min,
+        move_max,
+        bandwidth,
+        buy_day,
+        sell_day,
+        holding_days
+), scored AS (
+    SELECT
+        *,
+        sqrt(greatest(
+            return_second_moment - pow(expected_return, 2),
+            0
+        )) AS return_stddev,
+        local_effective_observations / holding_days AS effective_observations
+    FROM aggregated
+), candidates AS (
+    SELECT
+        *,
+        expected_return - 0.001 AS expected_return_after_cost,
+        expected_return - 0.001 - 1.2816 * return_stddev
+            AS downside_p10_after_cost,
+        expected_return - 0.001
+            - 1.2816 * return_stddev
+                / sqrt(greatest(effective_observations, 1))
+            AS conservative_return
+    FROM scored
+)
+SELECT
+    *,
+    sell_day = 20 AS sell_at_window_boundary,
+    'normal_approximation' AS downside_method,
+    CASE
+        WHEN conservative_return > 0 THEN 'strong'
+        WHEN expected_return_after_cost > 0 AND win_rate >= 0.5 THEN 'moderate'
+        ELSE 'weak'
+    END AS evidence_level
+FROM candidates
 WHERE effective_observations >= 10
 QUALIFY row_number() OVER (
     PARTITION BY symbol, move_bucket

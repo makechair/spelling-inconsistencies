@@ -802,7 +802,10 @@ function renderReturnSurface(rows, tradePlans) {
     const observations = Number(row.observations || 0);
     const horizon = Number(row.horizon);
     const stddev = Number(row.forward_stddev);
-    const effective = Math.max(1, observations / horizon);
+    const suppliedEffective = Number(row.effective_observations);
+    const effective = Number.isFinite(suppliedEffective)
+      ? suppliedEffective
+      : Math.max(1, observations / horizon);
     const standardError = Number.isFinite(stddev) && observations > 1
       ? stddev / Math.sqrt(effective)
       : null;
@@ -829,6 +832,7 @@ function renderReturnSurface(rows, tradePlans) {
     return;
   }
 
+  const smoothed = rows.some((row) => row.surface_method != null);
   const baselineByHorizon = new Map();
   for (let horizon = 1; horizon <= 20; horizon += 1) {
     const cells = [...byCell.values()].filter(
@@ -847,8 +851,14 @@ function renderReturnSurface(rows, tradePlans) {
   }
   [...byCell.values()].forEach((cell) => {
     if (cell.forward_mean == null) return;
-    cell.baselineMean = baselineByHorizon.get(cell.horizon) || 0;
-    cell.conditionalEdge = Number(cell.forward_mean) - cell.baselineMean;
+    const suppliedBaseline = Number(cell.baseline_mean);
+    const suppliedEdge = Number(cell.conditional_edge);
+    cell.baselineMean = Number.isFinite(suppliedBaseline)
+      ? suppliedBaseline
+      : baselineByHorizon.get(cell.horizon) || 0;
+    cell.conditionalEdge = Number.isFinite(suppliedEdge)
+      ? suppliedEdge
+      : Number(cell.forward_mean) - cell.baselineMean;
   });
   const scale = Math.max(
     quantile(eligible.map((cell) => Math.abs(cell.conditionalEdge)), 0.9) || 0,
@@ -913,7 +923,9 @@ function renderReturnSurface(rows, tradePlans) {
         if (event.key === "Enter" || event.key === " ") chooseBucket();
       });
       if (cell) {
-        const range = `${percent(cell.move_min, true)}〜${percent(cell.move_max, true)}`;
+        const range = cell.surface_method === "kernel"
+          ? `初日${percent(cell.target_move, true)}近傍（帯域幅${percent(cell.bandwidth)}）`
+          : `${percent(cell.move_min, true)}〜${percent(cell.move_max, true)}`;
         rect.append(svgNode("title", {}, reliable
           ? `${range} / ${horizon}日後 / 絶対期待値${percent(cell.forward_mean, true)} / ` +
             `通常平均${percent(cell.baselineMean, true)} / 差${percent(cell.conditionalEdge, true)} / ` +
@@ -950,33 +962,49 @@ function renderReturnSurface(rows, tradePlans) {
   buckets.forEach((bucket, index) => {
     const sample = rows.find((row) => Number(row.move_bucket) === bucket);
     const x = left + (index + 0.5) * cellWidth;
-    svg.append(
-      svgNode("text", {
+    if (smoothed) {
+      const label = sample?.surface_method === "lower_tail"
+        ? `≤${percent(sample.target_move, true)}`
+        : sample?.surface_method === "upper_tail"
+          ? `≥${percent(sample.target_move, true)}`
+          : percent(sample?.target_move, true);
+      svg.append(svgNode("text", {
         x,
-        y: top + plotHeight + 22,
-        "text-anchor": "middle",
-        class: "report-chart-label",
-      }, `平均${percent(sample?.move_mean, true)}`),
-      svgNode("text", {
-        x,
-        y: top + plotHeight + 40,
-        "text-anchor": "middle",
-        class: "report-chart-sample",
-      }, `${percent(sample?.move_min, true)}〜`),
-      svgNode("text", {
-        x,
-        y: top + plotHeight + 55,
+        y: top + plotHeight + 24,
         "text-anchor": "middle",
         class: "report-chart-sample",
-      }, percent(sample?.move_max, true)),
-    );
+      }, label));
+    } else {
+      svg.append(
+        svgNode("text", {
+          x,
+          y: top + plotHeight + 22,
+          "text-anchor": "middle",
+          class: "report-chart-label",
+        }, `平均${percent(sample?.move_mean, true)}`),
+        svgNode("text", {
+          x,
+          y: top + plotHeight + 40,
+          "text-anchor": "middle",
+          class: "report-chart-sample",
+        }, `${percent(sample?.move_min, true)}〜`),
+        svgNode("text", {
+          x,
+          y: top + plotHeight + 55,
+          "text-anchor": "middle",
+          class: "report-chart-sample",
+        }, percent(sample?.move_max, true)),
+      );
+    }
   });
   svg.append(svgNode("text", {
     x: left + plotWidth / 2,
     y: 505,
     "text-anchor": "middle",
     class: "report-chart-label",
-  }, "初日の1日リターン（同銘柄内10分位）"));
+  }, smoothed
+    ? "初日の1日リターン（中央90%は連続平滑化、両端は上下5%）"
+    : "初日の1日リターン（同銘柄内10分位）"));
 
   const selectionOutline = svgNode("rect", {
     x: left + 1,
@@ -996,9 +1024,14 @@ function renderReturnSurface(rows, tradePlans) {
     const sample = samplesByBucket.get(bucket);
     const option = document.createElement("option");
     option.value = String(bucket);
-    option.textContent =
-      `平均 ${percent(sample?.move_mean, true)}（${percent(sample?.move_min, true)}〜` +
-      `${percent(sample?.move_max, true)}）`;
+    option.textContent = sample?.surface_method === "lower_tail"
+      ? `急落帯 ${percent(sample.move_min, true)}〜${percent(sample.move_max, true)}`
+      : sample?.surface_method === "upper_tail"
+        ? `急騰帯 ${percent(sample.move_min, true)}〜${percent(sample.move_max, true)}`
+        : sample?.surface_method === "kernel"
+          ? `初日 ${percent(sample.target_move, true)}近傍`
+          : `平均 ${percent(sample?.move_mean, true)}（${percent(sample?.move_min, true)}〜` +
+            `${percent(sample?.move_max, true)}）`;
     elements.returnSurfaceBucket.append(option);
   });
 
@@ -1016,8 +1049,11 @@ function renderReturnSurface(rows, tradePlans) {
     const correlationText = stability.correlation == null
       ? "算出不可"
       : stability.correlation.toFixed(2);
+    const bandDescription = sample?.surface_method === "kernel"
+      ? `初日${percent(sample.target_move, true)}近傍（帯域幅${percent(sample.bandwidth)}）`
+      : `${percent(sample?.move_min, true)}〜${percent(sample?.move_max, true)}の初日変動`;
     elements.returnSurfaceSummary.textContent =
-      `${percent(sample?.move_min, true)}〜${percent(sample?.move_max, true)}の初日変動：` +
+      `${bandDescription}：` +
       `${regime.label}。${regime.reading} 隣接帯との安定性は${stability.label}` +
       `（経路相関 ${correlationText}、近いB/S ${stability.matchingPlans}/` +
       `${stability.comparablePlans}帯）です。`;
@@ -1062,9 +1098,8 @@ function renderReturnSurface(rows, tradePlans) {
       : `選択帯は${regime.label}です。折れ線の青と破線の間隔、BからSまでの経路、下振れ10%点を順に確認します。`;
   }
 
-  const initialBucket = planByBucket.has(buckets.at(-1))
-    ? buckets.at(-1)
-    : buckets.find((bucket) => planByBucket.has(bucket)) ?? buckets.at(-1);
+  const initialBucket = [...buckets].reverse().find((bucket) => planByBucket.has(bucket))
+    ?? buckets.at(-1);
   elements.returnSurfaceBucket.value = String(initialBucket);
   elements.returnSurfaceBucket.onchange = () =>
     updateSelection(Number(elements.returnSurfaceBucket.value));
@@ -1342,9 +1377,15 @@ function renderFocusSymbol(report, symbol) {
   renderHorizonChart(studies);
   renderTimelineChart(studies);
   renderAnalogChart(studies);
+  const smoothedSurface = report.smoothed_return_surfaces?.[symbol] || [];
+  const smoothedPlans = report.smoothed_trade_plans?.[symbol] || [];
   renderReturnSurface(
-    report.return_surfaces?.[symbol] || [],
-    report.return_trade_plans?.[symbol] || [],
+    smoothedSurface.length
+      ? smoothedSurface
+      : report.return_surfaces?.[symbol] || [],
+    smoothedSurface.length
+      ? smoothedPlans
+      : report.return_trade_plans?.[symbol] || [],
   );
 }
 
