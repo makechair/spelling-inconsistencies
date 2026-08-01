@@ -7,7 +7,7 @@ readable and self-describing for the analysis path.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -55,6 +55,14 @@ class BarsResponse(BaseModel):
     # after-hours session and a dead collector look identical.
     checked_at: str | None = None
     bars: list[BarOut]
+
+
+class CoverageOut(BaseModel):
+    symbol: str
+    first_date: date
+    last_date: date
+    daily_bars: int = 0
+    minute_bars: int = 0
 
 
 class SymbolOut(BaseModel):

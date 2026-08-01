@@ -93,6 +93,37 @@ def test_bars_endpoint(client: TestClient, settings: Settings):
     assert first["session"] == "regular"
 
 
+def test_coverage_combines_daily_and_minute_ranges(client: TestClient, settings: Settings):
+    daily_path = settings.corpus_local_dir / "daily" / "symbol=AAPL" / "part.parquet"
+    rows = []
+    for offset in (20, 10):
+        day = (BASE - timedelta(days=offset)).date()
+        rows.append({
+            "symbol": "AAPL", "date": day, "open": 90.0, "high": 92.0,
+            "low": 89.0, "close": 91.0, "volume": 1000, "adjOpen": 90.0,
+            "adjHigh": 92.0, "adjLow": 89.0, "adjClose": 91.0,
+            "adjVolume": 1000.0, "divCash": 0.0, "splitFactor": 1.0,
+        })
+    write_daily_parquet(daily_path, rows)
+    with Repository(settings.db_path) as repo:
+        seed_bars(repo, count=2)
+
+    payload = client.get("/api/coverage").json()
+    assert payload == [{
+        "symbol": "AAPL",
+        "first_date": (BASE - timedelta(days=20)).date().isoformat(),
+        "last_date": BASE.date().isoformat(),
+        "daily_bars": 2,
+        "minute_bars": 2,
+    }]
+
+
+def test_coverage_page_is_served(client: TestClient):
+    response = client.get("/coverage")
+    assert response.status_code == 200
+    assert "データ蓄積状況" in response.text
+
+
 def test_truncated_bars_keep_the_newest_edge(settings: Settings):
     limited = settings.model_copy(update={"max_bars_per_request": 3})
     with Repository(limited.db_path) as repo:

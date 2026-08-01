@@ -23,7 +23,7 @@ from ..db.repository import Repository
 from ..logging_setup import configure_logging
 from .auth import AccessVerifier, AuthError, extract_token
 from .deps import AppState
-from .routes import analysis, bars, export, health, live, symbols
+from .routes import analysis, bars, coverage, export, health, live, symbols
 
 log = logging.getLogger(__name__)
 
@@ -145,6 +145,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(symbols.router)
     app.include_router(bars.router)
+    app.include_router(coverage.router)
     app.include_router(live.router)
     app.include_router(export.router)
     app.include_router(analysis.router)
@@ -171,6 +172,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         @app.get("/reports", include_in_schema=False)
         def analysis_reports() -> FileResponse:
             return FileResponse(web_dir / "reports.html")
+
+        @app.get("/coverage", include_in_schema=False)
+        def data_coverage() -> FileResponse:
+            return FileResponse(web_dir / "coverage.html")
 
         @app.get("/favicon.ico", include_in_schema=False)
         def favicon() -> FileResponse:

@@ -26,6 +26,8 @@ const PERIODS = [
 const PERIOD_DAYS = new Set(PERIODS.map(({ days }) => days));
 const MAX_PERIOD_DAYS = PERIODS.at(-1).days;
 const rememberedDays = Number(view().days);
+const requestedSymbol = (new URLSearchParams(window.location.search).get('symbol') || '')
+  .trim().toUpperCase();
 
 const state = {
   symbols: [],          // watchlist entries
@@ -150,7 +152,9 @@ async function loadWatchlist() {
   renderWatchlist();
   el.watchlistHint.hidden = state.symbols.length > 0;
 
-  if (!state.selected && state.symbols.length) {
+  if (!state.selected && requestedSymbol) {
+    await select(requestedSymbol);
+  } else if (!state.selected && state.symbols.length) {
     await select(state.symbols[0].symbol);
   } else if (!state.symbols.length) {
     state.selected = null;

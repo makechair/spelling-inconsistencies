@@ -430,6 +430,24 @@ body {
 .report-hero h1 { margin: 0; font-size: clamp(30px, 5vw, 52px); line-height: 1.1; }
 .report-lead { max-width: 680px; margin: 14px 0 0; color: var(--muted); font-size: 15px; }
 
+.coverage-count { display: grid; gap: 5px; min-width: 130px; }
+.coverage-count span { color: var(--muted); font-size: 11px; }
+.coverage-count strong { color: var(--accent); font-size: 34px; font-variant-numeric: tabular-nums; }
+.coverage-list { display: grid; margin-top: 24px; border-top: 1px solid var(--border); }
+.coverage-row {
+  display: grid;
+  grid-template-columns: minmax(90px, .35fr) 1fr;
+  align-items: center;
+  gap: 24px;
+  min-height: 58px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.coverage-row:hover { background: var(--panel); }
+.coverage-symbol { color: var(--accent); font-size: 16px; font-weight: 700; text-decoration: none; }
+.coverage-symbol:hover { text-decoration: underline; }
+.coverage-range { color: var(--text); font-variant-numeric: tabular-nums; }
+
 .report-date-picker {
   display: grid;
   gap: 7px;
@@ -836,4 +854,5 @@ body {
   .report-analog-picker { flex-basis: auto; width: 100%; }
   .case-detail { padding: 16px; }
   .case-metric-grid { grid-template-columns: 1fr 1fr; }
+  .coverage-row { grid-template-columns: 72px 1fr; gap: 12px; padding-inline: 8px; }
 }

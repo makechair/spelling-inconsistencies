@@ -288,6 +288,21 @@ class Repository:
         bars = [_row_to_bar(row) for row in self.connection.execute(sql, params)]
         return list(reversed(bars)) if newest_first else bars
 
+    def bar_coverage(self) -> list[dict[str, object]]:
+        """Return the stored minute-bar range for every symbol."""
+        rows = self.connection.execute(
+            """
+            SELECT symbol,
+                   MIN(timestamp_utc) AS first_timestamp,
+                   MAX(timestamp_utc) AS last_timestamp,
+                   COUNT(DISTINCT timestamp_utc) AS bar_count
+            FROM bars_1m
+            GROUP BY symbol
+            ORDER BY symbol
+            """
+        )
+        return [dict(row) for row in rows]
+
     def iter_bars(
         self,
         symbols: Sequence[str],

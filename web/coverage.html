@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>データ蓄積状況 | US Stocks</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand brand-link" href="/">US&nbsp;Stocks</a>
+  <a class="topbar-link" href="/reports">分析レポート</a>
+  <a class="topbar-link active" href="/coverage" aria-current="page">データ蓄積状況</a>
+</header>
+
+<main class="report-layout coverage-layout">
+  <section class="report-hero">
+    <div>
+      <p class="report-eyebrow">DATA COVERAGE</p>
+      <h1>データ蓄積状況</h1>
+      <p class="report-lead">日足コーパスと分足データベースに実際に保存されている期間です。銘柄を選ぶとチャート画面を開きます。</p>
+    </div>
+    <div class="coverage-count"><span>取得済み銘柄</span><strong id="coverage-count">—</strong></div>
+  </section>
+  <p id="coverage-status" class="report-status" role="status">蓄積状況を読み込んでいます…</p>
+  <section id="coverage-content" class="coverage-list" hidden aria-label="銘柄別データ取得期間"></section>
+</main>
+<script type="module" src="/static/coverage.js"></script>
+</body>
+</html>
