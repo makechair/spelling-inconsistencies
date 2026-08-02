@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -14,7 +15,12 @@ from usstocks.corpus.narrative import enrich
 
 
 def _aws(*args: str, profile: str) -> None:
-    subprocess.run(["aws", *args, "--profile", profile], check=True)
+    executable = shutil.which("aws")
+    if executable is None and Path("/opt/homebrew/bin/aws").is_file():
+        executable = "/opt/homebrew/bin/aws"
+    if executable is None:
+        raise RuntimeError("aws CLI is required")
+    subprocess.run([executable, *args, "--profile", profile], check=True)
 
 
 def main() -> None:
@@ -70,3 +76,7 @@ def main() -> None:
             encoding="utf-8",
         )
         print(json.dumps({"report_date": report_date, "model": args.model}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

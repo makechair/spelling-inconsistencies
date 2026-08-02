@@ -13,6 +13,7 @@ TARGET="${HOME}/Library/LaunchAgents/com.makechair.usstocks-analysis-narrative.p
 LOG_DIR="${HOME}/Library/Logs/usstocks"
 PYTHON="${REPO_DIR}/.venv/bin/python"
 SCRIPT="${REPO_DIR}/scripts/run_analysis_narrative_bridge.py"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 
 [[ -x "${PYTHON}" ]] || { echo "missing ${PYTHON}" >&2; exit 1; }
 command -v aws >/dev/null || { echo "aws CLI is required" >&2; exit 1; }
