@@ -164,6 +164,9 @@ build_systemd_release() {
   install -d -o usstocks -g usstocks -m 0755 "${BUILD_DIR}/data"
   install -m 0644 "${REPO_DIR}/data/universe.csv" "${BUILD_DIR}/data/universe.csv"
   install -m 0755 "${REPO_DIR}/deploy/backup/backup.sh" "${BUILD_DIR}/backup.sh"
+  install -m 0755 \
+    "${REPO_DIR}/deploy/analysis/import-ai-digests.sh" \
+    "${BUILD_DIR}/analysis-import.sh"
   printf '%s\n' "${sha}" > "${BUILD_DIR}/REVISION"
 
   # Runtime processes can read but cannot mutate their own release.

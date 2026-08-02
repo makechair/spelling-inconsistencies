@@ -47,6 +47,16 @@ output "backup_uploader_user_name" {
   value       = aws_iam_user.backup_uploader.name
 }
 
+output "analysis_exchange_s3_uri" {
+  description = "Narrow S3 mailbox used between Lightsail and the local Qwen worker."
+  value       = "s3://${aws_s3_bucket.backup.id}/analysis-exchange"
+}
+
+output "analysis_narrative_worker_user_name" {
+  description = "Create one out-of-band access key for the local Qwen worker."
+  value       = aws_iam_user.analysis_narrative_worker.name
+}
+
 output "alert_topic_arn" {
   description = "SNS topic carrying budget and burst-capacity alerts."
   value       = aws_sns_topic.alerts.arn

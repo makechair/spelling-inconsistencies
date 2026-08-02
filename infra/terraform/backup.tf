@@ -123,13 +123,27 @@ resource "aws_iam_user" "backup_uploader" {
 
 data "aws_iam_policy_document" "backup_uploader" {
   statement {
-    sid       = "PutBackupObjects"
-    effect    = "Allow"
-    actions   = ["s3:PutObject"]
+    sid     = "PutBackupObjects"
+    effect  = "Allow"
+    actions = ["s3:PutObject"]
     resources = [
       "${aws_s3_bucket.backup.arn}/daily/*",
       "${aws_s3_bucket.backup.arn}/corpus/*",
     ]
+  }
+
+  statement {
+    sid       = "PutQwenAnalysisInput"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.backup.arn}/analysis-exchange/input/*"]
+  }
+
+  statement {
+    sid       = "ReadQwenAnalysisOutput"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.backup.arn}/analysis-exchange/output/*"]
   }
 
   statement {
@@ -141,7 +155,11 @@ data "aws_iam_policy_document" "backup_uploader" {
     condition {
       test     = "StringLike"
       variable = "s3:prefix"
-      values   = ["daily/*", "corpus/*"]
+      values = [
+        "daily/*",
+        "corpus/*",
+        "analysis-exchange/output/*",
+      ]
     }
   }
 
@@ -149,14 +167,42 @@ data "aws_iam_policy_document" "backup_uploader" {
   # without copying them into another env file or secret store. No wildcard:
   # this host cannot read the LLM key or any unrelated SSM parameter.
   statement {
-    sid       = "ReadNotionCorpusCredentials"
-    effect    = "Allow"
-    actions   = ["ssm:GetParameter"]
+    sid     = "ReadNotionCorpusCredentials"
+    effect  = "Allow"
+    actions = ["ssm:GetParameter"]
     resources = [
       "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/teiten/notion-token",
       "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/teiten/notion-db-id",
     ]
   }
+}
+
+# The Mac worker cannot read the corpus or backups and cannot delete objects.
+# It sees one compact input mailbox and can write only generated sidecars.
+resource "aws_iam_user" "analysis_narrative_worker" {
+  name = "${var.project_name}-analysis-narrative-${var.environment}"
+}
+
+data "aws_iam_policy_document" "analysis_narrative_worker" {
+  statement {
+    sid       = "ReadLatestAnalysisInput"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.backup.arn}/analysis-exchange/input/latest/report.json"]
+  }
+
+  statement {
+    sid       = "WriteAnalysisDigest"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.backup.arn}/analysis-exchange/output/daily/*/ai_digest.json"]
+  }
+}
+
+resource "aws_iam_user_policy" "analysis_narrative_worker" {
+  name   = "analysis-exchange-only"
+  user   = aws_iam_user.analysis_narrative_worker.name
+  policy = data.aws_iam_policy_document.analysis_narrative_worker.json
 }
 
 resource "aws_iam_user_policy" "backup_uploader" {

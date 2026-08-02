@@ -1,0 +1,24 @@
+[Unit]
+Description=Import local-Qwen analysis narrative sidecars from S3
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=usstocks
+Group=usstocks
+EnvironmentFile=/etc/usstocks/usstocks.env
+ExecStart=/opt/usstocks/current/analysis-import.sh
+
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/usstocks/corpus/analysis
+ProtectHome=true
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0027
+
+MemoryMax=128M
+TimeoutStartSec=180

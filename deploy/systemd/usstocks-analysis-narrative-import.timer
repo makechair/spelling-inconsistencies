@@ -1,0 +1,11 @@
+[Unit]
+Description=Check S3 for local-Qwen analysis narratives
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

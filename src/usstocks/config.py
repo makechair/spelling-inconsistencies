@@ -187,6 +187,9 @@ class Settings(BaseSettings):
     # partitions and uploads a version manifest last as the commit marker.
     analysis_output_dir: Path | None = None
     analysis_s3_uri: str | None = None
+    # Narrow two-way mailbox used by the local Qwen narrative worker.
+    # Defaults to <USSTOCKS_BACKUP_S3_URI>/analysis-exchange.
+    analysis_exchange_s3_uri: str | None = None
     analysis_min_peers: int = Field(default=3, ge=1, le=49)
 
     # ------------------------------------------------------------------- auth

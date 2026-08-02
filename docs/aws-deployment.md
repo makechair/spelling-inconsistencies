@@ -193,6 +193,8 @@ terraform output
 | `open_ports` | SSH のみ開いていることの確認 |
 | `backup_s3_uri` | インスタンスの `USSTOCKS_BACKUP_S3_URI` に設定 |
 | `backup_uploader_user_name` | このユーザーのアクセスキーを作る（次項） |
+| `analysis_exchange_s3_uri` | LightsailとローカルQwen間の専用mailbox |
+| `analysis_narrative_worker_user_name` | Mac用の最小権限IAMユーザー |
 | `github_deploy_role_arn` | GitHub の変数 `AWS_DEPLOY_ROLE_ARN` に設定 |
 
 ## 4. アクセスキーの発行（Terraform 管理外）
@@ -213,6 +215,24 @@ aws iam create-access-key --user-name <user>   # 新しい鍵を作る
 # インスタンスの env を更新し、バックアップを1回走らせて成功を確認してから
 aws iam delete-access-key --user-name <user> --access-key-id <古い鍵>
 ```
+
+### ローカルQwen分析要約の鍵
+
+`analysis_narrative_worker_user_name` のアクセスキーもTerraform stateへは保存しない。
+このユーザーは `analysis-exchange/input/latest/report.json` の読取と、日付別
+`ai_digest.json` の書込だけが可能で、バックアップ・corpusの読取や削除はできない。
+
+```bash
+aws iam create-access-key \
+  --user-name "$(terraform output -raw analysis_narrative_worker_user_name)"
+aws configure --profile usstocks-qwen
+./scripts/install_analysis_narrative_launchd.sh \
+  "$(terraform output -raw analysis_exchange_s3_uri)"
+```
+
+launchdは日次分析の完了後、14:45 JSTにQwen3 14Bを一度だけ実行する。同じ
+`report.json` はSHA-256で判定して再処理しない。生成物は専用output prefixへ返り、
+Lightsailの15分タイマーが日次レポートへ取り込む。
 
 ## 5. インスタンスの初期設定
 

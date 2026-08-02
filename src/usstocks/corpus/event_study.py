@@ -83,6 +83,18 @@ def analysis_s3_root(settings: Settings) -> str:
     return explicit or f"{corpus_s3_root(settings)}/analysis"
 
 
+def analysis_exchange_s3_root(settings: Settings) -> str:
+    explicit = (settings.analysis_exchange_s3_uri or "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    backup = (settings.backup_s3_uri or "").strip().rstrip("/")
+    if not backup:
+        raise CorpusError(
+            "set USSTOCKS_ANALYSIS_EXCHANGE_S3_URI or USSTOCKS_BACKUP_S3_URI"
+        )
+    return f"{backup}/analysis-exchange"
+
+
 def classify_event_time(
     published_at: str | None,
     event_date: date,
@@ -1641,6 +1653,7 @@ def run(
     state = _load_analysis_state(state_path)
     if upload:
         s3_root = analysis_s3_root(settings)
+        exchange_root = analysis_exchange_s3_root(settings)
         report_key = report_date.isoformat()
         previous_daily = state["daily"].get(report_key, {})
         for name in (*OUTPUT_NAMES, "manifest.json"):
@@ -1656,6 +1669,14 @@ def run(
             uploader(latest_paths[name], f"{s3_root}/latest/{name}")
             changed.append(f"latest/{name}")
 
+        # The local model receives only the compact deterministic JSON, never
+        # the Parquet corpus or backup database. A fixed input key also avoids
+        # granting its IAM user permission to enumerate the corpus prefix.
+        report_digest = all_digests["report.json"]
+        if state.get("exchange_digest") != report_digest:
+            uploader(paths["report.json"], f"{exchange_root}/input/latest/report.json")
+            changed.append("exchange/input/latest/report.json")
+
         if state.get("index_digest") != index_digest:
             uploader(index_path, f"{s3_root}/index.json")
             changed.append("index.json")
@@ -1665,6 +1686,7 @@ def run(
             {
                 "latest": all_digests,
                 "index_digest": index_digest,
+                "exchange_digest": report_digest,
                 "last_success_utc": run_at.isoformat(),
                 "matched_events": metadata["matched_events"],
                 "unmatched_events": metadata["unmatched_events"],

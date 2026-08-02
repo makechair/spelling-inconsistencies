@@ -344,6 +344,10 @@ def test_event_study_writes_returns_summary_unmatched_and_reports(tmp_path: Path
         for path in destinations
     )
     assert any(path.endswith("/analysis/latest/manifest.json") for path in destinations)
+    assert any(
+        path.endswith("/analysis-exchange/input/latest/report.json")
+        for path in destinations
+    )
     assert destinations[-1].endswith("/analysis/index.json")
 
     upload_count = len(uploads)
