@@ -3,24 +3,14 @@
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
-from ...config import Settings
 from ...db.repository import Repository
-from ..deps import get_repository, get_settings_dep
+from ..deps import get_repository
 from ..schemas import CoverageOut
 
 router = APIRouter(prefix="/api/coverage", tags=["coverage"])
-
-
-def _daily_dates(path: Path) -> set[date]:
-    """Read only the date column; daily files are small and updated in place."""
-    import pyarrow.parquet as pq
-
-    table = pq.read_table(path, columns=["date"])
-    return {value for value in table.column("date").to_pylist() if value is not None}
 
 
 def _continuous_range(dates: set[date], *, max_gap_days: int = 10) -> tuple[date, date]:
@@ -39,7 +29,13 @@ def _continuous_range(dates: set[date], *, max_gap_days: int = 10) -> tuple[date
     return ordered[start_index], ordered[-1]
 
 
-def build_coverage(repository: Repository, corpus_root: Path) -> list[CoverageOut]:
+def build_coverage(repository: Repository) -> list[CoverageOut]:
+    """Summarize only continuously accumulated minute bars.
+
+    The daily corpus is provider history downloaded for analysis and can begin
+    decades before this app existed. Mixing it here made a three-month live
+    accumulation look like it had been running since 1990.
+    """
     date_sets = repository.bar_coverage_dates()
     counts: dict[str, dict[str, int]] = {
         symbol: {"minute_bars": len(dates), "daily_bars": 0}
@@ -50,16 +46,6 @@ def build_coverage(repository: Repository, corpus_root: Path) -> list[CoverageOu
         counts.setdefault(symbol, {"minute_bars": 0, "daily_bars": 0})[
             "minute_bars"
         ] = int(row["bar_count"])
-
-    for path in sorted((corpus_root / "daily").glob("symbol=*/part.parquet")):
-        symbol = path.parent.name.removeprefix("symbol=").upper()
-        daily_dates = _daily_dates(path)
-        if not daily_dates:
-            continue
-        date_sets.setdefault(symbol, set()).update(daily_dates)
-        counts.setdefault(symbol, {"minute_bars": 0, "daily_bars": 0})[
-            "daily_bars"
-        ] = len(daily_dates)
 
     items = []
     for symbol, dates in date_sets.items():
@@ -83,6 +69,5 @@ def build_coverage(repository: Repository, corpus_root: Path) -> list[CoverageOu
 @router.get("", response_model=list[CoverageOut])
 def coverage(
     repository: Repository = Depends(get_repository),
-    settings: Settings = Depends(get_settings_dep),
 ) -> list[CoverageOut]:
-    return build_coverage(repository, settings.corpus_local_dir)
+    return build_coverage(repository)

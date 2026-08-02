@@ -93,7 +93,9 @@ def test_bars_endpoint(client: TestClient, settings: Settings):
     assert first["session"] == "regular"
 
 
-def test_coverage_combines_daily_and_minute_ranges(client: TestClient, settings: Settings):
+def test_coverage_reports_automatically_accumulated_minute_range(
+    client: TestClient, settings: Settings
+):
     daily_path = settings.corpus_local_dir / "daily" / "symbol=AAPL" / "part.parquet"
     rows = []
     for offset in (20, 10):
@@ -111,9 +113,9 @@ def test_coverage_combines_daily_and_minute_ranges(client: TestClient, settings:
     payload = client.get("/api/coverage").json()
     assert payload == [{
         "symbol": "AAPL",
-        "first_date": (BASE - timedelta(days=20)).date().isoformat(),
+        "first_date": BASE.date().isoformat(),
         "last_date": BASE.date().isoformat(),
-        "daily_bars": 2,
+        "daily_bars": 0,
         "minute_bars": 2,
     }]
 
@@ -124,12 +126,11 @@ def test_coverage_page_is_served(client: TestClient):
     assert "データ蓄積状況" in response.text
 
 
-def test_coverage_ignores_an_old_island_before_a_large_gap(
+def test_coverage_ignores_analysis_only_daily_history(
     client: TestClient, settings: Settings
 ):
     daily_path = settings.corpus_local_dir / "daily" / "symbol=AMD" / "part.parquet"
-    dates = [BASE.date() - timedelta(days=90), BASE.date() - timedelta(days=89)]
-    dates.append(BASE.date().replace(year=1990))
+    dates = [BASE.date().replace(year=1990), BASE.date()]
     rows = [{
         "symbol": "AMD", "date": day, "open": 90.0, "high": 92.0,
         "low": 89.0, "close": 91.0, "volume": 1000, "adjOpen": 90.0,
@@ -138,10 +139,7 @@ def test_coverage_ignores_an_old_island_before_a_large_gap(
     } for day in dates]
     write_daily_parquet(daily_path, rows)
 
-    payload = client.get("/api/coverage").json()
-    amd = next(item for item in payload if item["symbol"] == "AMD")
-    assert amd["first_date"] == dates[0].isoformat()
-    assert amd["last_date"] == dates[1].isoformat()
+    assert client.get("/api/coverage").json() == []
 
 
 def test_truncated_bars_keep_the_newest_edge(settings: Settings):
