@@ -36,6 +36,7 @@ usstocks-migrate = "usstocks.db.migrate:main"
 usstocks-corpus-daily = "usstocks.corpus.daily:main"
 usstocks-corpus-news = "usstocks.corpus.news:main"
 usstocks-event-study = "usstocks.corpus.event_study:main"
+usstocks-analysis-narrative = "usstocks.corpus.narrative:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

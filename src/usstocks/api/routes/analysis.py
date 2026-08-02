@@ -58,13 +58,19 @@ def latest_report(settings: Settings = Depends(get_settings_dep)) -> dict[str, A
 
 
 def _report_for_date(report_date: date, settings: Settings) -> dict[str, Any]:
-    path = (
+    report_dir = (
         _analysis_root(settings)
         / "daily"
         / f"date={report_date.isoformat()}"
-        / "report.json"
     )
-    return _read_object(path)
+    report = _read_object(report_dir / "report.json")
+    digest_path = report_dir / "ai_digest.json"
+    if digest_path.exists():
+        digest = _read_object(digest_path)
+        # A stale sidecar must never be attached to a newly regenerated day.
+        if digest.get("report_date") == report.get("report_date"):
+            report["ai_digest"] = digest
+    return report
 
 
 @router.get("/reports/{report_date}")

@@ -10,7 +10,7 @@
  *   gap, which is the honest rendering: the spec forbids inventing movement.
  */
 
-import { formatDate, formatTime, onChange } from './timezone.js';
+import { formatDate, formatDateWithYear, formatTime, onChange } from './timezone.js';
 import { sma } from './indicators.js';
 import { save, view } from './viewstate.js';
 
@@ -42,9 +42,10 @@ const MOVING_AVERAGES = [
 ];
 
 export class PriceChart {
-  constructor(container, { persistView = true } = {}) {
+  constructor(container, { persistView = true, showYear = false } = {}) {
     this.container = container;
     this.persistView = persistView;
+    this.showYear = showYear;
     this.chart = LightweightCharts.createChart(container, this.#options());
     this.candles = this.chart.addCandlestickSeries({
       upColor: UP,
@@ -225,13 +226,14 @@ export class PriceChart {
         // intraday chart renders as the same date.
         tickMarkFormatter: (time, tickMarkType) =>
           tickMarkType <= LightweightCharts.TickMarkType.DayOfMonth
-            ? formatDate(time)
+            ? (this.showYear ? formatDateWithYear(time) : formatDate(time))
             : formatTime(time),
       },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       localization: {
         locale: navigator.language || 'en-US',
-        timeFormatter: (time) => `${formatDate(time)} ${formatTime(time)}`,
+        timeFormatter: (time) =>
+          `${this.showYear ? formatDateWithYear(time) : formatDate(time)} ${formatTime(time)}`,
       },
     };
   }

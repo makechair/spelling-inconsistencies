@@ -85,7 +85,10 @@ const el = {
 const charts = new Map(
   PERIODS.map(({ days }) => [
     days,
-    new PriceChart(document.getElementById(`chart-${days}`), { persistView: false }),
+    new PriceChart(document.getElementById(`chart-${days}`), {
+      persistView: false,
+      showYear: days >= 365,
+    }),
   ]),
 );
 const chartPanels = new Map(

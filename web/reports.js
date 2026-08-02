@@ -6,6 +6,7 @@ const elements = {
   comparisonWrap: document.querySelector("#comparison-table-wrap"),
   comparisonEmpty: document.querySelector("#comparison-empty"),
   findings: document.querySelector("#report-findings"),
+  narrativeSource: document.querySelector("#report-narrative-source"),
   focusSymbol: document.querySelector("#focus-symbol"),
   focusSummary: document.querySelector("#focus-summary"),
   focusBody: document.querySelector("#focus-body"),
@@ -95,6 +96,40 @@ function overallRows(summary) {
 
 function renderObservation(report) {
   elements.findings.replaceChildren();
+  const digest = report.ai_digest;
+  if (digest?.points?.length) {
+    elements.narrativeSource.textContent = `Qwen整理版 · ${digest.model || "ローカルモデル"}`;
+    if (digest.overview) {
+      const overview = document.createElement("p");
+      overview.className = "report-narrative-overview";
+      overview.textContent = digest.overview;
+      elements.findings.append(overview);
+    }
+    digest.points.forEach((point) => {
+      const article = document.createElement("article");
+      article.className = "report-finding context";
+      const heading = document.createElement("strong");
+      heading.textContent = point.title;
+      const body = document.createElement("p");
+      body.textContent = point.interpretation;
+      article.append(heading, body);
+      (point.evidence || []).forEach((evidence) => {
+        const detail = document.createElement("small");
+        detail.className = "report-narrative-evidence";
+        detail.textContent = `根拠 ${evidence.id}: ${evidence.text}`;
+        article.append(detail);
+      });
+      elements.findings.append(article);
+    });
+    if (digest.caution) {
+      const caution = document.createElement("p");
+      caution.className = "report-narrative-caution";
+      caution.textContent = `注意: ${digest.caution}`;
+      elements.findings.append(caution);
+    }
+    return;
+  }
+  elements.narrativeSource.textContent = "確定指標による自動整理";
   if (report.findings?.length) {
     report.findings.forEach((finding) => {
       const article = document.createElement("article");

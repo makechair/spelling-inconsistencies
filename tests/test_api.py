@@ -535,6 +535,15 @@ def test_analysis_report_page_and_json_archive(settings: Settings, tmp_path: Pat
         "summary": [],
     }
     (report_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    digest = {
+        "version": 1,
+        "report_date": "2026-07-31",
+        "model": "qwen3:14b",
+        "overview": "概況",
+        "points": [],
+        "caution": "注意",
+    }
+    (report_dir / "ai_digest.json").write_text(json.dumps(digest), encoding="utf-8")
     index = {
         "version": 1,
         "latest_report_date": "2026-07-31",
@@ -565,6 +574,7 @@ def test_analysis_report_page_and_json_archive(settings: Settings, tmp_path: Pat
         latest = test_client.get("/api/analysis/reports/latest")
         assert latest.status_code == 200
         assert latest.json()["counts"]["matched_events"] == 4
+        assert latest.json()["ai_digest"]["model"] == "qwen3:14b"
 
         dated = test_client.get("/api/analysis/reports/2026-07-31")
         assert dated.status_code == 200

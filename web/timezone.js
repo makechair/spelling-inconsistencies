@@ -99,3 +99,9 @@ export function formatDate(value) {
   const date = value instanceof Date ? value : new Date(value * 1000);
   return formatter({ day: '2-digit', month: 'short' }).format(date);
 }
+
+/** DD MMM YYYY for long-range axes where the year is otherwise ambiguous. */
+export function formatDateWithYear(value) {
+  const date = value instanceof Date ? value : new Date(value * 1000);
+  return formatter({ day: '2-digit', month: 'short', year: 'numeric' }).format(date);
+}

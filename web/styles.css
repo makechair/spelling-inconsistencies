@@ -524,6 +524,16 @@ body {
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--panel)), var(--panel));
 }
 .report-observation h2 { margin: 0; }
+.report-narrative-source { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
+.report-narrative-overview { margin: 0; font-size: 16px; font-weight: 650; line-height: 1.65; }
+.report-narrative-evidence {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.report-narrative-caution { margin: 0; color: var(--warn); font-size: 13px; line-height: 1.6; }
 .report-observation > p { margin: 0; font-size: 15px; line-height: 1.75; }
 .report-findings { display: grid; gap: 12px; }
 .report-finding {
