@@ -67,8 +67,8 @@
       <button type="button" id="grid-view-button" class="grid-view-button" hidden>4分割</button>
       <button type="button" data-days="1">1D</button>
       <button type="button" data-days="7">7D</button>
-      <button type="button" data-days="30">1M</button>
-      <button type="button" data-days="365">1Y</button>
+      <button type="button" data-days="365">1M</button>
+      <button type="button" data-days="3650">1Y</button>
       <label class="toggle">
         <input type="checkbox" id="extended-toggle" checked>
         時間外を含む
@@ -99,23 +99,23 @@
         </button>
         <div id="chart-7" class="chart chart-compact"></div>
       </article>
-      <article class="chart-panel" data-chart-days="30">
-        <button type="button" class="chart-panel-header" data-expand-days="30"
-                aria-label="1Mチャートを拡大表示">
-          <span class="chart-period">1M</span>
-          <span class="chart-summary" id="chart-summary-30"></span>
-          <span class="chart-expand-hint" aria-hidden="true">拡大</span>
-        </button>
-        <div id="chart-30" class="chart chart-compact"></div>
-      </article>
       <article class="chart-panel" data-chart-days="365">
         <button type="button" class="chart-panel-header" data-expand-days="365"
-                aria-label="1Yチャートを拡大表示">
-          <span class="chart-period">1Y</span>
+                aria-label="1Mチャートを拡大表示">
+          <span class="chart-period">1M</span>
           <span class="chart-summary" id="chart-summary-365"></span>
           <span class="chart-expand-hint" aria-hidden="true">拡大</span>
         </button>
         <div id="chart-365" class="chart chart-compact"></div>
+      </article>
+      <article class="chart-panel" data-chart-days="3650">
+        <button type="button" class="chart-panel-header" data-expand-days="3650"
+                aria-label="1Yチャートを拡大表示">
+          <span class="chart-period">1Y</span>
+          <span class="chart-summary" id="chart-summary-3650"></span>
+          <span class="chart-expand-hint" aria-hidden="true">拡大</span>
+        </button>
+        <div id="chart-3650" class="chart chart-compact"></div>
       </article>
     </div>
     <p class="chart-note" id="chart-note"></p>

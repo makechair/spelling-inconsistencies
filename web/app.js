@@ -20,11 +20,12 @@ import { save as saveView, view } from './viewstate.js';
 const PERIODS = [
   { days: 1, label: '1D', interval: '1m', intervalLabel: '1分足' },
   { days: 7, label: '7D', interval: '15m', intervalLabel: '15分足' },
-  { days: 30, label: '1M', interval: '1d', intervalLabel: '日足' },
-  { days: 365, label: '1Y', interval: '1w', intervalLabel: '週足' },
+  { days: 365, label: '1M', interval: '1d', intervalLabel: '日足' },
+  { days: 3650, label: '1Y', interval: '1w', intervalLabel: '週足' },
 ];
 const PERIOD_DAYS = new Set(PERIODS.map(({ days }) => days));
 const MAX_PERIOD_DAYS = PERIODS.at(-1).days;
+const API_MAX_DAYS = 3650;
 const rememberedDays = Number(view().days);
 const requestedSymbol = (new URLSearchParams(window.location.search).get('symbol') || '')
   .trim().toUpperCase();
@@ -316,7 +317,7 @@ async function loadBars({ quiet = false } = {}) {
     const loaded = await Promise.all(PERIODS.map(async (period) => [
       period.days,
       await api(
-        `/api/bars/${symbol}?days=${period.days + 7}` +
+        `/api/bars/${symbol}?days=${Math.min(period.days + 7, API_MAX_DAYS)}` +
         `&interval=${period.interval}&session=${session}`,
       ),
     ]));
