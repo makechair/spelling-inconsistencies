@@ -303,6 +303,22 @@ class Repository:
         )
         return [dict(row) for row in rows]
 
+    def bar_coverage_dates(self) -> dict[str, set[date]]:
+        """Market dates with at least one minute bar, grouped by ticker."""
+        grouped: dict[str, set[date]] = {}
+        rows = self.connection.execute(
+            """
+            SELECT DISTINCT symbol, date(timestamp_utc, '-5 hours') AS market_date
+            FROM bars_1m
+            ORDER BY symbol, market_date
+            """
+        )
+        for row in rows:
+            grouped.setdefault(str(row["symbol"]), set()).add(
+                date.fromisoformat(str(row["market_date"]))
+            )
+        return grouped
+
     def iter_bars(
         self,
         symbols: Sequence[str],

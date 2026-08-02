@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -15,48 +15,65 @@ from ..schemas import CoverageOut
 router = APIRouter(prefix="/api/coverage", tags=["coverage"])
 
 
-def _daily_range(path: Path) -> tuple[date, date, int] | None:
+def _daily_dates(path: Path) -> set[date]:
     """Read only the date column; daily files are small and updated in place."""
     import pyarrow.parquet as pq
 
     table = pq.read_table(path, columns=["date"])
-    dates = [value for value in table.column("date").to_pylist() if value is not None]
-    if not dates:
-        return None
-    return min(dates), max(dates), len(set(dates))
+    return {value for value in table.column("date").to_pylist() if value is not None}
+
+
+def _continuous_range(dates: set[date], *, max_gap_days: int = 10) -> tuple[date, date]:
+    """Latest dense range, excluding stale islands separated by a large gap.
+
+    Weekends, exchange holidays and short exceptional closures fit inside ten
+    calendar days. A larger gap means the older data cannot form a continuous
+    chart with the latest accumulation and must not widen the displayed range.
+    """
+    ordered = sorted(dates)
+    start_index = 0
+    for index in range(len(ordered) - 1, 0, -1):
+        if (ordered[index] - ordered[index - 1]).days > max_gap_days:
+            start_index = index
+            break
+    return ordered[start_index], ordered[-1]
 
 
 def build_coverage(repository: Repository, corpus_root: Path) -> list[CoverageOut]:
-    combined: dict[str, dict[str, object]] = {}
+    date_sets = repository.bar_coverage_dates()
+    counts: dict[str, dict[str, int]] = {
+        symbol: {"minute_bars": len(dates), "daily_bars": 0}
+        for symbol, dates in date_sets.items()
+    }
     for row in repository.bar_coverage():
         symbol = str(row["symbol"])
-        first = datetime.fromisoformat(str(row["first_timestamp"])).date()
-        last = datetime.fromisoformat(str(row["last_timestamp"])).date()
-        combined[symbol] = {
-            "first_date": first,
-            "last_date": last,
-            "minute_bars": int(row["bar_count"]),
-            "daily_bars": 0,
-        }
+        counts.setdefault(symbol, {"minute_bars": 0, "daily_bars": 0})[
+            "minute_bars"
+        ] = int(row["bar_count"])
 
     for path in sorted((corpus_root / "daily").glob("symbol=*/part.parquet")):
         symbol = path.parent.name.removeprefix("symbol=").upper()
-        daily = _daily_range(path)
-        if daily is None:
+        daily_dates = _daily_dates(path)
+        if not daily_dates:
             continue
-        first, last, count = daily
-        entry = combined.setdefault(
-            symbol,
-            {"first_date": first, "last_date": last, "minute_bars": 0, "daily_bars": 0},
-        )
-        entry["first_date"] = min(first, entry["first_date"])  # type: ignore[type-var]
-        entry["last_date"] = max(last, entry["last_date"])  # type: ignore[type-var]
-        entry["daily_bars"] = count
+        date_sets.setdefault(symbol, set()).update(daily_dates)
+        counts.setdefault(symbol, {"minute_bars": 0, "daily_bars": 0})[
+            "daily_bars"
+        ] = len(daily_dates)
 
-    items = [
-        CoverageOut(symbol=symbol, **values)  # type: ignore[arg-type]
-        for symbol, values in combined.items()
-    ]
+    items = []
+    for symbol, dates in date_sets.items():
+        if not dates:
+            continue
+        first, last = _continuous_range(dates)
+        items.append(
+            CoverageOut(
+                symbol=symbol,
+                first_date=first,
+                last_date=last,
+                **counts[symbol],
+            )
+        )
     return sorted(
         items,
         key=lambda item: (-(item.last_date - item.first_date).days, item.symbol),

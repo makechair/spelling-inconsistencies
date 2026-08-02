@@ -47,4 +47,5 @@ def settings(tmp_path: Path, db_path: Path, live_path: Path) -> Settings:
         api_host="127.0.0.1",
         primary_source="mock",
         web_dir=Path(__file__).resolve().parents[1] / "web",
+        corpus_local_dir=tmp_path / "corpus",
     )

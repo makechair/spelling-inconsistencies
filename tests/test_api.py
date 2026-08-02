@@ -124,6 +124,26 @@ def test_coverage_page_is_served(client: TestClient):
     assert "データ蓄積状況" in response.text
 
 
+def test_coverage_ignores_an_old_island_before_a_large_gap(
+    client: TestClient, settings: Settings
+):
+    daily_path = settings.corpus_local_dir / "daily" / "symbol=AMD" / "part.parquet"
+    dates = [BASE.date() - timedelta(days=90), BASE.date() - timedelta(days=89)]
+    dates.append(BASE.date().replace(year=1990))
+    rows = [{
+        "symbol": "AMD", "date": day, "open": 90.0, "high": 92.0,
+        "low": 89.0, "close": 91.0, "volume": 1000, "adjOpen": 90.0,
+        "adjHigh": 92.0, "adjLow": 89.0, "adjClose": 91.0,
+        "adjVolume": 1000.0, "divCash": 0.0, "splitFactor": 1.0,
+    } for day in dates]
+    write_daily_parquet(daily_path, rows)
+
+    payload = client.get("/api/coverage").json()
+    amd = next(item for item in payload if item["symbol"] == "AMD")
+    assert amd["first_date"] == dates[0].isoformat()
+    assert amd["last_date"] == dates[1].isoformat()
+
+
 def test_truncated_bars_keep_the_newest_edge(settings: Settings):
     limited = settings.model_copy(update={"max_bars_per_request": 3})
     with Repository(limited.db_path) as repo:
