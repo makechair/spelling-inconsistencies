@@ -101,6 +101,15 @@ def news_s3_root(settings: Settings) -> str:
     return explicit or f"{corpus_s3_root(settings)}/news"
 
 
+def news_rejected_s3_root(settings: Settings) -> str:
+    """Sibling of the news prefix, so the existing corpus/* IAM grant covers it.
+
+    Kept out of news/ itself: everything under that prefix is a date partition
+    the event study reads, and a rejects file there would join the analysis.
+    """
+    return f"{news_s3_root(settings)}_rejected"
+
+
 def fetch_pages(
     client: httpx.Client,
     settings: Settings,
@@ -302,6 +311,33 @@ def _schema() -> Any:
     )
 
 
+def _rejected_schema() -> Any:
+    pa, _ = _parquet_modules()
+    return pa.schema(
+        [
+            ("page_id", pa.string()),
+            ("notion_url", pa.string()),
+            ("reason", pa.string()),
+            ("detected_at", pa.string()),
+        ]
+    )
+
+
+def write_rejected(path: Path, rows: Sequence[dict[str, object]]) -> str:
+    pa, pq = _parquet_modules()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    ordered = sorted(rows, key=lambda row: str(row["page_id"]))
+    pq.write_table(
+        pa.Table.from_pylist(ordered, schema=_rejected_schema()),
+        temporary,
+        compression="zstd",
+    )
+    digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
+    temporary.replace(path)
+    return digest
+
+
 def write_partition(path: Path, rows: Sequence[dict[str, object]]) -> str:
     pa, pq = _parquet_modules()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -345,7 +381,34 @@ def run(
         if own_client:
             http_client.close()
 
-    normalized = [normalize_page(page) for page in pages]
+    # One page with an out-of-enum value used to take the whole day down with
+    # it. Isolating the offenders keeps the intent -- nothing malformed reaches
+    # the analysis data -- without letting a single stray page hide the other
+    # four hundred. A majority failing is different in kind: that is a schema
+    # change or a bad deploy, and continuing would quietly gut the corpus.
+    normalized: list[dict[str, object]] = []
+    rejected: list[dict[str, object]] = []
+    detected_at = datetime.now(tz=UTC).isoformat()
+    for page in pages:
+        try:
+            normalized.append(normalize_page(page))
+        except CorpusError as exc:
+            rejected.append(
+                {
+                    "page_id": str(page.get("id", "<unknown>")),
+                    "notion_url": str(page.get("url", "")),
+                    "reason": str(exc),
+                    "detected_at": detected_at,
+                }
+            )
+    if rejected and len(rejected) > len(normalized):
+        raise CorpusError(
+            f"{len(rejected)} of {len(pages)} Notion pages failed validation; "
+            "refusing to rewrite the corpus from the minority that passed"
+        )
+    for row in rejected:
+        log.error("rejected %s %s: %s", row["page_id"], row["notion_url"], row["reason"])
+
     if len({str(row["page_id"]) for row in normalized}) != len(normalized):
         raise CorpusError("Notion response contains duplicate page ids")
     by_date: dict[str, list[dict[str, object]]] = {}
@@ -369,12 +432,23 @@ def run(
         state["last_success_utc"] = datetime.now(tz=UTC).isoformat()
         save_state(state_path, state)
         changed += 1
+    # Written every run, including when it goes back to empty, so the object
+    # states what is wrong now rather than accumulating pages already fixed.
+    rejected_path = local_root / "news_rejected" / "part.parquet"
+    rejected_digest = write_rejected(rejected_path, rejected)
+    if state.get("rejected_digest") != rejected_digest:
+        uploader(rejected_path, f"{news_rejected_s3_root(settings)}/part.parquet")
+        state["rejected_digest"] = rejected_digest
+        changed += 1
+
     state["page_count"] = len(normalized)
+    state["rejected_count"] = len(rejected)
     state["last_success_utc"] = datetime.now(tz=UTC).isoformat()
     save_state(state_path, state)
     log.info(
-        "news corpus sync complete: %d page(s), %d partition(s), %d uploaded",
+        "news corpus sync complete: %d page(s), %d rejected, %d partition(s), %d uploaded",
         len(normalized),
+        len(rejected),
         len(by_date),
         changed,
     )

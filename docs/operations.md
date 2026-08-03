@@ -207,8 +207,25 @@ git -C /opt/usstocks/app rev-parse --short HEAD
 | `event_type:` / `sentiment:` の分布 | `other`／`neutral`偏重なら、モデルが必須項目を埋めているだけで分類できていない |
 | `tickers outside universe.csv` | 形式は正しいがユニバース外。取り込まれても価格系列と結合されない（`GOOG`と`GOOGL`など） |
 
-teiten側がQwen3 13Bの出力をNotionへ書く前に正規化するようになっているため、
+teiten側がQwen出力をNotionへ書く前に正規化するようになっているため、
 ここが0件で安定しているのが正常。増えた場合はteiten側の正規化を疑う。
+
+#### 規約外ページの隔離
+
+定期実行は規約外ページを`corpus/news_rejected/part.parquet`へ退避し、
+残りを取り込む。**毎回書き直す**ので、このオブジェクトは「今おかしいページ」
+だけを示す（直したページは自動的に消える）。日付partitionと同じ
+`corpus/*`配下なのでIAMの追加は不要。
+
+```sql
+-- 何が落ちているか
+SELECT page_id, notion_url, reason FROM 's3://<bucket>/corpus/news_rejected/part.parquet';
+```
+
+ただし**過半数が規約外なら中断する**。それはページ単位の事故ではなく
+schema変更や誤デプロイであり、通ったページだけでpartitionを書き直すと
+残りが消えるため。ログは
+`news corpus sync complete: N page(s), M rejected, ...`。
 
 ### Notionイベントスタディ
 

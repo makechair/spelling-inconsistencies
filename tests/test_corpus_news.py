@@ -176,10 +176,15 @@ def test_run_uploads_only_changed_date_partitions(tmp_path: Path):
         assert run(settings, uploader=uploader, client=client) == 0
         assert run(settings, uploader=uploader, client=client) == 0
 
-    assert [destination for _, destination in uploads] == [
+    destinations = [destination for _, destination in uploads]
+    assert [d for d in destinations if "/news/date=" in d] == [
         "s3://example-bucket/corpus/news/date=2026-07-30/part.parquet",
         "s3://example-bucket/corpus/news/date=2026-07-31/part.parquet",
     ]
+    # Always present, even with nothing to report, so a reader never has to
+    # tell "no rejects" apart from "object missing". Uploaded once: the second
+    # run leaves the digest unchanged.
+    assert destinations.count("s3://example-bucket/corpus/news_rejected/part.parquet") == 1
     partition = tmp_path / "corpus" / "news" / "date=2026-07-30" / "part.parquet"
     rows = read_parquet_rows(partition)
     assert len(rows) == 1
@@ -199,8 +204,9 @@ def test_archived_last_page_rewrites_partition_as_empty(tmp_path: Path):
         run(settings, uploader=lambda p, d: uploads.append((p, d)), client=client)
         run(settings, uploader=lambda p, d: uploads.append((p, d)), client=client)
 
-    assert len(uploads) == 2
-    assert read_parquet_rows(uploads[-1][0]) == []
+    partitions = [(path, dest) for path, dest in uploads if "/news/date=" in dest]
+    assert len(partitions) == 2
+    assert read_parquet_rows(partitions[-1][0]) == []
 
 
 def test_check_reports_every_bad_page_instead_of_stopping_at_the_first(
@@ -272,3 +278,61 @@ def test_check_still_validates_when_the_universe_file_is_absent(tmp_path: Path, 
     assert exit_code == 1
     assert "invalid Sentiment" in caplog.text
     assert "skipping the out-of-universe ticker report" in caplog.text
+
+
+def test_run_isolates_bad_pages_instead_of_losing_the_whole_day(tmp_path: Path):
+    """Production hit exactly this: one legacy page with ticker 'SK HYNIX'
+    blocked 417 good ones for days."""
+    settings = make_settings(tmp_path)
+    good_a = notion_page("page-1", "2026-07-30")
+    good_b = notion_page("page-2", "2026-07-31")
+    bad = notion_page("page-3", "2026-07-30")
+    bad["properties"]["Tickers"] = {"multi_select": [{"name": "SK HYNIX"}]}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"results": [good_a, bad, good_b], "has_more": False}
+        )
+
+    uploads: list[tuple[Path, str]] = []
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert run(settings, uploader=lambda p, d: uploads.append((p, d)), client=client) == 0
+
+    destinations = [destination for _, destination in uploads]
+    assert "s3://example-bucket/corpus/news/date=2026-07-30/part.parquet" in destinations
+    assert "s3://example-bucket/corpus/news/date=2026-07-31/part.parquet" in destinations
+    assert "s3://example-bucket/corpus/news_rejected/part.parquet" in destinations
+
+    kept = read_parquet_rows(tmp_path / "corpus" / "news" / "date=2026-07-30" / "part.parquet")
+    assert [row["page_id"] for row in kept] == ["page-1"]
+
+    rejects = read_parquet_rows(tmp_path / "corpus" / "news_rejected" / "part.parquet")
+    assert len(rejects) == 1
+    assert rejects[0]["page_id"] == "page-3"
+    assert "invalid ticker 'SK HYNIX'" in rejects[0]["reason"]
+    assert rejects[0]["notion_url"] == "https://notion.so/page-3"
+
+
+def test_run_refuses_to_rebuild_the_corpus_when_most_pages_fail(tmp_path: Path):
+    """A majority failing is a schema change, not stray pages. Ingesting the
+    survivors would silently delete everything else from the partitions."""
+    settings = make_settings(tmp_path)
+    pages = []
+    for index in range(3):
+        page = notion_page(f"bad-{index}", "2026-07-30")
+        page["properties"]["EventType"] = {"select": {"name": "決算"}}
+        pages.append(page)
+    pages.append(notion_page("good-1", "2026-07-30"))
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": pages, "has_more": False})
+
+    uploads: list[tuple[Path, str]] = []
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        try:
+            run(settings, uploader=lambda p, d: uploads.append((p, d)), client=client)
+        except CorpusError as exc:
+            assert "refusing to rewrite the corpus" in str(exc)
+        else:
+            raise AssertionError("a majority of bad pages must stop the sync")
+    assert uploads == []
