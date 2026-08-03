@@ -232,12 +232,19 @@ teiten は 2026-08-03 時点で **Haiku 4.5 をやめ、ローカル Qwen3 13B**
    残りを取り込む。件数と理由を記録すれば「schema driftを黙って混ぜない」
    という当初の意図は保てる。**未着手**
 
-**検証手段は用意済み（2026-08-03）**: `usstocks-corpus-news --check` が
+**検証手段は用意済み（2026-08-03）**: `python -m usstocks.corpus.news --check` が
 全ページを同じ検証にかけ、止まらずに落ちる分を列挙する。Parquetを書かず
-S3も触らないので本番で安全に実行できる。手順は
-`docs/operations.md`「取り込みが止まったとき（`--check`）」。
-**teiten側の修正が効いたかは、この`--check`を本番で1回流せば確定する**
-（この開発コンテナからはNotion認証情報もAWSも無く検証できない）。
+S3も触らないので本番で安全に実行できる。**実行コマンドは
+`docs/operations.md`「取り込みが止まったとき（`--check`）」を見ること**
+（`/etc/usstocks/usstocks.env` の読み込みが要る。console script
+`usstocks-corpus-news` は systemd unit が使っておらず、`current/venv/bin` に
+存在しない場合がある）。
+
+**teiten側の修正（`73a79fc`）はコードを読んで検証済み・正しい**が、
+**既存ページは直らない**。corpus は毎回全ページを取得するため、Qwen移行後・
+この修正前に書かれたページに規約外の値が残っていれば同期は今も止まる。
+`--check` を1回流せば確定する（開発コンテナからはNotion認証情報もAWSも
+無いため検証できない）。
 
 **Phase 3 の matched 件数が伸びない場合、日足corpusの段階投入の途中だと
 決めつける前に、この経路が落ちていないか先に確認する**

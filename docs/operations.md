@@ -178,8 +178,22 @@ credentialは`/teiten/notion-token`と`/teiten/notion-db-id`をSSMから復号�
 どのページが何件おかしいのかを知るには`--check`を使う。**Parquetを書かず、
 S3も触らない**ので本番でそのまま実行してよい。
 
+`usstocks-news-corpus.service` と同じ起動方法（`python -m`）に、credentialを
+渡すため`/etc/usstocks/usstocks.env`を読み込んで実行する。
+
 ```bash
-sudo -u usstocks /opt/usstocks/current/venv/bin/usstocks-corpus-news --check
+sudo bash -c 'set -a; . /etc/usstocks/usstocks.env; set +a; \
+  USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus \
+  runuser -u usstocks -- /opt/usstocks/current/venv/bin/python \
+    -m usstocks.corpus.news --check'
+```
+
+事前に、その revision が配備済みであることを確認する（pull agentは
+`main`へのpushを検知して更新する）。
+
+```bash
+readlink -f /opt/usstocks/current
+git -C /opt/usstocks/app rev-parse --short HEAD
 ```
 
 出力は次の3つ。終了コードは規約外が1件でもあれば1、無ければ0。
