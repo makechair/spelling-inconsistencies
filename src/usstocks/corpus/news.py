@@ -25,7 +25,14 @@ import httpx
 
 from ..config import Settings, get_settings
 from ..logging_setup import configure_logging
-from .daily import CorpusError, Uploader, aws_upload, corpus_s3_root, save_state
+from .daily import (
+    CorpusError,
+    Uploader,
+    aws_upload,
+    corpus_s3_root,
+    load_universe,
+    save_state,
+)
 
 log = logging.getLogger(__name__)
 
@@ -374,13 +381,100 @@ def run(
     return 0
 
 
+def check(
+    settings: Settings,
+    *,
+    client: httpx.Client | None = None,
+    parameter_loader: CredentialLoader = _ssm_parameter,
+) -> int:
+    """Report what a sync would reject, without writing Parquet or touching S3.
+
+    `run()` aborts the whole day on the first offending page, which is the right
+    default for a corpus but useless for finding out how many pages are wrong.
+    This reads the same pages through the same validation and keeps going, so a
+    change on the writing side can be verified before the next timer fires.
+    """
+    credentials = load_credentials(settings, parameter_loader=parameter_loader)
+    own_client = client is None
+    http_client = client or httpx.Client(timeout=settings.notion_timeout_seconds)
+    try:
+        pages = fetch_pages(http_client, settings, credentials)
+    finally:
+        if own_client:
+            http_client.close()
+
+    universe = {entry.symbol for entry in load_universe(settings.corpus_universe_path)}
+    rejected: list[tuple[str, str, str]] = []
+    event_types: dict[str, int] = {}
+    sentiments: dict[str, int] = {}
+    outside_universe: dict[str, int] = {}
+    tickerless = 0
+
+    for page in pages:
+        try:
+            row = normalize_page(page)
+        except CorpusError as exc:
+            rejected.append(
+                (
+                    str(page.get("id", "<unknown>")),
+                    str(page.get("url", "")),
+                    str(exc),
+                )
+            )
+            continue
+        event_types[str(row["event_type"])] = event_types.get(str(row["event_type"]), 0) + 1
+        sentiments[str(row["sentiment"])] = sentiments.get(str(row["sentiment"]), 0) + 1
+        tickers = row["tickers"]
+        assert isinstance(tickers, list)
+        if not tickers:
+            tickerless += 1
+        for ticker in tickers:
+            if ticker not in universe:
+                outside_universe[ticker] = outside_universe.get(ticker, 0) + 1
+
+    accepted = len(pages) - len(rejected)
+    log.info(
+        "news corpus check: %d page(s), %d accepted, %d rejected",
+        len(pages),
+        accepted,
+        len(rejected),
+    )
+    for page_id, url, reason in rejected:
+        log.error("rejected %s %s: %s", page_id, url, reason)
+
+    # A page that parses can still be useless: an event with no in-universe
+    # ticker never joins a price series, and a run that is nearly all
+    # other/neutral means the model is filling required fields, not classifying.
+    if accepted:
+        log.info("no ticker: %d of %d accepted page(s)", tickerless, accepted)
+        for label, counts in (("event_type", event_types), ("sentiment", sentiments)):
+            ranked = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+            log.info(
+                "%s: %s",
+                label,
+                ", ".join(f"{name}={count}" for name, count in ranked) or "none",
+            )
+    if outside_universe:
+        ranked = sorted(outside_universe.items(), key=lambda item: item[1], reverse=True)
+        log.warning(
+            "tickers outside universe.csv (kept, but they never match a price series): %s",
+            ", ".join(f"{name}={count}" for name, count in ranked),
+        )
+    return 1 if rejected else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate every Notion page and report, without writing Parquet or S3",
+    )
+    args = parser.parse_args(argv)
     settings = get_settings()
     configure_logging(settings.log_level)
     try:
-        return run(settings)
+        return check(settings) if args.check else run(settings)
     except CorpusError as exc:
         log.error("%s", exc)
         return 2

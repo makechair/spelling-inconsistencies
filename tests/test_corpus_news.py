@@ -11,6 +11,7 @@ from usstocks.config import Settings
 from usstocks.corpus.daily import CorpusError, read_parquet_rows
 from usstocks.corpus.news import (
     NotionCredentials,
+    check,
     fetch_pages,
     load_credentials,
     normalize_page,
@@ -200,3 +201,54 @@ def test_archived_last_page_rewrites_partition_as_empty(tmp_path: Path):
 
     assert len(uploads) == 2
     assert read_parquet_rows(uploads[-1][0]) == []
+
+
+def test_check_reports_every_bad_page_instead_of_stopping_at_the_first(
+    tmp_path: Path, caplog
+):
+    """The reason --check exists: run() dies on page two and never sees page three.
+
+    Fixing the writing side needs the whole list, not one example at a time.
+    """
+    settings = make_settings(tmp_path)
+    good = notion_page("page-1", "2026-07-30")
+    bad_type = notion_page("page-2", "2026-07-30")
+    bad_type["properties"]["EventType"] = {"select": {"name": "決算"}}
+    bad_confidence = notion_page("page-3", "2026-07-30")
+    bad_confidence["properties"]["Confidence"] = {"number": 85}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"results": [good, bad_type, bad_confidence], "has_more": False},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with caplog.at_level("INFO"):
+            exit_code = check(settings, client=client)
+
+    assert exit_code == 1
+    assert "3 page(s), 1 accepted, 2 rejected" in caplog.text
+    assert "page-2" in caplog.text and "invalid EventType" in caplog.text
+    assert "page-3" in caplog.text and "Confidence outside 0..1" in caplog.text
+    # Nothing was written: a check must be safe to run against production.
+    assert not (tmp_path / "corpus" / "news").exists()
+
+
+def test_check_flags_tickers_that_will_never_join_a_price_series(tmp_path: Path, caplog):
+    settings = make_settings(tmp_path)
+    page = notion_page("page-1", "2026-07-30")
+    page["properties"]["Tickers"] = {"multi_select": [{"name": "MU"}, {"name": "GOOG"}]}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": [page], "has_more": False})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with caplog.at_level("INFO"):
+            exit_code = check(settings, client=client)
+
+    # GOOG parses as a ticker but the universe holds GOOGL, so it is a silent
+    # miss rather than a rejection.
+    assert exit_code == 0
+    assert "GOOG=1" in caplog.text
+    assert "outside universe.csv" in caplog.text

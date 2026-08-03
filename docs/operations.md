@@ -172,6 +172,27 @@ credentialは`/teiten/notion-token`と`/teiten/notion-db-id`をSSMから復号�
 ローカル状態は`/var/lib/usstocks/corpus/news-state.json`、S3は
 `corpus/news/date=YYYY-MM-DD/part.parquet`。2回目の実行で変更がなければupload数0が正常。
 
+#### 取り込みが止まったとき（`--check`）
+
+定期実行は規約外の値を1ページ見つけた時点で中断する（`CorpusError`）。
+どのページが何件おかしいのかを知るには`--check`を使う。**Parquetを書かず、
+S3も触らない**ので本番でそのまま実行してよい。
+
+```bash
+sudo -u usstocks /opt/usstocks/current/venv/bin/usstocks-corpus-news --check
+```
+
+出力は次の3つ。終了コードは規約外が1件でもあれば1、無ければ0。
+
+| 出力 | 意味 |
+|---|---|
+| `rejected <page_id> <url>: <理由>` | 同期を止めるページ。URLから直接Notionを開いて直せる |
+| `event_type:` / `sentiment:` の分布 | `other`／`neutral`偏重なら、モデルが必須項目を埋めているだけで分類できていない |
+| `tickers outside universe.csv` | 形式は正しいがユニバース外。取り込まれても価格系列と結合されない（`GOOG`と`GOOGL`など） |
+
+teiten側がQwen3 13Bの出力をNotionへ書く前に正規化するようになっているため、
+ここが0件で安定しているのが正常。増えた場合はteiten側の正規化を疑う。
+
 ### Notionイベントスタディ
 
 ```bash
