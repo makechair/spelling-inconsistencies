@@ -1,8 +1,10 @@
 # 引き継ぎドキュメント（Claude → 次の担当AI/人間）
 
-作成日: 2026-07-31。Claude(Opus/Sonnet 5) の利用上限が近いため、OpenAI Codex へ
-作業を引き継ぐために作成。**このファイルはリポジトリに残す前提で書いている
-（消さないこと）。作業が進んだら追記・更新して次の引き継ぎに使ってよい。**
+作成日: 2026-07-31、最終更新: 2026-08-03。**このファイルはリポジトリに残す前提で
+書いている（消さないこと）。作業が進んだら追記・更新して次の引き継ぎに使ってよい。**
+
+**現在の最優先事項は §4-6「Notion取り込みの改善」**（Qwen3 13Bの出力ゆれで
+取り込みが全断しうる）。分析レポートの内容拡充とQwen考察は、その次。
 
 ## 0. まず読むもの（優先順）
 
@@ -109,6 +111,47 @@ ee16839 Complete Notion corpus and data-quality hardening [skip ci]
 4822043 Write down what a fresh session needs so it does not re-derive it
 ```
 
+## 2-B. Phase 3 以降の追加実装（〜2026-08-03、`a277566` まで）
+
+上の §2 は `ef52c10` で終わっているが、その後さらに31コミットが入っている。
+概要は以下（詳細はコミットと `docs/aws-deployment.md`）。
+
+**分析レポート基盤**（`web/reports.html` / `reports.js`、`api/routes/analysis.py`）
+
+- 日次の分析レポートと履歴。イベント別・ticker別のケース分析
+- horizon別リターン分布、peerと自社の反応の分離
+- **リターンサーフェス** — 初日変動率（5〜95 percentileの17点）× 1〜20取引日を
+  Gaussian kernelで平滑化し、無条件平均に対する超過リターンを色で示す。
+  上下5%は急落・急騰の独立帯。設計根拠は `analysis-spec.md` 6節に詳しい
+- **リスク調整済み売買ペア** — B（1〜19日後に買い）→ S（Bより後〜20日後に売り）の
+  全組み合わせを集計し、往復コスト0.10%と期間重複を考慮した標準誤差を引いた
+  80%片側下限が最大のペアを上位3件表示
+- **アウトオブサンプル検証** — 最初の55%を学習、55〜70/70〜85/85〜100%を
+  順に検証するexpanding-window。条件付き期待値の校正であり、
+  portfolio backtestではないとWeb上に明記している
+
+**データ蓄積状況ページ**（`web/coverage.html` / `coverage.js`、`api/routes/coverage.py`）
+
+分足DBの連続取得期間を表示。日足corpusとは分けている。
+
+**長期日足のチャート統合**（`api/routes/bars.py`、`web/chart.js`）
+
+日足corpusを分足DBと結合し、週足を含む長期軸をチャートで扱えるようにした。
+
+**ローカルQwenブリッジ**（`scripts/run_analysis_narrative_bridge.py`、`corpus/narrative.py`）
+
+Lightsailで生成した `report.json` をS3の専用mailbox経由でMacへ渡し、
+ローカルOllama（Qwen3 14B）が考察を書いて `ai_digest.json` を返す。
+Lightsailの15分タイマーが日次レポートへ取り込む。**LLM費用ゼロ。**
+
+設計上の要点: **Qwenに数値を計算・復唱させない。** モデルはfact IDの選択と
+意義の説明だけを行い、読者に見せる数値は `report.json` からこちらでコピーする
+（`narrative.py` 冒頭のdocstring）。ローカルLLMの幻覚が数字へ混入しない。
+
+IAMは専用ユーザーで `input/latest/report.json` の読取と日付別 `ai_digest.json` の
+書込のみ。同じレポートはSHA-256で判定して再処理しない。
+セットアップ手順は `docs/aws-deployment.md` の「ローカルQwen分析要約の鍵」。
+
 ## 3. リポジトリ／ブランチの実態
 
 2026-07-31にローカル設定を再確認した結果:
@@ -122,6 +165,13 @@ ee16839 Complete Notion corpus and data-quality hardening [skip ci]
   確認してからpushする。
 - `wip/local-systemd`ブランチは残っているが、現行systemd運用は既に`main`へ統合済み。
   Phase 1の作業で切り替える必要はない。
+
+**環境によってremote構成が違う点に注意**（2026-08-03追記）。上記はMacローカルの
+話で、Claude Code on the web 等のクラウドコンテナでは旧
+`makechair/spelling-inconsistencies` が `origin`、実体の
+`makechair/us-stock-realtime-chart` が `newrepo` として登録された状態で
+起動することがある。**正本は常に `us-stock-realtime-chart` の `main`。**
+作業前に `git remote -v` と `git log --oneline -3` で現在地を確認すること。
 
 ## 4. 保留中・未着手のタスク
 
@@ -156,9 +206,45 @@ Lightsail初回同期まで確認済み。初回同期は368ページを50日付
 テストfixture、Parquet／Markdown／HTMLレポート生成を実装した。
 systemd unit配置、初回S3 upload、差分なし再実行まで本番確認済み。
 
+### 4-6. Notion取り込みの改善 ★最優先・未着手
+
+teiten は 2026-08-03 時点で **Haiku 4.5 をやめ、ローカル Qwen3 13B** で
+要約している。実行はローカルの **12時・18時 JST の2回**、`MAX_LLM_ITEMS` は
+**4→10**（半導体メモリに限らずハイパースケーラも対象にしたため）。
+最大要約数は 12件/日 → **20件/日**。
+
+**LLM推論コストが実質ゼロになったため、「token量を増やさない」という
+従来の制約は消滅した**（`analysis-spec.md` 5節の旧決定事項は無効。
+同節「teiten のローカルQwen移行」が現行）。
+
+代わりに入った制約が本題。**Qwen3 13B は Haiku 4.5 より構造化出力の
+スキーマ遵守が弱く、`corpus/news.py` はそれに耐える作りになっていない。**
+`normalize_page()`（`news.py:196-232`）は不正な `Tickers` / `EventType` /
+`Sentiment` / `Confidence` を1ページでも見つけると `CorpusError` を投げ、
+**その日の同期全体を中断する**。1件の不正ページが20件分を落とす。
+
+対処は2方向、両方やるのが望ましい（詳細は `analysis-spec.md` 5節）:
+
+1. **teiten側** — Notionへ書く前にenum正規化・ticker照合（`universe.csv` の
+   50銘柄）を通す。ローカル実行なので弾いた記事の再実行コストはゼロ
+2. **corpus側（このリポジトリ）** — 全断をやめ、不正ページを隔離して
+   残りを取り込む。件数と理由を記録すれば「schema driftを黙って混ぜない」
+   という当初の意図は保てる
+
+**Phase 3 の matched 件数が伸びない場合、日足corpusの段階投入の途中だと
+決めつける前に、この経路が落ちていないか先に確認する**
+（`journalctl -u usstocks-news-corpus.service` に `CorpusError` が出る）。
+
 ## 5. 環境・運用上の注意
 
-- テストは `pytest` で154件全通過（Codex引き継ぎ後）。`.venv/bin/pytest -q` で確認可能
+- テストは `pytest` で **169件全通過**、ruff も通過（2026-08-03 実測、`a277566`）。
+  **`parquet` extra を入れていないと corpus 系10件が `ModuleNotFoundError: pyarrow`
+  で落ちる。** 新しい環境ではまず次を実行すること:
+
+  ```bash
+  .venv/bin/pip install -e ".[parquet]"   # boto3 / duckdb / pyarrow
+  .venv/bin/pytest -q
+  ```
 - 2026-07-31の本番反映後、collector/API、`usstocks-corpus.timer`、
   `usstocks-news-corpus.timer`はactive。
   poll間隔3変数はenv未指定なので、背景pollはコード既定の3600秒で動く
@@ -194,10 +280,16 @@ make install && make dev   # http://127.0.0.1:8000
 
 ## 7. 次に着手するならこの順で
 
-1. 次回の日足timer後、Phase 3のmatched数が段階的に増えることを確認
-2. **次回timerで新規3銘柄追加と共有REST予算を確認**（4xxなら増加を止める）
-3. Alpaca APIキーを管理画面でローテーション
-4. 実測した通信量と空fetch警告を見ながらpoll間隔を調整
+1. **【最優先】Notion取り込みの改善（§4-6）** — Qwen3 13Bの出力ゆれで
+   同期が全断しうる。まず `journalctl -u usstocks-news-corpus.service` で
+   `CorpusError` が出ていないか確認し、出ていれば corpus 側の隔離実装と
+   teiten 側の正規化を進める
+2. 次回の日足timer後、Phase 3のmatched数が段階的に増えることを確認
+   （伸びない場合は1を先に疑う）
+3. **次回timerで新規3銘柄追加と共有REST予算を確認**（4xxなら増加を止める）
+4. 分析レポートの内容拡充とQwen考察の調整（§2-B）— 重要だが1より後
+5. Alpaca APIキーを管理画面でローテーション
+6. 実測した通信量と空fetch警告を見ながらpoll間隔を調整
 
 新しい担当者・エージェントが作業を始める際は、まず `docs/analysis-spec.md` の
 「再調査してはいけない確定事項」を読み、同じ検証をやり直さないこと。作業後は
