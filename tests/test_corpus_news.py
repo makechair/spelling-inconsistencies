@@ -252,3 +252,23 @@ def test_check_flags_tickers_that_will_never_join_a_price_series(tmp_path: Path,
     assert exit_code == 0
     assert "GOOG=1" in caplog.text
     assert "outside universe.csv" in caplog.text
+
+
+def test_check_still_validates_when_the_universe_file_is_absent(tmp_path: Path, caplog):
+    """The news unit does not set USSTOCKS_CORPUS_UNIVERSE_PATH, so on a release
+    the default points at a path that does not exist. Losing one report is fine;
+    losing the check is not."""
+    settings = make_settings(tmp_path, corpus_universe_path=tmp_path / "absent.csv")
+    bad = notion_page("page-1", "2026-07-30")
+    bad["properties"]["Sentiment"] = {"select": {"name": "強気"}}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": [bad], "has_more": False})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with caplog.at_level("INFO"):
+            exit_code = check(settings, client=client)
+
+    assert exit_code == 1
+    assert "invalid Sentiment" in caplog.text
+    assert "skipping the out-of-universe ticker report" in caplog.text

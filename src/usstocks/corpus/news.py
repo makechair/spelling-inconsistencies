@@ -403,7 +403,20 @@ def check(
         if own_client:
             http_client.close()
 
-    universe = {entry.symbol for entry in load_universe(settings.corpus_universe_path)}
+    # The news unit has no reason to carry USSTOCKS_CORPUS_UNIVERSE_PATH, so the
+    # default resolves next to the source tree and is absent from an installed
+    # release. That costs one of three reports, not the validation itself.
+    try:
+        universe: set[str] | None = {
+            entry.symbol for entry in load_universe(settings.corpus_universe_path)
+        }
+    except (OSError, CorpusError) as exc:
+        universe = None
+        log.warning(
+            "universe unavailable (%s: %s); skipping the out-of-universe ticker report",
+            settings.corpus_universe_path,
+            type(exc).__name__,
+        )
     rejected: list[tuple[str, str, str]] = []
     event_types: dict[str, int] = {}
     sentiments: dict[str, int] = {}
@@ -428,9 +441,10 @@ def check(
         assert isinstance(tickers, list)
         if not tickers:
             tickerless += 1
-        for ticker in tickers:
-            if ticker not in universe:
-                outside_universe[ticker] = outside_universe.get(ticker, 0) + 1
+        if universe is not None:
+            for ticker in tickers:
+                if ticker not in universe:
+                    outside_universe[ticker] = outside_universe.get(ticker, 0) + 1
 
     accepted = len(pages) - len(rejected)
     log.info(
