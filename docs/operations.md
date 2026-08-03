@@ -179,10 +179,13 @@ credentialは`/teiten/notion-token`と`/teiten/notion-db-id`をSSMから復号�
 S3も触らない**ので本番でそのまま実行してよい。
 
 `usstocks-news-corpus.service` と同じ起動方法（`python -m`）に、credentialを
-渡すため`/etc/usstocks/usstocks.env`を読み込んで実行する。
+渡すため`/etc/usstocks/usstocks.env`を読み込んで実行する。**unitと同じ
+`WorkingDirectory=/var/lib/usstocks` へ必ず`cd`すること** — 設定は
+`env_file=(".env",)`をCWD相対で探すため、別の場所から起動すると無関係な
+`.env`を掴み、読めなければ`PermissionError: '.env'`で落ちる。
 
 ```bash
-sudo bash -c 'set -a; . /etc/usstocks/usstocks.env; set +a; \
+sudo bash -c 'cd /var/lib/usstocks && set -a; . /etc/usstocks/usstocks.env; set +a; \
   USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus \
   runuser -u usstocks -- /opt/usstocks/current/venv/bin/python \
     -m usstocks.corpus.news --check'
