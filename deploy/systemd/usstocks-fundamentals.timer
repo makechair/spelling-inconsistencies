@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh the SEC fundamentals corpus once a day
+
+[Timer]
+# 05:30 UTC = 14:30 JST. Inside the closed-market window the run enforces,
+# and clear of the daily bars (12:30) and the Notion corpus (13:00) so the
+# instance is not doing three jobs at once on 1GB of RAM.
+OnCalendar=*-*-* 05:30:00 UTC
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

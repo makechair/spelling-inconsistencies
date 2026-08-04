@@ -77,7 +77,9 @@ for unit in \
   usstocks-news-corpus.service \
   usstocks-news-corpus.timer \
   usstocks-event-study.service \
+  usstocks-fundamentals.service \
   usstocks-event-study.timer \
+  usstocks-fundamentals.timer \
   usstocks-analysis-narrative-import.service \
   usstocks-analysis-narrative-import.timer; do
   install -m 0644 "${REPO_DIR}/deploy/systemd/${unit}" "${UNIT_DIR}/${unit}"
@@ -109,6 +111,7 @@ systemctl enable \
   usstocks-corpus.timer \
   usstocks-news-corpus.timer \
   usstocks-event-study.timer \
+  usstocks-fundamentals.timer \
   usstocks-analysis-narrative-import.timer \
   usstocks-deploy.timer
 systemctl start \
@@ -117,6 +120,7 @@ systemctl start \
   usstocks-corpus.timer \
   usstocks-news-corpus.timer \
   usstocks-event-study.timer \
+  usstocks-fundamentals.timer \
   usstocks-analysis-narrative-import.timer \
   usstocks-deploy.timer
 

@@ -137,15 +137,48 @@ CPU・帯域の山を作らないため時刻はずらす。
 
 ## 7. 段階
 
-| # | 内容 | 成果物 |
-|---|---|---|
-| A | EDGAR取得と正規化 | `corpus/fundamentals.py`、1銘柄限定CLI、fixtureテスト |
-| B | 指標算出 | `fundamentals_metrics` Parquet、DuckDB SQL |
-| C | 一元表示 | `web/fundamentals.html`、API |
-| D | 詳細＋Qwen解釈 | 詳細ページ、`narrative.py` の型を再利用 |
+| # | 内容 | 成果物 | 状態 |
+|---|---|---|---|
+| A | EDGAR取得と正規化 | `corpus/fundamentals.py`、1銘柄限定CLI、fixtureテスト | **実装済み・本番未検証** |
+| B | 指標算出 | `fundamentals_metrics` Parquet、DuckDB SQL | 未着手 |
+| C | 一元表示 | `web/fundamentals.html`、API | 未着手 |
+| D | 詳細＋Qwen解釈 | 詳細ページ、`narrative.py` の型を再利用 | 未着手 |
 
 **Aの初回本番実行までEDGARのレスポンスを実測できない**ため、Aを本番で
 通してからBへ進む。Aで1銘柄だけ取れることを確認するのが最初の関門。
+
+### Phase A 実装（2026-08-04）
+
+| 成果物 | 実装 |
+|---|---|
+| 取得・正規化 | `src/usstocks/corpus/fundamentals.py` |
+| partition | `corpus/fundamentals/symbol=NVDA/part.parquet` |
+| 定期実行 | `usstocks-fundamentals.service` / `.timer`（毎日14:30 JST） |
+| 設定 | `USSTOCKS_SEC_USER_AGENT`（必須。無いとSECは403） |
+| 検証 | 187テスト・ruff通過。**EDGAR実レスポンスは未検証** |
+
+CIKは `company_tickers.json` から実行時に引く（静的コピーはticker移管で
+黙って腐る）。行は概念×提出期で、**採用したXBRLタグを列に持つ**。
+`accn` 単位で行を分けるので、訂正報告（10-Q/A）は元の行を上書きせず並ぶ。
+残高項目（在庫・資産等）と期間項目（売上等）は `start` の有無で判別し、
+混同しない。同一Parquetのdigestが変わらなければS3へ再送しない
+（EDGARは毎回全期間を返すため、これが無いと毎日全量転送になる）。
+
+SECがエラーを返した時点で残りを止める。連打はSECにブロックされる典型
+経路であり、1回失敗したものは次も失敗する可能性が高い。
+
+**最初にやること**（1銘柄で形状を確認する。本番のみ実行可能）:
+
+```bash
+sudo bash -c 'cd /var/lib/usstocks && set -a; . /etc/usstocks/usstocks.env; set +a; \
+  USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus \
+  USSTOCKS_CORPUS_UNIVERSE_PATH=/opt/usstocks/current/data/universe.csv \
+  runuser -u usstocks -- /opt/usstocks/current/venv/bin/python \
+    -m usstocks.corpus.fundamentals --force --symbols NVDA'
+```
+
+`/etc/usstocks/usstocks.env` に `USSTOCKS_SEC_USER_AGENT` を先に足すこと。
+成功したら `--symbols MU,TSM` で、10-K提出者と20-F提出者の差を確認する。
 
 ## 8. 未決事項
 

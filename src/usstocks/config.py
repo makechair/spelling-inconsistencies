@@ -173,6 +173,13 @@ class Settings(BaseSettings):
     corpus_refresh_hours: float = Field(default=20.0, gt=0)
     corpus_overlap_days: int = Field(default=14, ge=1, le=90)
 
+    # ---------------------------------------------------------- fundamentals
+    # SEC refuses anonymous traffic: the User-Agent must carry a real contact.
+    # There is no API key and no quota shared with Tiingo.
+    sec_user_agent: str | None = None
+    sec_timeout_seconds: float = Field(default=30.0, gt=0)
+    fundamentals_max_symbols_per_run: int = Field(default=60, ge=1, le=200)
+
     # ------------------------------------------------------------ news corpus
     # Direct values are useful for local development. Production leaves these
     # empty and resolves the two SecureString parameters from the teiten
