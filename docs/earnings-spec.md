@@ -31,7 +31,18 @@ Lightsailからは通るはずだが、**レスポンス形状をローカルで
 HTTPも通っていたので、データが無いのではなく**抽出が届いていなかった**。
 20-F提出者は **`ifrs-full`** で提出しており、`us-gaap` しか見ていなかった。
 さらに計上通貨がUSDとは限らない（TSMはTWD、ASMLはEUR）。
-`ASML` `UMC` `ARM` `ASX` `STM` も同じ経路で全滅していたはず。
+
+**ただし20-F提出者が一律ダメなのではない**（旧コードでの実測）:
+
+| 銘柄 | 旧コードでの結果 |
+|---|---|
+| `TSM` | **0行**。IFRS提出 |
+| `ASML` | **41行、`shares_outstanding` のみ**。財務数値は全滅。IFRS提出 |
+| `ARM` | **444行、`inventory` 以外の全概念**。20-FだがUS-GAAPタグ |
+| `MU` / `NVDA` | 2,000行超。全概念 |
+
+`ARM` に `inventory` が無いのは**正しい**。IPライセンス業で棚卸資産が実質ない。
+「無い概念は欠測にし、推定しない」が意図どおり働いている。
 
 対応済み: 名前空間は `us-gaap` → `ifrs-full` → `dei` の順で探索し、
 IFRSのタグ名（`Revenue` `Inventories` `CostOfSales` `ProfitLossFromOperatingActivities`
@@ -45,6 +56,19 @@ IFRSのタグ名（`Revenue` `Inventories` `CostOfSales` `ProfitLossFromOperatin
 なお20-F提出者は年1回提出で**四半期データが無い**点は変わらない。
 **欠測を0や前期据え置きで埋めない** — 「四半期データなし」と明示する。
 **一元表示は年次を主、四半期を従**とする。
+
+**2-B. 定期報告以外の提出書類が混ざる。**（2026-08-04実測）
+
+`MU` に **8-K が112行**、`NVDA` に **DEF 14A が5行**入っていた。
+DEF 14Aは委任状で、載る数値は議決権用の株式数や役員報酬であり
+**財務諸表の値ではない**。8-Kは決算発表なので数値自体は正しいが、
+同じ期の10-Qと重複する。
+
+生データ層は「EDGARが言っていること」をそのまま持つのが正しいので
+**Phase Aでは残す**。**Phase Bの指標算出で
+`10-K` / `10-Q` / `20-F` / `40-F`（と `/A` 訂正）に限定する。**
+これを忘れると同一四半期の二重計上や、委任状の株式数がEPS分母へ
+混入する事故になる。
 
 **3. XBRLタグは企業ごとに揺れる。** 同じ「売上高」でも
 `Revenues` / `RevenueFromContractWithCustomerExcludingAssessedTax` /
