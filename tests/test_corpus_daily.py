@@ -53,12 +53,27 @@ def write_universe(path: Path, entries: list[tuple[str, str]]) -> None:
         writer.writerows(entries)
 
 
-def test_repository_universe_has_50_unique_symbols():
-    path = Path(__file__).resolve().parents[1] / "data" / "universe.csv"
-    entries = load_universe(path)
-    assert len(entries) == 50
-    assert len({entry.symbol for entry in entries}) == 50
-    assert "SKHY" not in {entry.symbol for entry in entries}
+UNIVERSE_PATH = Path(__file__).resolve().parents[1] / "data" / "universe.csv"
+
+
+def test_repository_universe_is_unique_and_excludes_the_dead_adr():
+    entries = load_universe(UNIVERSE_PATH)
+    symbols = {entry.symbol for entry in entries}
+    assert len(symbols) == len(entries)
+    # analysis-spec 3: Tiingo stopped returning it, so it would poll forever.
+    assert "SKHY" not in symbols
+
+
+def test_subsectors_that_cannot_produce_abnormal_returns_stay_a_known_set():
+    """Peers exclude the subject, so a subsector needs analysis_min_peers + 1
+    members before any of its events gets a formal abnormal return. These two
+    are still short; listing them keeps that a decision rather than a surprise.
+    """
+    counts: dict[str, int] = {}
+    for entry in load_universe(UNIVERSE_PATH):
+        counts[entry.subsector] = counts.get(entry.subsector, 0) + 1
+    short = {name for name, count in counts.items() if count <= Settings().analysis_min_peers}
+    assert short == {"eda_ip", "emerging_silicon"}
 
 
 def test_closed_market_window_is_09_to_17_jst():

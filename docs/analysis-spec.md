@@ -104,6 +104,37 @@ Phase 1 の自動実行では新規銘柄を1回3件までに制限する。
 実例であり、ユニバースに入れると無限に空レスポンスを引き続ける（`last_bar` が進まず、
 隙間が広がり続けて毎周回リクエストが発生する）。現在ウォッチリストにあるなら外すこと。
 
+### 拡張（2026-08-03、50 → 53銘柄）
+
+`--check` が挙げたユニバース外tickerのうち、**米国上場が確実で半導体に直結する3件**
+だけを追加した。
+
+| 追加 | subsector | 理由 |
+|---|---|---|
+| `SNDK` | memory_storage | SanDisk。**3→4銘柄で peer 閾値を超える**（下記） |
+| `ASX` | foundry | ASE Technology（NYSE）。OSAT・後工程 |
+| `ACLS` | equipment | Axcelis（NASDAQ）。イオン注入装置 |
+
+**peer は自分自身を除外する**（`event_study.sql`: `peer_sector.symbol <> subject.symbol`）。
+`analysis_min_peers=3` なので、**subsectorは4銘柄以上ないと正式なabnormal returnを
+一度も出せない**。`memory_storage` は3銘柄でこれに該当しており、teitenの主戦場で
+ありながら相対リターンが計算できない状態だった。`SNDK` の追加で解消。
+**`eda_ip`（3）と `emerging_silicon`（2）は未解消**（`tests/test_corpus_daily.py`
+が既知セットとして固定しているので、変えるなら意図的な変更になる）。
+
+**追加しなかったもの（意図的）:**
+
+- `SSNLF`(Samsung)、`KIOX`/`KIOXIA`、`POSCO`、`HYMTF`、`YMTC`、`KRAFTON`、`SK` —
+  OTC pink sheet または米国非上場。**SKHY と同じ失敗様式**（薄い/存在しない銘柄で
+  空レスポンスを引き続ける）を踏むリスクが高い。Tiingoが安定して返すことを
+  個別に確認できるまで入れない
+- `SONY`、`TEL`、`ADBE`、`AKAM`、`BOX`、`TSLA`、`BLK`、`MT` — 米国上場だが
+  半導体が主業ではない。**subsectorのpeer平均を汚す**（イベントスタディは
+  同subsector平均を benchmark に使うため、事業構成の違う銘柄を混ぜると
+  abnormal return の意味が落ちる）
+- `MXC`、`SSNG`、`CORE`、`NEBU`、`WIST`、`ATLN` — 実在確認できず。
+  Qwenの幻覚の可能性
+
 ## 4. ストレージ
 
 ```

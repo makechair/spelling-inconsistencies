@@ -12,10 +12,12 @@ MCHP,logic_compute
 MU,memory_storage
 WDC,memory_storage
 STX,memory_storage
+SNDK,memory_storage
 TSM,foundry
 GFS,foundry
 UMC,foundry
 STM,foundry
+ASX,foundry
 AMAT,equipment
 LRCX,equipment
 KLAC,equipment
@@ -24,6 +26,7 @@ TER,equipment
 ENTG,equipment
 ONTO,equipment
 AEIS,equipment
+ACLS,equipment
 ON,analog_power_rf
 MPWR,analog_power_rf
 SWKS,analog_power_rf
