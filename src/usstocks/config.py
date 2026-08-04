@@ -162,9 +162,14 @@ class Settings(BaseSettings):
     # Defaults to <USSTOCKS_BACKUP_S3_URI>/corpus when omitted.
     backup_s3_uri: str | None = None
     corpus_s3_uri: str | None = None
-    # Grow the provider's unknown monthly unique-symbol allowance cautiously.
-    corpus_max_symbols_per_run: int = Field(default=10, ge=1, le=50)
-    corpus_max_new_symbols_per_run: int = Field(default=3, ge=0, le=50)
+    # Grow the provider's unknown monthly unique-symbol allowance cautiously,
+    # but not so slowly that the event study stays stuck on the handful of
+    # symbols loaded first: an event only matches when its symbol already has
+    # daily bars, so staging speed is what decides how much of the news the
+    # analysis can see. A run stops at the first HTTP error, which is what
+    # keeps this safe to raise.
+    corpus_max_symbols_per_run: int = Field(default=20, ge=1, le=50)
+    corpus_max_new_symbols_per_run: int = Field(default=10, ge=0, le=50)
     corpus_refresh_hours: float = Field(default=20.0, gt=0)
     corpus_overlap_days: int = Field(default=14, ge=1, le=90)
 

@@ -20,8 +20,18 @@ def test_free_tier_budgets_match_the_documented_limits():
     assert settings.rest_calls_per_day == 1_000
     assert settings.monthly_bandwidth_bytes == 1_000_000_000
     assert settings.background_poll_seconds == 3_600
-    assert settings.corpus_max_symbols_per_run == 10
-    assert settings.corpus_max_new_symbols_per_run == 3
+
+
+def test_corpus_staging_admits_new_symbols_faster_than_it_refreshes():
+    """These are our pacing choice, not a provider limit: the monthly
+    unique-symbol cap is still unmeasured. Staging too slowly is not free
+    either -- an event only matches once its symbol has daily bars, so the
+    event study stays narrow while the universe trickles in.
+    """
+    settings = Settings()
+    assert settings.corpus_max_new_symbols_per_run == 10
+    assert settings.corpus_max_symbols_per_run == 20
+    assert settings.corpus_max_new_symbols_per_run <= settings.corpus_max_symbols_per_run
 
 
 def test_threshold_level_is_left_to_the_plan_by_default():
