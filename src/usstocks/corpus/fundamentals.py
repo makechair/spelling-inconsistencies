@@ -55,6 +55,11 @@ REQUEST_INTERVAL_SECONDS = 0.15
 # Ordered candidates per concept: the first tag present wins. Ordering is by
 # specificity, so a filer that reports both a narrow and a broad revenue tag
 # contributes the narrow one rather than whichever the dict happened to yield.
+#
+# US-GAAP names come first and ifrs-full names after, because a filer using one
+# taxonomy has none of the other's tags -- the ordering only decides precedence
+# where the two taxonomies happen to share a name (GrossProfit, Assets,
+# Liabilities, ResearchAndDevelopmentExpense), and there either is correct.
 CONCEPTS: dict[str, tuple[str, ...]] = {
     "revenue": (
         "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -62,14 +67,20 @@ CONCEPTS: dict[str, tuple[str, ...]] = {
         "Revenues",
         "SalesRevenueNet",
         "SalesRevenueGoodsNet",
+        "RevenueFromContractsWithCustomers",
+        "Revenue",
     ),
     "cost_of_revenue": (
         "CostOfGoodsAndServicesSold",
         "CostOfRevenue",
         "CostOfGoodsSold",
+        "CostOfSales",
     ),
     "gross_profit": ("GrossProfit",),
-    "operating_income": ("OperatingIncomeLoss",),
+    "operating_income": (
+        "OperatingIncomeLoss",
+        "ProfitLossFromOperatingActivities",
+    ),
     "net_income": (
         "NetIncomeLoss",
         "ProfitLoss",
@@ -79,26 +90,34 @@ CONCEPTS: dict[str, tuple[str, ...]] = {
         "ResearchAndDevelopmentExpense",
         "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
     ),
-    "inventory": ("InventoryNet", "InventoryGross"),
+    "inventory": ("InventoryNet", "InventoryGross", "Inventories"),
     "assets": ("Assets",),
     "liabilities": ("Liabilities",),
     "equity": (
         "StockholdersEquity",
         "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        "Equity",
+        "EquityAttributableToOwnersOfParent",
     ),
     "cash_and_equivalents": (
         "CashAndCashEquivalentsAtCarryingValue",
         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+        "CashAndCashEquivalents",
     ),
-    "operating_cash_flow": ("NetCashProvidedByUsedInOperatingActivities",),
+    "operating_cash_flow": (
+        "NetCashProvidedByUsedInOperatingActivities",
+        "CashFlowsFromUsedInOperatingActivities",
+    ),
     "capex": (
         "PaymentsToAcquirePropertyPlantAndEquipment",
         "PaymentsToAcquireProductiveAssets",
+        "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
     ),
     "shares_outstanding": (
         "CommonStockSharesOutstanding",
         "WeightedAverageNumberOfDilutedSharesOutstanding",
         "WeightedAverageNumberOfSharesOutstandingBasic",
+        "NumberOfSharesOutstanding",
     ),
 }
 
@@ -197,24 +216,72 @@ def _parse_iso_date(value: object) -> date | None:
         return None
 
 
+def _pick_unit(units: dict[str, Any]) -> tuple[str, list[dict]] | None:
+    """Prefer USD, then shares, then whatever single currency the filer used.
+
+    TSM reports in TWD and ASML in EUR. Refusing non-USD would drop the
+    foreign filers entirely, and converting would need an FX source we do not
+    have. The unit travels on the row instead: every ratio this corpus is for
+    -- margins, inventory days, capex intensity, growth -- is currency-neutral,
+    and the few figures that are not can be labelled with the unit they are in.
+    """
+    for unit_name in ("USD", "shares"):
+        rows = units.get(unit_name)
+        if isinstance(rows, list) and rows:
+            return unit_name, rows
+    for unit_name, rows in sorted(units.items()):
+        # Per-share units mix a currency and a count; they are not a level.
+        if "/" in unit_name:
+            continue
+        if isinstance(rows, list) and rows:
+            return unit_name, rows
+    return None
+
+
 def _select_facts(
     facts: dict[str, Any], candidates: Sequence[str]
-) -> tuple[str, list[dict]] | None:
-    """First candidate tag that carries USD (or share) facts, with its rows."""
-    us_gaap = facts.get("facts", {}).get("us-gaap", {})
-    dei = facts.get("facts", {}).get("dei", {})
+) -> tuple[str, str, list[dict]] | None:
+    """First candidate tag present in any taxonomy, with its unit and rows.
+
+    Namespaces are searched rather than fixed to us-gaap: foreign private
+    issuers file 20-F under ifrs-full, and looking only at us-gaap silently
+    returned nothing at all for them.
+    """
+    namespaces = facts.get("facts")
+    if not isinstance(namespaces, dict):
+        return None
     for tag in candidates:
-        entry = us_gaap.get(tag) or dei.get(tag)
-        if not isinstance(entry, dict):
-            continue
-        units = entry.get("units")
-        if not isinstance(units, dict):
-            continue
-        for unit_name in ("USD", "shares", "USD/shares"):
-            rows = units.get(unit_name)
-            if isinstance(rows, list) and rows:
-                return tag, rows
+        for namespace in ("us-gaap", "ifrs-full", "dei"):
+            entry = namespaces.get(namespace, {})
+            entry = entry.get(tag) if isinstance(entry, dict) else None
+            if not isinstance(entry, dict):
+                continue
+            units = entry.get("units")
+            if not isinstance(units, dict):
+                continue
+            picked = _pick_unit(units)
+            if picked is not None:
+                unit, rows = picked
+                return tag, unit, rows
     return None
+
+
+def describe_available_facts(payload: dict[str, Any]) -> str:
+    """What the filer actually reports, for when no concept matched.
+
+    sec.gov is unreachable from development, so a bare "no usable facts" costs
+    a whole round trip to the operator. This turns it into a lead.
+    """
+    namespaces = payload.get("facts")
+    if not isinstance(namespaces, dict) or not namespaces:
+        return "no facts object in the response"
+    parts: list[str] = []
+    for namespace, tags in sorted(namespaces.items()):
+        if not isinstance(tags, dict):
+            continue
+        sample = ", ".join(sorted(tags)[:8])
+        parts.append(f"{namespace} ({len(tags)} tags): {sample}")
+    return " | ".join(parts) or "facts object present but empty"
 
 
 def normalize_company_facts(symbol: str, payload: dict[str, Any]) -> list[dict[str, object]]:
@@ -231,7 +298,7 @@ def normalize_company_facts(symbol: str, payload: dict[str, Any]) -> list[dict[s
         selected = _select_facts(payload, candidates)
         if selected is None:
             continue
-        tag, facts = selected
+        tag, unit, facts = selected
         instant = concept in INSTANT_CONCEPTS
         for fact in facts:
             if not isinstance(fact, dict):
@@ -258,6 +325,7 @@ def normalize_company_facts(symbol: str, payload: dict[str, Any]) -> list[dict[s
                     "entity_name": entity,
                     "concept": concept,
                     "xbrl_tag": tag,
+                    "unit": unit,
                     "period_start": start,
                     "period_end": end,
                     "fiscal_year": int(fact["fy"]) if isinstance(fact.get("fy"), int) else None,
@@ -289,6 +357,7 @@ def _schema() -> Any:
             ("entity_name", pa.string()),
             ("concept", pa.string()),
             ("xbrl_tag", pa.string()),
+            ("unit", pa.string()),
             ("period_start", pa.date32()),
             ("period_end", pa.date32()),
             ("fiscal_year", pa.int64()),
@@ -379,7 +448,12 @@ def run(
             payload = fetch_company_facts(http_client, settings, cik)
             rows = normalize_company_facts(symbol, payload)
             if not rows:
-                log.warning("no usable XBRL facts for %s (CIK %s)", symbol, cik)
+                log.warning(
+                    "no usable XBRL facts for %s (CIK %s); filer reports: %s",
+                    symbol,
+                    cik,
+                    describe_available_facts(payload),
+                )
             path = local_root / "fundamentals" / f"symbol={symbol}" / "part.parquet"
             digest = write_fundamentals_parquet(path, rows)
             entry_state = symbol_state.setdefault(symbol, {})

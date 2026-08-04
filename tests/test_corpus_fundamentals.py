@@ -270,3 +270,73 @@ def test_write_is_atomic_and_sorted(tmp_path: Path):
     stored = read_parquet_rows(path)
     assert [row["period_end"] for row in stored] == [date(2026, 3, 31), date(2026, 6, 30)]
     assert write_fundamentals_parquet(path, rows) == digest
+
+
+def ifrs_facts(**concept_units) -> dict:
+    """A 20-F filer: ifrs-full tags, and figures in the reporting currency."""
+    return {
+        "cik": 1046179,
+        "entityName": "Taiwan Semiconductor Manufacturing",
+        "facts": {"ifrs-full": concept_units},
+    }
+
+
+def test_ifrs_filers_are_read_not_silently_empty():
+    """TSM returned nothing on the first production run because only us-gaap
+    was searched. Foreign private issuers file 20-F under ifrs-full."""
+    payload = ifrs_facts(
+        Revenue={"units": {"TWD": [usd_fact(val=1_000_000.0)]}},
+        Inventories={"units": {"TWD": [usd_fact(val=250_000.0) | {"start": None}]}},
+    )
+    payload["facts"]["ifrs-full"]["Inventories"]["units"]["TWD"][0].pop("start")
+
+    rows = normalize_company_facts("TSM", payload)
+    by_concept = {row["concept"]: row for row in rows}
+    assert by_concept["revenue"]["value"] == 1_000_000.0
+    assert by_concept["revenue"]["xbrl_tag"] == "Revenue"
+    assert by_concept["inventory"]["value"] == 250_000.0
+
+
+def test_the_reporting_currency_travels_on_the_row():
+    """No FX source exists here, so figures stay in the filer's currency. The
+    ratios this corpus is for are currency-neutral; the unit lets a consumer
+    tell a TWD level from a USD one instead of comparing them by accident."""
+    twd = normalize_company_facts(
+        "TSM", ifrs_facts(Revenue={"units": {"TWD": [usd_fact(val=1_000_000.0)]}})
+    )
+    usd = normalize_company_facts(
+        "MU", company_facts(Revenues={"units": {"USD": [usd_fact(val=1000.0)]}})
+    )
+    assert twd[0]["unit"] == "TWD"
+    assert usd[0]["unit"] == "USD"
+
+
+def test_usd_wins_when_a_filer_reports_more_than_one_currency():
+    payload = ifrs_facts(
+        Revenue={
+            "units": {
+                "TWD": [usd_fact(val=1_000_000.0)],
+                "USD": [usd_fact(val=32_000.0)],
+            }
+        }
+    )
+    rows = normalize_company_facts("TSM", payload)
+    assert rows[0]["unit"] == "USD"
+    assert rows[0]["value"] == 32_000.0
+
+
+def test_per_share_units_are_not_mistaken_for_levels():
+    payload = company_facts(Revenues={"units": {"USD/shares": [usd_fact(val=2.5)]}})
+    assert normalize_company_facts("MU", payload) == []
+
+
+def test_unmatched_payloads_report_what_the_filer_does_have():
+    """Development cannot reach sec.gov, so a bare failure costs a round trip
+    to whoever can run it. The warning names the taxonomies instead."""
+    from usstocks.corpus.fundamentals import describe_available_facts
+
+    described = describe_available_facts(
+        {"facts": {"ifrs-full": {"Revenue": {}, "Inventories": {}}}}
+    )
+    assert "ifrs-full (2 tags)" in described
+    assert "Revenue" in described
