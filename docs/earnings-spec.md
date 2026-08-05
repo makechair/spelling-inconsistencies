@@ -179,7 +179,7 @@ CPU・帯域の山を作らないため時刻はずらす。
 | # | 内容 | 成果物 | 状態 |
 |---|---|---|---|
 | A | EDGAR取得と正規化 | `corpus/fundamentals.py`、1銘柄限定CLI、fixtureテスト | **実装済み・本番未検証** |
-| B | 指標算出 | `fundamentals_metrics` Parquet、DuckDB SQL | 未着手 |
+| B | 指標算出 | `fundamentals_metrics` Parquet、DuckDB SQL | **実装済み・本番未実行** |
 | C | 一元表示 | `web/fundamentals.html`、API | 未着手 |
 | D | 詳細＋Qwen解釈 | 詳細ページ、`narrative.py` の型を再利用 | 未着手 |
 
@@ -415,3 +415,42 @@ sudo bash -c 'cd /var/lib/usstocks && set -a; . /etc/usstocks/usstocks.env; set 
   USSTOCKS_UNIVERSE_JP_PATH=/opt/usstocks/current/data/universe_jp.csv \
   runuser -u usstocks -- /opt/usstocks/current/venv/bin/python \
     -m usstocks.corpus.edinet --since 2026-06-25 --until 2026-06-27'
+
+
+## 11. Phase B 実装（2026-08-05）
+
+| 成果物 | 実装 |
+|---|---|
+| 指標算出 | `src/usstocks/corpus/fundamentals_metrics.py` |
+| SQL | `src/usstocks/corpus/sql/fundamentals_metrics.sql` |
+| 出力 | `corpus/fundamentals_metrics/part.parquet` |
+| 定期実行 | `usstocks-fundamentals-metrics.timer`（毎日14:45 JST、EDGAR取得の15分後） |
+| 検証 | 212テスト・ruff通過 |
+
+9節の3制約をSQLの土台に置いた。**この順序でないと後段が壊れる。**
+
+1. **提出書類の絞り込み** — `10-K` `10-Q` `20-F` `40-F` `6-K`（と `/A`）だけを採る。
+   **6-Kを外すと外国籍企業の四半期が全滅する**（ARMは444行中336行が6-K）。
+   `8-K` は同じ期の10-Qと重複し、`DEF 14A` の株式数は議決権用でEPS分母ではない
+2. **期間重複の解決** — (symbol, concept, period_start, period_end) ごとに
+   `filed` が最新の1行。訂正後の値が最終
+3. **通貨一致の確認** — 各比率について**分子と分母それぞれの `unit` が一致する
+   場合だけ**算出する。ガードは比率ごとに掛かるので、TSMのように売上がTWD・
+   原価がUSDでも、在庫日数（在庫÷原価、ともにUSD）は正しく出る
+
+期間はカレンダー日数で分類する（年次300–400日、半期150–220日、四半期60–120日）。
+**どれにも当てはまらない期間は捨てる。** 決算期変更の変則期間を年次として
+混ぜると増収率が壊れる。
+
+前年比は**会計年度ラベルではなく決算日で突き合わせる**（330–400日前）。
+会計年度の付番は提出者ごとに揺れ、決算日も数日ずれるため。
+
+**増収率の変化**（今期YoY − 前期YoY）を持つ。水準は「どれだけ速いか」しか
+言わないが、変化は「転換したか」を言う。3節の「将来性」はここに依存する。
+
+**タグが無い概念はnullのままにする。** 0にすると「使わなかった」と読めるが、
+実際は「言及が無い」であり、ARMの在庫がその実例。
+
+実行後のログは `populated revenue=N, gross_margin=N, inventory_days=N,
+revenue_yoy=N` を出す。**列が黙って空になったことに気づく唯一の手段**なので、
+提供元の変更を疑うときはここを見る。

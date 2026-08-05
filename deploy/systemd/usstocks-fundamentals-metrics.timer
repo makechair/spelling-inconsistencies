@@ -1,0 +1,12 @@
+[Unit]
+Description=Recompute fundamentals metrics after the EDGAR pull
+
+[Timer]
+# 05:45 UTC = 14:45 JST, a quarter hour after the EDGAR loader at 14:30 so it
+# reads that run's output rather than the previous day's.
+OnCalendar=*-*-* 05:45:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
