@@ -103,7 +103,7 @@ function render() {
     link.type = "button";
     link.className = "linklike";
     link.textContent = row.symbol;
-    link.addEventListener("click", () => showDetail(row.symbol));
+    link.addEventListener("click", () => toggleDetail(tr, row.symbol));
     symbol.append(link);
     tr.append(symbol);
 
@@ -113,6 +113,15 @@ function render() {
 
     const period = document.createElement("td");
     period.textContent = row.period_end ?? "";
+    if (row.basis) {
+      const basis = document.createElement("div");
+      basis.className = "fundamentals-delta";
+      basis.textContent = row.basis === "ttm" ? "TTM" : "通期";
+      basis.title = row.basis === "ttm"
+        ? `直近4四半期の合計。通期の最新は ${row.annual_period_end ?? "不明"}`
+        : "通期決算。四半期報告が無いか、通期の方が新しい";
+      period.append(basis);
+    }
     tr.append(period);
 
     tr.append(cell(money(row.revenue, row.currency)));
@@ -139,7 +148,7 @@ function render() {
   document.getElementById("row-count").textContent = `${selected.length} 銘柄`;
 }
 
-function sparkline(title, series, format) {
+function chart(title, series, format, axisLabel) {
   const points = series.filter((entry) => entry.value != null);
   const figure = document.createElement("figure");
   figure.className = "fundamentals-chart";
@@ -156,68 +165,138 @@ function sparkline(title, series, format) {
   }
 
   const values = points.map((entry) => entry.value);
-  const low = Math.min(...values);
-  const high = Math.max(...values);
-  const span = high - low || Math.abs(high) || 1;
-  const width = 260;
-  const height = 90;
-  const step = width / (points.length - 1);
-  const path = points
-    .map((entry, index) => {
-      const x = index * step;
-      const y = height - ((entry.value - low) / span) * (height - 12) - 6;
-      return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
+  // The vertical axis includes zero whenever the data straddles it, so a
+  // margin near break-even is not drawn as though it were mid-range.
+  let low = Math.min(...values, values.some((v) => v < 0) ? 0 : Math.min(...values));
+  let high = Math.max(...values, 0 > Math.max(...values) ? 0 : Math.max(...values));
+  if (low === high) {
+    low -= Math.abs(low) || 1;
+    high += Math.abs(high) || 1;
+  }
+  const span = high - low;
+
+  const width = 300;
+  const height = 150;
+  const pad = { left: 56, right: 10, top: 10, bottom: 28 };
+  const plotWidth = width - pad.left - pad.right;
+  const plotHeight = height - pad.top - pad.bottom;
+  const x = (index) => pad.left + (index * plotWidth) / (points.length - 1);
+  const y = (value) => pad.top + plotHeight - ((value - low) / span) * plotHeight;
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("role", "img");
   svg.setAttribute("aria-label", `${title} の推移`);
-  const line = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  line.setAttribute("d", path);
-  line.setAttribute("class", "spark");
-  svg.append(line);
-  figure.append(svg);
 
-  const range = document.createElement("p");
-  range.className = "page-note";
-  const first = points[0];
-  const last = points[points.length - 1];
-  range.textContent =
-    `${first.label}: ${format(first.value)} → ${last.label}: ${format(last.value)}`;
-  figure.append(range);
+  const add = (name, attributes, text) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+    for (const [key, value] of Object.entries(attributes)) {
+      node.setAttribute(key, String(value));
+    }
+    if (text !== undefined) node.textContent = text;
+    svg.append(node);
+    return node;
+  };
+
+  // Three horizontal gridlines with their values: without them the line shows
+  // a shape but no magnitude, which is not enough to judge a level by.
+  for (const fraction of [0, 0.5, 1]) {
+    const value = low + span * fraction;
+    add("line", {
+      x1: pad.left, x2: width - pad.right,
+      y1: y(value), y2: y(value), class: "axis-grid",
+    });
+    add("text", {
+      x: pad.left - 6, y: y(value) + 3, class: "axis-label", "text-anchor": "end",
+    }, format(value));
+  }
+  add("line", {
+    x1: pad.left, x2: pad.left, y1: pad.top, y2: pad.top + plotHeight, class: "axis-line",
+  });
+  add("line", {
+    x1: pad.left, x2: width - pad.right,
+    y1: pad.top + plotHeight, y2: pad.top + plotHeight, class: "axis-line",
+  });
+
+  // Only the ends are labelled on the time axis; five ticks in 300px collide.
+  add("text", {
+    x: pad.left, y: height - 8, class: "axis-label", "text-anchor": "start",
+  }, points[0].label);
+  add("text", {
+    x: width - pad.right, y: height - 8, class: "axis-label", "text-anchor": "end",
+  }, points[points.length - 1].label);
+  add("text", {
+    x: 4, y: pad.top + 4, class: "axis-label", "text-anchor": "start",
+  }, axisLabel);
+
+  add("path", {
+    d: points.map((entry, index) =>
+      `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(entry.value).toFixed(1)}`
+    ).join(" "),
+    class: "spark",
+  });
+  for (const [index, entry] of points.entries()) {
+    add("circle", { cx: x(index), cy: y(entry.value), r: 2.5, class: "spark-point" })
+      .append(
+        Object.assign(
+          document.createElementNS("http://www.w3.org/2000/svg", "title"),
+          { textContent: `${entry.label}: ${format(entry.value)}` },
+        ),
+      );
+  }
+  figure.append(svg);
   return figure;
 }
 
-async function showDetail(symbol) {
-  const response = await fetch(`/api/fundamentals/${encodeURIComponent(symbol)}`);
-  if (!response.ok) return;
-  const row = await response.json();
-  const history = row.history ?? [];
-  document.getElementById("detail-title").textContent = `${row.symbol} の推移`;
-  document.getElementById("detail-meta").textContent =
-    `${row.subsector ?? ""} ・ 通貨 ${row.currency ?? "不明"} ・ 直近決算期 ${row.period_end}`;
+function detailCell(row, columns) {
+  const cell = document.createElement("td");
+  cell.colSpan = columns;
+  const heading = document.createElement("p");
+  heading.className = "page-note";
+  heading.textContent =
+    `${row.symbol} ・ ${row.subsector ?? ""} ・ 通貨 ${row.currency ?? "不明"}` +
+    ` ・ 直近${(row.history ?? []).length}期の年次実績（横軸=決算年、縦軸=各指標）`;
+  cell.append(heading);
 
+  const history = row.history ?? [];
   const series = (key) =>
     history.map((entry) => ({
       label: String(entry.period_end).slice(0, 4),
       value: entry[key],
     }));
-  const charts = document.getElementById("detail-charts");
-  charts.replaceChildren(
-    sparkline("売上", series("revenue"), (v) => money(v, row.currency)),
-    sparkline("増収率", series("revenue_yoy"), percent),
-    sparkline("粗利率", series("gross_margin"), percent),
-    sparkline("営業利益率", series("operating_margin"), percent),
-    sparkline("在庫日数", series("inventory_days"), (v) => `${DAYS.format(v)}日`),
-    sparkline("設備投資／売上", series("capex_intensity"), percent),
-    sparkline("R&D／売上", series("rd_intensity"), percent),
-    sparkline("FCFマージン", series("free_cash_flow_margin"), percent),
+  const charts = document.createElement("div");
+  charts.className = "fundamentals-charts";
+  charts.append(
+    chart("売上", series("revenue"), (v) => money(v, row.currency), `10億 ${row.currency ?? ""}`),
+    chart("増収率", series("revenue_yoy"), percent, "%"),
+    chart("粗利率", series("gross_margin"), percent, "%"),
+    chart("営業利益率", series("operating_margin"), percent, "%"),
+    chart("在庫日数", series("inventory_days"), (v) => `${DAYS.format(v)}日`, "日"),
+    chart("設備投資／売上", series("capex_intensity"), percent, "%"),
+    chart("R&D／売上", series("rd_intensity"), percent, "%"),
+    chart("FCFマージン", series("free_cash_flow_margin"), percent, "%"),
   );
-  const detail = document.getElementById("detail");
-  detail.hidden = false;
-  detail.scrollIntoView({ behavior: "smooth", block: "start" });
+  cell.append(charts);
+  return cell;
+}
+
+async function toggleDetail(tr, symbol) {
+  const existing = tr.nextElementSibling;
+  if (existing?.classList.contains("detail-row")) {
+    existing.remove();
+    return;
+  }
+  // Only one open at a time: several expanded blocks push the table apart
+  // and defeat the point of opening it in place.
+  for (const open of document.querySelectorAll("tr.detail-row")) open.remove();
+
+  const response = await fetch(`/api/fundamentals/${encodeURIComponent(symbol)}`);
+  if (!response.ok) return;
+  const row = await response.json();
+  const detail = document.createElement("tr");
+  detail.className = "detail-row";
+  detail.append(detailCell(row, tr.children.length));
+  tr.after(detail);
 }
 
 async function load() {
@@ -239,7 +318,6 @@ async function load() {
   rows = payload.symbols ?? [];
   document.getElementById("meta").textContent =
     `${rows.length} 銘柄 ・ 生成 ${String(payload.generated_at).slice(0, 19).replace("T", " ")}`;
-  document.getElementById("history-years").textContent = String(payload.history_years ?? "");
   document.getElementById("improving-header").title =
     `改善した指標の数 / 測定できた指標の数（${(payload.direction_metrics ?? []).join(", ")}）`;
 
@@ -269,9 +347,6 @@ async function load() {
       render();
     });
   }
-  document.getElementById("close-detail").addEventListener("click", () => {
-    document.getElementById("detail").hidden = true;
-  });
   render();
 }
 

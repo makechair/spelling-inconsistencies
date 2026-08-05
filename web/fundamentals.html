@@ -35,18 +35,18 @@
       <table class="fundamentals-table" id="cross-section">
         <thead>
           <tr>
-            <th data-sort="symbol" class="sortable">銘柄</th>
-            <th data-sort="subsector" class="sortable">subsector</th>
-            <th data-sort="period_end" class="sortable">決算期</th>
-            <th data-sort="revenue" class="sortable numeric">売上</th>
-            <th data-sort="revenue_yoy" class="sortable numeric">増収率</th>
-            <th data-sort="gross_margin" class="sortable numeric">粗利率</th>
-            <th data-sort="operating_margin" class="sortable numeric">営業利益率</th>
-            <th data-sort="inventory_days" class="sortable numeric">在庫日数</th>
-            <th data-sort="capex_intensity" class="sortable numeric">設備投資／売上</th>
-            <th data-sort="rd_intensity" class="sortable numeric">R&amp;D／売上</th>
-            <th data-sort="free_cash_flow_margin" class="sortable numeric">FCFマージン</th>
-            <th data-sort="improving" class="sortable numeric" id="improving-header">改善数</th>
+            <th data-sort="symbol" title="ティッカー。クリックすると直下に推移が開く" class="sortable">銘柄</th>
+            <th data-sort="subsector" title="ユニバース定義上の業種区分。data/universe.csv による" class="sortable">subsector</th>
+            <th data-sort="period_end" title="集計期間の末日。TTMは直近4四半期の合計、年次は通期" class="sortable">決算期</th>
+            <th data-sort="revenue" title="売上高。会計基準どおりの金額で、通貨は換算していない（同じ通貨どうしでのみ比較できる）" class="sortable numeric">売上</th>
+            <th data-sort="revenue_yoy" title="増収率。前年同期比。下段は前期の増収率との差で、プラスなら加速・マイナスなら減速" class="sortable numeric">増収率</th>
+            <th data-sort="gross_margin" title="粗利率＝粗利益÷売上高。半導体は稼働率で大きく振れるため、水準と方向の両方を見る" class="sortable numeric">粗利率</th>
+            <th data-sort="operating_margin" title="営業利益率＝営業利益÷売上高。研究開発費と販管費を吸収した後の収益力" class="sortable numeric">営業利益率</th>
+            <th data-sort="inventory_days" title="在庫日数＝棚卸資産÷売上原価×期間日数。積み上がりは需要減速に先行するサイクルの先行指標。短縮が改善" class="sortable numeric">在庫日数</th>
+            <th data-sort="capex_intensity" title="設備投資÷売上高。供給能力の増減。業界全体で上がると次サイクルの供給過剰を示唆する" class="sortable numeric">設備投資／売上</th>
+            <th data-sort="rd_intensity" title="研究開発費÷売上高。将来の競争力への投下" class="sortable numeric">R&amp;D／売上</th>
+            <th data-sort="free_cash_flow_margin" title="FCFマージン＝（営業CF−設備投資）÷売上高。手元に残る現金の割合" class="sortable numeric">FCFマージン</th>
+            <th data-sort="improving" title="改善した指標の数／測定できた指標の数。増収率・粗利率・営業利益率・在庫日数の4つを等重みで数えただけで、スコアではない" class="sortable numeric" id="improving-header">改善数</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -54,7 +54,9 @@
     </div>
 
     <p class="page-note">
-      増収率・粗利率・営業利益率・在庫日数の下段は前年差。改善を緑、悪化を赤で示す
+      <strong>決算期の基準</strong>: 四半期が4つ揃う銘柄は<strong>TTM（直近12ヶ月）</strong>、
+      揃わない銘柄（20-F提出者など四半期報告が無い会社）は<strong>通期</strong>。
+      行ごとに「TTM」「通期」と表示する。増収率・粗利率・営業利益率・在庫日数の下段は前年差。改善を緑、悪化を赤で示す
       （在庫日数は短縮が改善）。<strong>「改善数」は等重みの単純な数え上げで、
       スコアではない</strong> — 指標間の重み付けに根拠がないため、意図的に
       重み付けしていない。空欄は提出者がその項目を報告していないことを意味し、
@@ -63,16 +65,6 @@
     </p>
   </section>
 
-  <section id="detail" hidden>
-    <h2 id="detail-title"></h2>
-    <p class="page-note" id="detail-meta"></p>
-    <div class="fundamentals-charts" id="detail-charts"></div>
-    <p class="page-note">
-      直近<span id="history-years"></span>年の年次実績。同じ縦軸で並べているのは
-      同一指標の推移のみで、銘柄間の水準比較は上表で行う。
-    </p>
-    <button type="button" id="close-detail">閉じる</button>
-  </section>
 </main>
 
 <footer class="footer"><span id="footer-status"></span></footer>

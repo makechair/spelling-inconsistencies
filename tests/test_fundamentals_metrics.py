@@ -259,3 +259,66 @@ def test_summary_skips_periods_with_no_revenue(tmp_path: Path):
     facts, sectors = build(tmp_path, [fact("capex", 100)])
     summary = build_summary(compute(facts, sectors), generated_at=datetime.now(tz=UTC))
     assert summary["symbols"] == []
+
+
+def quarter(concept, value, *, start, end, accession, **kwargs):
+    return fact(concept, value, start=start, end=end, form="10-Q",
+                accession=accession, **kwargs)
+
+
+def test_trailing_twelve_months_replaces_a_stale_annual(tmp_path: Path):
+    """An annual-only table sat TSM's 2024 figures beside NVDA's 2026 ones.
+    Where four quarters exist past the last annual, they are the current year."""
+    facts = [
+        fact("revenue", 1000, start="2024-01-01", end="2024-12-31",
+             filed="2025-02-01", accession="fy24"),
+        fact("cost_of_revenue", 600, start="2024-01-01", end="2024-12-31",
+             filed="2025-02-01", accession="fy24"),
+    ]
+    ends = [("2025-01-01", "2025-03-31"), ("2025-04-01", "2025-06-30"),
+            ("2025-07-01", "2025-09-30"), ("2025-10-01", "2025-12-31")]
+    for index, (start, end) in enumerate(ends):
+        facts.append(quarter("revenue", 300, start=start, end=end,
+                             accession=f"q{index}", filed="2026-01-15"))
+        facts.append(quarter("cost_of_revenue", 150, start=start, end=end,
+                             accession=f"q{index}", filed="2026-01-15"))
+    built, sectors = build(tmp_path, facts)
+    entry = build_summary(compute(built, sectors), generated_at=datetime.now(tz=UTC))["symbols"][0]
+
+    assert entry["basis"] == "ttm"
+    assert entry["period_end"] == "2025-12-31"
+    assert entry["annual_period_end"] == "2024-12-31"
+    assert entry["revenue"] == pytest.approx(1200)
+    # Summed components, not averaged ratios: 1 - 600/1200.
+    assert entry["gross_margin"] == pytest.approx(0.5)
+    assert entry["revenue_yoy"] == pytest.approx(0.2)
+
+
+def test_a_filer_without_quarters_keeps_its_annual(tmp_path: Path):
+    """20-F filers have no quarterly report at all."""
+    built, sectors = build(tmp_path, [
+        fact("revenue", 1000, start="2024-01-01", end="2024-12-31",
+             filed="2025-02-01", accession="fy24"),
+    ])
+    entry = build_summary(compute(built, sectors), generated_at=datetime.now(tz=UTC))["symbols"][0]
+    assert entry["basis"] == "annual"
+    assert entry["period_end"] == "2024-12-31"
+
+
+def test_quarters_that_do_not_span_a_year_are_not_summed(tmp_path: Path):
+    """A gap in the filings would otherwise be reported as a full year that
+    happens to be short."""
+    facts = [
+        fact("revenue", 1000, start="2024-01-01", end="2024-12-31",
+             filed="2025-02-01", accession="fy24"),
+    ]
+    # Q2 is missing, so the four newest quarters reach back eighteen months.
+    for index, (start, end) in enumerate([
+        ("2024-07-01", "2024-09-30"), ("2024-10-01", "2024-12-31"),
+        ("2025-01-01", "2025-03-31"), ("2025-10-01", "2025-12-31"),
+    ]):
+        facts.append(quarter("revenue", 300, start=start, end=end,
+                             accession=f"q{index}", filed="2026-01-15"))
+    built, sectors = build(tmp_path, facts)
+    entry = build_summary(compute(built, sectors), generated_at=datetime.now(tz=UTC))["symbols"][0]
+    assert entry["basis"] == "annual"

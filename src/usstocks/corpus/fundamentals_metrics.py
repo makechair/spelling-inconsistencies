@@ -98,6 +98,73 @@ DIRECTION_METRICS = (
 HISTORY_YEARS = 5
 
 
+def _ratio(numerator: Any, denominator: Any) -> float | None:
+    if numerator is None or not denominator:
+        return None
+    return numerator / denominator
+
+
+def trailing_twelve_months(quarters: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The last four quarters summed, when they actually form a year.
+
+    An annual-only table is up to twelve months stale for anyone who files
+    quarterly, which is what made TSM's 2024 figures sit beside NVDA's 2026
+    ones. Sums are taken over the raw components -- margins are not additive,
+    so averaging four quarterly ratios would be a different number entirely.
+    """
+    if len(quarters) < 4:
+        return None
+    window = quarters[-4:]
+    span = (window[-1]["period_end"] - window[0]["period_start"]).days + 1
+    # Four quarters that do not span a year mean a gap or an overlap, and
+    # summing them would silently under- or over-count.
+    if not 330 <= span <= 400:
+        return None
+    units = {row.get("revenue_unit") for row in window if row.get("revenue_unit")}
+    if len(units) > 1:
+        return None
+
+    def total(name: str) -> float | None:
+        values = [row.get(name) for row in window]
+        return None if any(value is None for value in values) else sum(values)
+
+    revenue = total("revenue")
+    if revenue is None:
+        return None
+    cost = total("cost_of_revenue")
+    gross = total("gross_profit")
+    latest = window[-1]
+    operating_cash_flow = total("operating_cash_flow")
+    capex = total("capex")
+    return {
+        "symbol": latest["symbol"],
+        "subsector": latest.get("subsector"),
+        "period_type": "ttm",
+        "period_start": window[0]["period_start"],
+        "period_end": latest["period_end"],
+        "revenue": revenue,
+        "revenue_unit": latest.get("revenue_unit"),
+        "gross_margin": (
+            _ratio(gross, revenue) if gross is not None else
+            (None if cost is None else _ratio(revenue - cost, revenue))
+        ),
+        "operating_margin": _ratio(total("operating_income"), revenue),
+        # Inventory is a balance, not a flow: the closing figure is the level,
+        # and the cost of sales it is divided by is the whole year's.
+        "inventory_days": (
+            None if cost in (None, 0) or latest.get("inventory") is None
+            else latest["inventory"] / cost * span
+        ),
+        "capex_intensity": _ratio(capex, revenue),
+        "rd_intensity": _ratio(total("research_development"), revenue),
+        "free_cash_flow_margin": (
+            None if operating_cash_flow is None or capex is None
+            else _ratio(operating_cash_flow - capex, revenue)
+        ),
+        "equity_ratio": latest.get("equity_ratio"),
+    }
+
+
 def build_summary(table: Any, *, generated_at: datetime) -> dict[str, Any]:
     """The cross-sectional view, prepared here so the API only serves a file.
 
@@ -105,15 +172,58 @@ def build_summary(table: Any, *, generated_at: datetime) -> dict[str, Any]:
     not have, and the metrics job already holds everything this needs.
     """
     annual: dict[str, list[dict[str, Any]]] = {}
+    quarterly: dict[str, list[dict[str, Any]]] = {}
     for row in table.to_pylist():
-        if row.get("period_type") != "annual" or row.get("revenue") is None:
+        if row.get("revenue") is None:
             continue
-        annual.setdefault(str(row["symbol"]), []).append(row)
+        if row.get("period_type") == "annual":
+            annual.setdefault(str(row["symbol"]), []).append(row)
+        elif row.get("period_type") == "quarter":
+            quarterly.setdefault(str(row["symbol"]), []).append(row)
 
     symbols: list[dict[str, Any]] = []
     for symbol, rows in sorted(annual.items()):
         rows.sort(key=lambda item: item["period_end"])
         latest = rows[-1]
+
+        # Prefer trailing twelve months when it is genuinely newer than the
+        # last annual report; a 20-F filer has no quarters and keeps the annual.
+        quarters = sorted(
+            quarterly.get(symbol, []), key=lambda item: item["period_end"]
+        )
+        ttm = trailing_twelve_months(quarters)
+        basis = "annual"
+        if ttm is not None and ttm["period_end"] > latest["period_end"]:
+            for name in (
+                "revenue_yoy",
+                "revenue_yoy_change",
+                "gross_margin_yoy_change",
+                "operating_margin_yoy_change",
+                "inventory_days_yoy_change",
+            ):
+                ttm[name] = None
+            # The four quarters before this window, or -- when the filer has
+            # not published eight yet -- the annual report a year earlier,
+            # which covers the same twelve months.
+            prior = trailing_twelve_months(
+                [row for row in quarters if row["period_end"] < ttm["period_start"]]
+            )
+            if prior is None:
+                year_before = [
+                    row
+                    for row in rows
+                    if 330 <= (ttm["period_end"] - row["period_end"]).days <= 400
+                ]
+                prior = year_before[-1] if year_before else None
+            if prior is not None and prior.get("revenue"):
+                ttm["revenue_yoy"] = ttm["revenue"] / prior["revenue"] - 1
+                if latest.get("revenue_yoy") is not None:
+                    ttm["revenue_yoy_change"] = ttm["revenue_yoy"] - latest["revenue_yoy"]
+                for name in ("gross_margin", "operating_margin", "inventory_days"):
+                    if ttm.get(name) is not None and prior.get(name) is not None:
+                        ttm[f"{name}_yoy_change"] = ttm[name] - prior[name]
+            latest = ttm
+            basis = "ttm"
         # An equal-weight count, not a score: there is no defensible basis for
         # weighting these against each other, and a weighted number would look
         # more authoritative than it is.
@@ -144,7 +254,11 @@ def build_summary(table: Any, *, generated_at: datetime) -> dict[str, Any]:
             {
                 "symbol": symbol,
                 "subsector": latest.get("subsector"),
+                # Which basis produced these figures, so the reader is never
+                # left guessing whether a date is the fiscal year or a window.
+                "basis": basis,
                 "period_end": latest["period_end"].isoformat(),
+                "annual_period_end": rows[-1]["period_end"].isoformat(),
                 "currency": latest.get("revenue_unit"),
                 "revenue": latest.get("revenue"),
                 "revenue_yoy": latest.get("revenue_yoy"),

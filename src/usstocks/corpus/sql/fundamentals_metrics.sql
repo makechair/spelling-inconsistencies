@@ -120,6 +120,17 @@ SELECT
     period_days,
     revenue,
     revenue_unit,
+    -- The raw components travel with the ratios so a trailing-twelve-month
+    -- figure can be summed downstream. Summing the ratios themselves would be
+    -- wrong: a margin is not additive across quarters.
+    cost_of_revenue,
+    gross_profit,
+    operating_income,
+    net_income,
+    research_development,
+    operating_cash_flow,
+    capex,
+    inventory,
     CASE
         WHEN revenue IS NOT NULL AND revenue <> 0
              AND gross_profit IS NOT NULL AND gross_profit_unit = revenue_unit
