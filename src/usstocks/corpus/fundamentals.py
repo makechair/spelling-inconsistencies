@@ -216,16 +216,47 @@ def _parse_iso_date(value: object) -> date | None:
         return None
 
 
-def _pick_unit(units: dict[str, Any]) -> tuple[str, list[dict]] | None:
-    """Prefer USD, then shares, then whatever single currency the filer used.
+def reporting_currency(payload: dict[str, Any]) -> str | None:
+    """The currency the filer mostly reports in.
 
-    TSM reports in TWD and ASML in EUR. Refusing non-USD would drop the
-    foreign filers entirely, and converting would need an FX source we do not
-    have. The unit travels on the row instead: every ratio this corpus is for
-    -- margins, inventory days, capex intensity, growth -- is currency-neutral,
-    and the few figures that are not can be labelled with the unit they are in.
+    Choosing per concept independently is what left TSM with revenue in TWD
+    and cost of revenue in USD: both were individually defensible, and the
+    gross margin between them was refused as a currency mismatch. Anchoring
+    every concept to one currency keeps the ratios computable.
     """
-    for unit_name in ("USD", "shares"):
+    counts: dict[str, int] = {}
+    namespaces = payload.get("facts")
+    if not isinstance(namespaces, dict):
+        return None
+    for namespace in ("us-gaap", "ifrs-full"):
+        tags = namespaces.get(namespace)
+        if not isinstance(tags, dict):
+            continue
+        for entry in tags.values():
+            units = entry.get("units") if isinstance(entry, dict) else None
+            if not isinstance(units, dict):
+                continue
+            for unit_name, rows in units.items():
+                if unit_name == "shares" or "/" in unit_name:
+                    continue
+                if isinstance(rows, list):
+                    counts[unit_name] = counts.get(unit_name, 0) + len(rows)
+    if not counts:
+        return None
+    return max(sorted(counts), key=lambda name: counts[name])
+
+
+def _pick_unit(
+    units: dict[str, Any], preferred: str | None = None
+) -> tuple[str, list[dict]] | None:
+    """The filer's own currency where it has one, then USD, then shares.
+
+    Refusing non-USD would drop the foreign filers entirely, and converting
+    would need an FX source we do not have. The unit travels on the row
+    instead: every ratio this corpus is for -- margins, inventory days, capex
+    intensity, growth -- is currency-neutral.
+    """
+    for unit_name in ([preferred] if preferred else []) + ["USD", "shares"]:
         rows = units.get(unit_name)
         if isinstance(rows, list) and rows:
             return unit_name, rows
@@ -238,19 +269,24 @@ def _pick_unit(units: dict[str, Any]) -> tuple[str, list[dict]] | None:
     return None
 
 
-def _select_facts(
-    facts: dict[str, Any], candidates: Sequence[str]
-) -> tuple[str, str, list[dict]] | None:
-    """First candidate tag present in any taxonomy, with its unit and rows.
+def _candidate_facts(
+    facts: dict[str, Any], candidates: Sequence[str], preferred: str | None
+) -> list[tuple[int, str, str, list[dict]]]:
+    """Every candidate tag present, with the priority that breaks ties.
 
-    Namespaces are searched rather than fixed to us-gaap: foreign private
-    issuers file 20-F under ifrs-full, and looking only at us-gaap silently
-    returned nothing at all for them.
+    Taking only the first tag cost NVDA most of its history: filers move
+    between tags over the years, so one tag covers one stretch of periods and
+    another covers the rest. All of them are read and merged per period, with
+    the more specific tag winning where they overlap.
+
+    Namespaces are searched rather than fixed to us-gaap, since foreign
+    private issuers file 20-F under ifrs-full.
     """
     namespaces = facts.get("facts")
     if not isinstance(namespaces, dict):
-        return None
-    for tag in candidates:
+        return []
+    found: list[tuple[int, str, str, list[dict]]] = []
+    for priority, tag in enumerate(candidates):
         for namespace in ("us-gaap", "ifrs-full", "dei"):
             entry = namespaces.get(namespace, {})
             entry = entry.get(tag) if isinstance(entry, dict) else None
@@ -259,11 +295,12 @@ def _select_facts(
             units = entry.get("units")
             if not isinstance(units, dict):
                 continue
-            picked = _pick_unit(units)
+            picked = _pick_unit(units, preferred)
             if picked is not None:
                 unit, rows = picked
-                return tag, unit, rows
-    return None
+                found.append((priority, tag, unit, rows))
+                break
+    return found
 
 
 def describe_available_facts(payload: dict[str, Any]) -> str:
@@ -293,49 +330,57 @@ def normalize_company_facts(symbol: str, payload: dict[str, Any]) -> list[dict[s
     rows: list[dict[str, object]] = []
     entity = str(payload.get("entityName") or "")
     cik = str(payload.get("cik") or "")
+    preferred = reporting_currency(payload)
 
     for concept, candidates in CONCEPTS.items():
-        selected = _select_facts(payload, candidates)
-        if selected is None:
-            continue
-        tag, unit, facts = selected
         instant = concept in INSTANT_CONCEPTS
-        for fact in facts:
-            if not isinstance(fact, dict):
-                continue
-            value = fact.get("val")
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                continue
-            end = _parse_iso_date(fact.get("end"))
-            if end is None:
-                continue
-            start = _parse_iso_date(fact.get("start"))
-            # A duration concept without a start, or an instant one with a
-            # start, is not the measurement this concept means.
-            if instant and start is not None:
-                continue
-            if not instant and start is None:
-                continue
-            form = str(fact.get("form") or "")
-            fiscal_period = str(fact.get("fp") or "")
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "cik": cik,
-                    "entity_name": entity,
-                    "concept": concept,
-                    "xbrl_tag": tag,
-                    "unit": unit,
-                    "period_start": start,
-                    "period_end": end,
-                    "fiscal_year": int(fact["fy"]) if isinstance(fact.get("fy"), int) else None,
-                    "fiscal_period": fiscal_period,
-                    "form": form,
-                    "accession": str(fact.get("accn") or ""),
-                    "filed": _parse_iso_date(fact.get("filed")),
-                    "value": float(value),
-                }
-            )
+        # Tag priority breaks ties where two candidates cover the same period;
+        # elsewhere they fill in different stretches of the filer's history.
+        best: dict[tuple[Any, Any, str], tuple[int, dict[str, object]]] = {}
+        for priority, tag, unit, facts in _candidate_facts(payload, candidates, preferred):
+            for fact in facts:
+                if not isinstance(fact, dict):
+                    continue
+                value = fact.get("val")
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    continue
+                end = _parse_iso_date(fact.get("end"))
+                if end is None:
+                    continue
+                start = _parse_iso_date(fact.get("start"))
+                # A duration concept without a start, or an instant one with a
+                # start, is not the measurement this concept means.
+                if instant and start is not None:
+                    continue
+                if not instant and start is None:
+                    continue
+                accession = str(fact.get("accn") or "")
+                key = (start, end, accession)
+                existing = best.get(key)
+                if existing is not None and existing[0] <= priority:
+                    continue
+                best[key] = (
+                    priority,
+                    {
+                        "symbol": symbol,
+                        "cik": cik,
+                        "entity_name": entity,
+                        "concept": concept,
+                        "xbrl_tag": tag,
+                        "unit": unit,
+                        "period_start": start,
+                        "period_end": end,
+                        "fiscal_year": (
+                            int(fact["fy"]) if isinstance(fact.get("fy"), int) else None
+                        ),
+                        "fiscal_period": str(fact.get("fp") or ""),
+                        "form": str(fact.get("form") or ""),
+                        "accession": accession,
+                        "filed": _parse_iso_date(fact.get("filed")),
+                        "value": float(value),
+                    },
+                )
+        rows.extend(row for _, row in best.values())
     return rows
 
 

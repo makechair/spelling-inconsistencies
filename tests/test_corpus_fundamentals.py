@@ -311,18 +311,57 @@ def test_the_reporting_currency_travels_on_the_row():
     assert usd[0]["unit"] == "USD"
 
 
-def test_usd_wins_when_a_filer_reports_more_than_one_currency():
+def test_one_currency_is_chosen_for_the_whole_filer():
+    """Picking per concept left TSM with revenue in TWD and cost in USD, so
+    the gross margin between them was refused as a mismatch. The filer's
+    dominant currency now anchors every concept, which is what makes the
+    ratio computable at all."""
     payload = ifrs_facts(
         Revenue={
             "units": {
                 "TWD": [usd_fact(val=1_000_000.0)],
                 "USD": [usd_fact(val=32_000.0)],
             }
-        }
+        },
+        CostOfSales={"units": {"TWD": [usd_fact(val=600_000.0)]}},
     )
     rows = normalize_company_facts("TSM", payload)
-    assert rows[0]["unit"] == "USD"
-    assert rows[0]["value"] == 32_000.0
+    units = {row["concept"]: row["unit"] for row in rows}
+    assert units == {"revenue": "TWD", "cost_of_revenue": "TWD"}
+
+
+def test_usd_is_used_when_the_filer_reports_nothing_else():
+    payload = company_facts(Revenues={"units": {"USD": [usd_fact(val=1000.0)]}})
+    assert normalize_company_facts("MU", payload)[0]["unit"] == "USD"
+
+
+def test_history_split_across_two_tags_is_merged():
+    """NVDA kept 18 of 112 rows because only the first matching tag was read.
+    Filers move between tags over the years, so each covers part of the span.
+    """
+    payload = company_facts(
+        Revenues={
+            "units": {
+                "USD": [
+                    usd_fact(val=500.0, start="2019-01-01", end="2019-12-31",
+                             accn="fy19", fy=2019),
+                ]
+            }
+        },
+        RevenueFromContractWithCustomerExcludingAssessedTax={
+            "units": {
+                "USD": [
+                    usd_fact(val=900.0, start="2024-01-01", end="2024-12-31",
+                             accn="fy24", fy=2024),
+                ]
+            }
+        },
+    )
+    rows = normalize_company_facts("NVDA", payload)
+    assert sorted(row["value"] for row in rows) == [500.0, 900.0]
+    by_year = {row["period_end"].year: row["xbrl_tag"] for row in rows}
+    assert by_year[2019] == "Revenues"
+    assert by_year[2024] == "RevenueFromContractWithCustomerExcludingAssessedTax"
 
 
 def test_per_share_units_are_not_mistaken_for_levels():
