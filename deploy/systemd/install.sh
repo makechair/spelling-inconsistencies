@@ -80,10 +80,12 @@ for unit in \
   usstocks-fundamentals.service \
   usstocks-edinet.service \
   usstocks-fundamentals-metrics.service \
+  usstocks-edinet-facts.service \
   usstocks-event-study.timer \
   usstocks-fundamentals.timer \
   usstocks-edinet.timer \
   usstocks-fundamentals-metrics.timer \
+  usstocks-edinet-facts.timer \
   usstocks-analysis-narrative-import.service \
   usstocks-analysis-narrative-import.timer; do
   install -m 0644 "${REPO_DIR}/deploy/systemd/${unit}" "${UNIT_DIR}/${unit}"
@@ -118,6 +120,7 @@ systemctl enable \
   usstocks-fundamentals.timer \
   usstocks-edinet.timer \
   usstocks-fundamentals-metrics.timer \
+  usstocks-edinet-facts.timer \
   usstocks-analysis-narrative-import.timer \
   usstocks-deploy.timer
 systemctl start \
@@ -129,6 +132,7 @@ systemctl start \
   usstocks-fundamentals.timer \
   usstocks-edinet.timer \
   usstocks-fundamentals-metrics.timer \
+  usstocks-edinet-facts.timer \
   usstocks-analysis-narrative-import.timer \
   usstocks-deploy.timer
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Re-extract EDINET facts after the archive job
+
+[Timer]
+# 06:50 UTC = 15:50 JST, twenty minutes after the EDINET archive job, so it
+# reads that run's downloads. The metrics job at 14:45 picks these up on its
+# next run rather than the same day, which is fine: filings are not urgent.
+OnCalendar=*-*-* 06:50:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -38,6 +38,7 @@ usstocks-corpus-news = "usstocks.corpus.news:main"
 usstocks-event-study = "usstocks.corpus.event_study:main"
 usstocks-corpus-edinet = "usstocks.corpus.edinet:main"
 usstocks-fundamentals-metrics = "usstocks.corpus.fundamentals_metrics:main"
+usstocks-edinet-facts = "usstocks.corpus.edinet_facts:main"
 usstocks-analysis-narrative = "usstocks.corpus.narrative:main"
 
 [tool.setuptools.packages.find]

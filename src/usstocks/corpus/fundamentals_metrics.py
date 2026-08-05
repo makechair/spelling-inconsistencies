@@ -41,13 +41,24 @@ def _modules() -> tuple[Any, Any]:
     return duckdb, pq
 
 
-def discover_inputs(local_root: Path) -> tuple[list[Path], Path]:
+def discover_inputs(local_root: Path) -> tuple[list[Path], list[Path]]:
     facts = sorted((local_root / "fundamentals").glob("symbol=*/part.parquet"))
     if not facts:
         raise CorpusError("no fundamentals Parquet found; run the EDGAR loader first")
-    sectors = local_root / "universe" / "sectors.parquet"
-    if not sectors.exists():
-        raise CorpusError(f"universe sectors Parquet is missing: {sectors}")
+    # Both universes, when the Japanese one has been built: the metrics job
+    # does not need to know which market a symbol came from.
+    sectors = [
+        path
+        for path in (
+            local_root / "universe" / "sectors.parquet",
+            local_root / "universe" / "sectors_jp.parquet",
+        )
+        if path.exists()
+    ]
+    if not sectors:
+        raise CorpusError(
+            f"universe sectors Parquet is missing: {local_root / 'universe'}"
+        )
     return facts, sectors
 
 
@@ -55,7 +66,7 @@ def metrics_s3_root(settings: Settings) -> str:
     return f"{corpus_s3_root(settings)}/fundamentals_metrics"
 
 
-def compute(facts: list[Path], sectors: Path) -> Any:
+def compute(facts: list[Path], sectors: list[Path] | Path) -> Any:
     duckdb, _ = _modules()
     connection = duckdb.connect(":memory:")
     try:
@@ -64,9 +75,10 @@ def compute(facts: list[Path], sectors: Path) -> Any:
         connection.from_parquet(
             [str(path) for path in facts], hive_partitioning=False
         ).create_view("fundamentals_input")
-        connection.from_parquet(str(sectors), hive_partitioning=False).create_view(
-            "sectors_input"
-        )
+        sector_paths = [sectors] if isinstance(sectors, Path) else list(sectors)
+        connection.from_parquet(
+            [str(path) for path in sector_paths], hive_partitioning=False
+        ).create_view("sectors_input")
         sql = (
             resources.files("usstocks.corpus")
             .joinpath("sql/fundamentals_metrics.sql")

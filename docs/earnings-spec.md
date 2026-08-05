@@ -357,7 +357,7 @@ purposes」「**the Yahoo! finance API is intended for personal use only**」と
 | # | 内容 | 依存 |
 |---|---|---|
 | JP-A | **書類の発見・PDF/XBRLのS3保存・索引作成**（実装済み） | APIキー登録 |
-| JP-A2 | 保存したXBRL zipから概念行を抽出 | JP-A の本番実行 |
+| JP-A2 | 保存したXBRL zipから概念行を抽出（実装済み・本番未実行） | JP-A の本番実行 |
 | JP-B | 指標算出（米国側と共通の比率。通貨は全てJPY） | JP-A, Phase B |
 | JP-C | 一元表示への統合（通貨が違うので比率のみ横並び） | JP-B, Phase C |
 | JP-D（保留） | 短信の速報取り込み | 経路の費用判断 |
@@ -600,3 +600,58 @@ exchangeへのpublishを止め、Mac側も受け取ったファイルのdigest�
 
 **解説が無くても画面は壊れない。** ブリッジはMacで動くので、閉じていれば
 digestは無い。APIは `narrative` を付けずに指標だけ返す。
+
+
+## 16. JP-A2 実装（2026-08-05）
+
+| 成果物 | 実装 |
+|---|---|
+| 概念抽出 | `src/usstocks/corpus/edinet_facts.py` |
+| 出力 | `corpus/fundamentals/symbol=8035/part.parquet`（**米国株と同じ場所・同じschema**） |
+| subsector | `corpus/universe/sectors_jp.parquet` |
+| 定期実行 | `usstocks-edinet-facts.timer`（毎日15:50 JST、EDINET取得の20分後） |
+| 検証 | 239テスト・ruff通過。**EDINET実XBRLは未検証** |
+
+**米国株と同じ `fundamentals/` に書く。** 指標算出は `symbol=*/part.parquet` を
+glob するので、日本株が自動的に同じ表へ載る。subsectorだけは別ファイルにし、
+`discover_inputs` が両方を読む。
+
+### EDGARに無い落とし穴 — コンテキストの次元
+
+EDINETのXBRLは**コンテキストが次元（`explicitMember`）を持つ**。同じ
+`NetSales` タグで、連結・セグメント別・個別財務諸表の数字がすべて出てくる。
+無条件に読むと**1社の売上を何重にも数える**。しかも失敗が例外ではなく
+「妙に大きい数字」として現れるので気づきにくい。
+
+**次元を持たないコンテキストだけを読む。** テストで、セグメント別の売上が
+混ざらないことを固定した。
+
+その他の判断:
+
+- **`jppfs`（日本基準）・`jpigp`/`ifrs`（IFRS）だけを読み、`jpcrp` は読まない。**
+  jpcrpは表紙・記述情報のタクソノミで、財務諸表の数値ではない
+- **残高項目と期間項目は `startDate` の有無で判別**（EDGAR側と同じ規則）
+- **1単位のみの `unit` を採る。** `divide` を持つ単位（円/株）は水準ではない
+- 文書種別はEDINETのコードから、指標算出が受け付けるform名へ写像する
+  （120有報→`20-F`、140/160四半期・半期→`10-Q`）。**指標側の提出書類
+  フィルタを日本向けに分岐させないため**の写像であり、実際に米国の書類を
+  指すわけではない
+
+### 一致しなかったときの診断
+
+EDINETへ開発環境から到達できないため、`--describe <docID>` で
+**その書類が実際に持っている概念名を頻度順に出す**。前回EDGARで
+「タグが違って0行」に2往復かけたので、最初から入れてある。
+
+**最初にやること**（1社で形状を確認する）:
+
+```bash
+sudo bash -c 'cd /var/lib/usstocks && set -a; . /etc/usstocks/usstocks.env; set +a; \
+  USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus \
+  USSTOCKS_UNIVERSE_JP_PATH=/opt/usstocks/current/data/universe_jp.csv \
+  runuser -u usstocks -- /opt/usstocks/current/venv/bin/python \
+    -m usstocks.corpus.edinet_facts'
+```
+
+0行や `no usable facts` が出たら、そのdocIDを `--describe` に渡して
+実際のタグ名を確認し、`JP_CONCEPTS` へ追補する。
