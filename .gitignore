@@ -7,12 +7,12 @@
 
 # Data
 data/*
-!data/universe.csv
+!data/universe*.csv
 *.db
 *.db-wal
 *.db-shm
 *.csv
-!data/universe.csv
+!data/universe*.csv
 *.parquet
 backups/
 
