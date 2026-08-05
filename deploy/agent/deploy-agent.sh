@@ -107,6 +107,7 @@ systemd_release_is_current() {
     [[ -x "${target}/venv/bin/python" ]] &&
     [[ -d "${target}/web" ]] &&
     [[ -f "${target}/data/universe.csv" ]] &&
+    [[ -f "${target}/data/universe_jp.csv" ]] &&
     [[ -x "${target}/backup.sh" ]] &&
     [[ -f "${target}/REVISION" ]] &&
     [[ "$(<"${target}/REVISION")" == "${sha}" ]]
@@ -134,6 +135,7 @@ build_systemd_release() {
   if [[ -x "${release_dir}/venv/bin/python" &&
         -d "${release_dir}/web" &&
         -f "${release_dir}/data/universe.csv" &&
+        -f "${release_dir}/data/universe_jp.csv" &&
         -x "${release_dir}/backup.sh" &&
         -f "${release_dir}/REVISION" &&
         "$(<"${release_dir}/REVISION")" == "${sha}" ]]; then
@@ -162,7 +164,11 @@ build_systemd_release() {
 
   cp -a "${REPO_DIR}/web" "${BUILD_DIR}/web"
   install -d -o usstocks -g usstocks -m 0755 "${BUILD_DIR}/data"
-  install -m 0644 "${REPO_DIR}/data/universe.csv" "${BUILD_DIR}/data/universe.csv"
+  # Every universe CSV, not one file by name. Naming them individually meant
+  # universe_jp.csv was committed, deployed, and still absent from the release.
+  for csv in "${REPO_DIR}"/data/*.csv; do
+    install -m 0644 "${csv}" "${BUILD_DIR}/data/$(basename "${csv}")"
+  done
   install -m 0755 "${REPO_DIR}/deploy/backup/backup.sh" "${BUILD_DIR}/backup.sh"
   install -m 0755 \
     "${REPO_DIR}/deploy/analysis/import-ai-digests.sh" \
