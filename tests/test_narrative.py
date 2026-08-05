@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from usstocks.corpus.narrative import _facts, _validate
+from usstocks.corpus.narrative import _facts, validate_digest
 
 
 def test_digest_resolves_model_selected_ids_to_deterministic_evidence():
@@ -12,7 +12,7 @@ def test_digest_resolves_model_selected_ids_to_deterministic_evidence():
         "walk_forward_simulations": {},
     })
 
-    digest = _validate({
+    digest = validate_digest({
         "overview": "短期反応を慎重に確認します",
         "points": [{
             "title": "短期",
@@ -28,7 +28,7 @@ def test_digest_resolves_model_selected_ids_to_deterministic_evidence():
 def test_digest_rejects_a_figure_not_present_in_selected_evidence():
     facts = [{"id": "F1", "text": "勝率56.0%です。"}]
     with pytest.raises(ValueError, match="unsupported figure"):
-        _validate({
+        validate_digest({
             "overview": "傾向を確認します",
             "points": [{
                 "title": "検証",

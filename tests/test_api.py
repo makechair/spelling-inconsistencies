@@ -709,3 +709,42 @@ def test_fundamentals_detail_404s_for_a_symbol_with_no_filings(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": 1, "symbols": []}), encoding="utf-8")
     assert client.get("/api/fundamentals/NVDA").status_code == 404
+
+
+def test_fundamentals_detail_attaches_the_reading_guide(
+    client: TestClient, settings: Settings
+):
+    root = settings.corpus_local_dir / "fundamentals"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "summary.json").write_text(
+        json.dumps({"version": 1, "symbols": [{"symbol": "MU", "history": []}]}),
+        encoding="utf-8",
+    )
+    (root / "digest.json").write_text(
+        json.dumps({
+            "model": "qwen3:14b",
+            "symbols": {
+                "MU": {"overview": "在庫調整が進んだ", "points": [], "caution": "一期のみ"}
+            },
+        }),
+        encoding="utf-8",
+    )
+    detail = client.get("/api/fundamentals/MU").json()
+    assert detail["narrative"]["overview"] == "在庫調整が進んだ"
+    assert detail["narrative"]["model"] == "qwen3:14b"
+
+
+def test_fundamentals_detail_works_before_any_guide_exists(
+    client: TestClient, settings: Settings
+):
+    """The bridge runs on a Mac that may be closed. A missing guide is normal
+    and must not take the figures down with it."""
+    root = settings.corpus_local_dir / "fundamentals"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "summary.json").write_text(
+        json.dumps({"version": 1, "symbols": [{"symbol": "MU", "revenue": 1.0}]}),
+        encoding="utf-8",
+    )
+    detail = client.get("/api/fundamentals/MU").json()
+    assert detail["revenue"] == 1.0
+    assert "narrative" not in detail

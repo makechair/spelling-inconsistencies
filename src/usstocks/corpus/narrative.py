@@ -84,7 +84,13 @@ def _prompt(report: dict[str, Any], facts: list[dict[str, str]]) -> list[dict[st
     ]
 
 
-def _validate(raw: Any, facts: list[dict[str, str]]) -> dict[str, Any]:
+def validate_digest(raw: Any, facts: list[dict[str, str]]) -> dict[str, Any]:
+    """Reject anything the model invented.
+
+    Shared with the fundamentals digest rather than copied: this is the check
+    that keeps model-authored figures out of the report, and two copies of it
+    would drift.
+    """
     if not isinstance(raw, dict):
         raise ValueError("Qwen response must be a JSON object")
     allowed = {fact["id"]: fact["text"] for fact in facts}
@@ -149,7 +155,7 @@ def enrich(
     )
     response.raise_for_status()
     content = response.json().get("message", {}).get("content")
-    digest = _validate(json.loads(content), facts)
+    digest = validate_digest(json.loads(content), facts)
     payload = {
         "version": 1,
         "report_date": report.get("report_date"),

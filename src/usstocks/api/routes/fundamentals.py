@@ -56,11 +56,29 @@ def summary(settings: Settings = Depends(get_settings_dep)) -> dict[str, Any]:
     }
 
 
+def _read_digest(settings: Settings) -> dict[str, Any]:
+    """The Qwen reading guide, if the Mac-side pass has produced one.
+
+    Its absence is ordinary -- the bridge may not have run, or may have failed
+    on this symbol -- so it never turns a working detail view into an error.
+    """
+    path = settings.corpus_local_dir / "fundamentals" / "digest.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 @router.get("/{symbol}")
 def detail(symbol: str, settings: Settings = Depends(get_settings_dep)) -> dict[str, Any]:
     payload = _read_summary(settings)
     wanted = symbol.strip().upper()
     for row in payload["symbols"]:
         if str(row.get("symbol", "")).upper() == wanted:
+            digest = _read_digest(settings)
+            guide = (digest.get("symbols") or {}).get(row["symbol"])
+            if isinstance(guide, dict):
+                return row | {"narrative": guide | {"model": digest.get("model")}}
             return row
     raise HTTPException(status_code=404, detail="symbol has no fundamentals yet")

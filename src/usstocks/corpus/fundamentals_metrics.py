@@ -25,6 +25,7 @@ from typing import Any
 from ..config import Settings, get_settings
 from ..logging_setup import configure_logging
 from .daily import CorpusError, Uploader, aws_upload, corpus_s3_root, load_state, save_state
+from .event_study import analysis_exchange_s3_root
 
 log = logging.getLogger(__name__)
 
@@ -318,13 +319,32 @@ def run(settings: Settings, *, uploader: Uploader = aws_upload) -> int:
     digest = write_metrics(path, table)
 
     summary = build_summary(table, generated_at=datetime.now(tz=UTC))
-    write_summary(local_root / "fundamentals" / "summary.json", summary)
+    summary_path = local_root / "fundamentals" / "summary.json"
+    write_summary(summary_path, summary)
+
+    # The reading guide is generated where Ollama runs, which is not this host.
+    # Publishing the summary to the exchange is how it gets there.
+    try:
+        exchange = analysis_exchange_s3_root(settings)
+    except CorpusError:
+        exchange = ""
 
     state_path = local_root / "fundamentals-metrics-state.json"
     state = load_state(state_path)
     if state.get("digest") != digest:
         uploader(path, f"{metrics_s3_root(settings)}/part.parquet")
         state["digest"] = digest
+
+    # Hashed over the figures alone, not the file: generated_at moves every run,
+    # and the Mac skips a report whose bytes it has already seen. Publishing an
+    # identical summary under a new timestamp would re-run Qwen across every
+    # symbol for nothing.
+    content_digest = hashlib.sha256(
+        json.dumps(summary["symbols"], ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    if exchange and state.get("summary_digest") != content_digest:
+        uploader(summary_path, f"{exchange}/input/latest/fundamentals.json")
+        state["summary_digest"] = content_digest
     state["row_count"] = table.num_rows
     state["last_success_utc"] = datetime.now(tz=UTC).isoformat()
     save_state(state_path, state)

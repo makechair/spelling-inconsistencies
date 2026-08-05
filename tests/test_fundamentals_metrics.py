@@ -207,7 +207,12 @@ def test_run_writes_and_uploads_once_then_stays_quiet(tmp_path: Path):
     uploads: list[str] = []
     assert run(settings, uploader=lambda p, d: uploads.append(d)) == 0
     assert run(settings, uploader=lambda p, d: uploads.append(d)) == 0
-    assert uploads == ["s3://example-bucket/corpus/fundamentals_metrics/part.parquet"]
+    # The exchange copy goes once too: identical figures under a fresh
+    # timestamp would make the Mac re-run Qwen over every symbol.
+    assert uploads == [
+        "s3://example-bucket/corpus/fundamentals_metrics/part.parquet",
+        "s3://example-bucket/analysis-exchange/input/latest/fundamentals.json",
+    ]
     stored = read_parquet_rows(tmp_path / "fundamentals_metrics" / "part.parquet")
     assert stored[0]["gross_margin"] == pytest.approx(0.4)
 

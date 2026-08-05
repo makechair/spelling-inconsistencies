@@ -975,3 +975,21 @@ body {
   stroke-width: 1;
   opacity: 0.35;
 }
+
+.narrative {
+  margin: 0.5rem 0 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 3px solid var(--accent, #4c9aff);
+  background: var(--panel);
+  border-radius: 4px;
+}
+.narrative-overview { margin: 0 0 0.5rem; font-weight: 600; }
+.narrative-point { margin: 0 0 0.5rem; }
+/* The evidence is the part that is verifiable, so it stays attached to the
+   sentence it supports rather than being tucked away. */
+.narrative-evidence {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+  opacity: 0.75;
+}
+.narrative-caution { margin: 0.5rem 0 0.25rem; }

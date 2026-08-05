@@ -18,3 +18,11 @@ aws s3 sync \
   --exclude '*' \
   --include 'date=*/ai_digest.json' \
   --only-show-errors
+
+# The fundamentals guide, written by the same Mac-side pass. Absent until the
+# bridge has run once, which is not an error.
+install -d -m 0750 /var/lib/usstocks/corpus/fundamentals
+aws s3 cp \
+  "${EXCHANGE_URI}/output/fundamentals/digest.json" \
+  /var/lib/usstocks/corpus/fundamentals/digest.json \
+  --only-show-errors || echo "no fundamentals digest yet"

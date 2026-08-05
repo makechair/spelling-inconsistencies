@@ -301,6 +301,44 @@ function detailCell(row, columns) {
       label: String(entry.period_end).slice(0, 4),
       value: entry[key],
     }));
+  const guide = row.narrative;
+  if (guide) {
+    const box = document.createElement("div");
+    box.className = "narrative";
+    const overview = document.createElement("p");
+    overview.className = "narrative-overview";
+    overview.textContent = guide.overview ?? "";
+    box.append(overview);
+    for (const point of guide.points ?? []) {
+      const item = document.createElement("div");
+      item.className = "narrative-point";
+      const title = document.createElement("strong");
+      title.textContent = point.title ?? "";
+      const body = document.createElement("span");
+      body.textContent = ` — ${point.interpretation ?? ""}`;
+      item.append(title, body);
+      // The figures come from the metrics, never from the model's prose.
+      const evidence = document.createElement("p");
+      evidence.className = "narrative-evidence";
+      evidence.textContent = (point.evidence ?? []).map((e) => e.text).join(" ／ ");
+      item.append(evidence);
+      box.append(item);
+    }
+    if (guide.caution) {
+      const caution = document.createElement("p");
+      caution.className = "narrative-caution";
+      caution.textContent = `注意: ${guide.caution}`;
+      box.append(caution);
+    }
+    const provenance = document.createElement("p");
+    provenance.className = "page-note";
+    provenance.textContent =
+      `解説はローカル${guide.model ?? "LLM"}が指標を読んだもの。` +
+      "数値は指標からの引用で、モデルが書いたものではない";
+    box.append(provenance);
+    cell.append(box);
+  }
+
   const charts = document.createElement("div");
   charts.className = "fundamentals-charts";
   const asPercent = { scale: 100, unit: "%" };
