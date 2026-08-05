@@ -50,7 +50,11 @@ def summary(settings: Settings = Depends(get_settings_dep)) -> dict[str, Any]:
         # History is only needed on a detail view; sending 53 symbols' worth
         # of it makes the table's first paint several times heavier.
         "symbols": [
-            {key: value for key, value in row.items() if key != "history"}
+            {
+                key: value
+                for key, value in row.items()
+                if key not in ("history", "quarterly_history")
+            }
             for row in payload["symbols"]
         ]
     }

@@ -185,9 +185,12 @@ class Settings(BaseSettings):
     # a query parameter -- which is why request URLs are never logged.
     edinet_api_key: str | None = None
     edinet_timeout_seconds: float = Field(default=60.0, gt=0)
-    # The list API answers per submission date, so a routine run only revisits
-    # the last few days; backfill is an explicit --since.
-    edinet_lookback_days: int = Field(default=7, ge=1, le=3650)
+    # The list API answers per submission date, so a routine run walks back
+    # over recent days. Ninety covers a full quarterly reporting season, so a
+    # timer that was down for a fortnight still catches everything filed while
+    # it was off; already-scanned dates are skipped, making the extra span
+    # nearly free. Deeper history is an explicit --since.
+    edinet_lookback_days: int = Field(default=90, ge=1, le=3650)
     universe_jp_path: Path = REPO_ROOT / "data" / "universe_jp.csv"
 
     # ------------------------------------------------------------ news corpus

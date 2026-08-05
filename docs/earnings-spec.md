@@ -655,3 +655,42 @@ sudo bash -c 'cd /var/lib/usstocks && set -a; . /etc/usstocks/usstocks.env; set 
 
 0行や `no usable facts` が出たら、そのdocIDを `--describe` に渡して
 実際のタグ名を確認し、`JP_CONCEPTS` へ追補する。
+
+
+## 17. 四半期グラフとEDINET取得範囲（2026-08-05）
+
+### 四半期の推移をグラフに出す
+
+指標表には元々四半期行があったが、`summary.json` の履歴が年次だけだった。
+`quarterly_history`（直近12期＝3年）を追加し、銘柄を開いたときに
+**四半期／年次を切り替えられる**ようにした。**四半期が既定**である
+（年次は転換点を平均でならしてしまう。マージンが年度途中で天井を打っても
+通期では平坦に見える）。
+
+- 横軸ラベルは四半期では **年/月**（`25/06` 等）。四半期で年だけを出すと
+  同じラベルが4つ並んで無意味になる
+- **四半期の売上・利益はその3ヶ月分**であり、年次と直接は比べられない旨を
+  画面に出す
+- 四半期報告の無い提出者（20-F等）は切替を出さず、年次だけを描く
+- 一覧APIは `history` と `quarterly_history` の両方を落とす（初回描画を
+  重くしないため）
+
+### EDINETの取得範囲
+
+日次実行の遡り既定を **7日 → 90日** に広げた。四半期の提出シーズンを丸ごと
+覆うので、タイマーが2週間止まっていても取りこぼさない。**走査済みの日付は
+飛ばす**ので、広げた分の実行コストはほぼゼロ。
+
+それより過去は `--since` で明示的に取る。**17銘柄の履歴を揃えるにはこれが要る**
+（現在の在庫は3書類のみ）。
+
+```bash
+sudo bash -c 'cd /var/lib/usstocks && set -a; . /etc/usstocks/usstocks.env; set +a; \
+  USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus \
+  USSTOCKS_UNIVERSE_JP_PATH=/opt/usstocks/current/data/universe_jp.csv \
+  runuser -u usstocks -- /opt/usstocks/current/venv/bin/python \
+    -m usstocks.corpus.edinet --since 2023-04-01'
+```
+
+3年分で約1,100日 = 1リクエスト/秒で**約20分**（書類のダウンロード分を含めると
+もう少しかかる）。中断しても走査済みの日付は記録されるので、再実行すれば続きから進む。

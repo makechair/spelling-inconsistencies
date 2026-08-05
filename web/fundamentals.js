@@ -288,19 +288,79 @@ function chart(title, series, { scale = 1, unit = "" } = {}) {
 function detailCell(row, columns) {
   const cell = document.createElement("td");
   cell.colSpan = columns;
+
+  const annual = row.history ?? [];
+  const quarterly = row.quarterly_history ?? [];
+
   const heading = document.createElement("p");
   heading.className = "page-note";
-  heading.textContent =
-    `${row.symbol} ・ ${row.subsector ?? ""} ・ 通貨 ${row.currency ?? "不明"}` +
-    ` ・ 直近${(row.history ?? []).length}期の年次実績。単位は各軸の端に示す`;
   cell.append(heading);
 
-  const history = row.history ?? [];
-  const series = (key) =>
-    history.map((entry) => ({
-      label: String(entry.period_end).slice(0, 4),
-      value: entry[key],
-    }));
+  // Quarterly is the default where it exists: a year averages away the turn
+  // that the quarters make visible.
+  const controls = document.createElement("div");
+  controls.className = "fundamentals-controls";
+  const modes = [
+    ["quarter", `四半期（${quarterly.length}期）`, quarterly],
+    ["annual", `年次（${annual.length}期）`, annual],
+  ].filter(([, , series]) => series.length >= 2);
+  let mode = modes.length ? modes[0][0] : null;
+
+  const charts = document.createElement("div");
+  charts.className = "fundamentals-charts";
+
+  const draw = () => {
+    const source = mode === "annual" ? annual : quarterly;
+    // Quarterly points need the month too; two 2025 labels tell you nothing.
+    const label = (value) =>
+      mode === "annual"
+        ? String(value).slice(0, 4)
+        : String(value).slice(2, 7).replace("-", "/");
+    const series = (key) =>
+      source.map((entry) => ({ label: label(entry.period_end), value: entry[key] }));
+    const asPercent = { scale: 100, unit: "%" };
+    charts.replaceChildren(
+      chart("売上", series("revenue"), { scale: 1e-9, unit: `10億 ${row.currency ?? ""}` }),
+      chart("増収率", series("revenue_yoy"), asPercent),
+      chart("粗利率", series("gross_margin"), asPercent),
+      chart("営業利益率", series("operating_margin"), asPercent),
+      chart("在庫日数", series("inventory_days"), { unit: "日" }),
+      chart("設備投資／売上", series("capex_intensity"), asPercent),
+      chart("R&D／売上", series("rd_intensity"), asPercent),
+      chart("FCFマージン", series("free_cash_flow_margin"), asPercent),
+    );
+    const span = mode === "annual" ? "年次" : "四半期";
+    heading.textContent =
+      `${row.symbol} ・ ${row.subsector ?? ""} ・ 通貨 ${row.currency ?? "不明"}` +
+      ` ・ 直近${source.length}期の${span}実績。単位は各軸の端に示す` +
+      (mode === "quarter"
+        ? "。四半期の売上・利益はその3ヶ月分で、年次と直接は比べられない"
+        : "");
+  };
+
+  for (const [value, text] of modes) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = text;
+    button.className = value === mode ? "active" : "";
+    button.addEventListener("click", () => {
+      mode = value;
+      for (const other of controls.querySelectorAll("button")) {
+        other.className = other === button ? "active" : "";
+      }
+      draw();
+    });
+    controls.append(button);
+  }
+  if (modes.length > 1) cell.append(controls);
+
+  if (!modes.length) {
+    heading.textContent =
+      `${row.symbol} ・ ${row.subsector ?? ""} ・ 推移を描けるだけの期間がまだない`;
+  } else {
+    draw();
+  }
+
   const guide = row.narrative;
   if (guide) {
     const box = document.createElement("div");
@@ -339,19 +399,6 @@ function detailCell(row, columns) {
     cell.append(box);
   }
 
-  const charts = document.createElement("div");
-  charts.className = "fundamentals-charts";
-  const asPercent = { scale: 100, unit: "%" };
-  charts.append(
-    chart("売上", series("revenue"), { scale: 1e-9, unit: `10億 ${row.currency ?? ""}` }),
-    chart("増収率", series("revenue_yoy"), asPercent),
-    chart("粗利率", series("gross_margin"), asPercent),
-    chart("営業利益率", series("operating_margin"), asPercent),
-    chart("在庫日数", series("inventory_days"), { unit: "日" }),
-    chart("設備投資／売上", series("capex_intensity"), asPercent),
-    chart("R&D／売上", series("rd_intensity"), asPercent),
-    chart("FCFマージン", series("free_cash_flow_margin"), asPercent),
-  );
   cell.append(charts);
   return cell;
 }

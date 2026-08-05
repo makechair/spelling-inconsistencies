@@ -109,6 +109,9 @@ DIRECTION_METRICS = (
 )
 
 HISTORY_YEARS = 5
+# Three years of quarters: enough to watch a cycle turn without a chart so
+# dense the points merge.
+HISTORY_QUARTERS = 12
 
 
 def _ratio(numerator: Any, denominator: Any) -> float | None:
@@ -249,20 +252,27 @@ def build_summary(table: Any, *, generated_at: datetime) -> dict[str, Any]:
             measured += 1
             if value * better > 0:
                 improving += 1
-        history = [
-            {
-                "period_end": item["period_end"].isoformat(),
-                "revenue": item.get("revenue"),
-                "gross_margin": item.get("gross_margin"),
-                "operating_margin": item.get("operating_margin"),
-                "inventory_days": item.get("inventory_days"),
-                "capex_intensity": item.get("capex_intensity"),
-                "rd_intensity": item.get("rd_intensity"),
-                "free_cash_flow_margin": item.get("free_cash_flow_margin"),
-                "revenue_yoy": item.get("revenue_yoy"),
-            }
-            for item in rows[-HISTORY_YEARS:]
-        ]
+        def as_history(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                {
+                    "period_end": item["period_end"].isoformat(),
+                    "revenue": item.get("revenue"),
+                    "gross_margin": item.get("gross_margin"),
+                    "operating_margin": item.get("operating_margin"),
+                    "inventory_days": item.get("inventory_days"),
+                    "capex_intensity": item.get("capex_intensity"),
+                    "rd_intensity": item.get("rd_intensity"),
+                    "free_cash_flow_margin": item.get("free_cash_flow_margin"),
+                    "revenue_yoy": item.get("revenue_yoy"),
+                }
+                for item in items
+            ]
+
+        history = as_history(rows[-HISTORY_YEARS:])
+        # A year hides the turn: a margin that peaked mid-year reads as a flat
+        # annual figure. Empty for filers with no quarterly report, which the
+        # page states rather than leaving as a blank chart.
+        quarterly_history = as_history(quarters[-HISTORY_QUARTERS:])
         symbols.append(
             {
                 "symbol": symbol,
@@ -289,12 +299,14 @@ def build_summary(table: Any, *, generated_at: datetime) -> dict[str, Any]:
                 "improving": improving,
                 "improving_measured": measured,
                 "history": history,
+                "quarterly_history": quarterly_history,
             }
         )
     return {
         "version": 1,
         "generated_at": generated_at.isoformat(),
         "history_years": HISTORY_YEARS,
+        "history_quarters": HISTORY_QUARTERS,
         # Named so the page can say what the count is, rather than implying a
         # weighting nobody chose.
         "direction_metrics": [name for name, _ in DIRECTION_METRICS],

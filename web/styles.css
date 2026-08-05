@@ -993,3 +993,19 @@ body {
   opacity: 0.75;
 }
 .narrative-caution { margin: 0.5rem 0 0.25rem; }
+
+/* The period toggle inside an expanded row. */
+.detail-row .fundamentals-controls { margin: 0 0 0.5rem; gap: 0.5rem; }
+.detail-row .fundamentals-controls button {
+  padding: 0.2rem 0.7rem;
+  border: 1px solid var(--panel-2);
+  border-radius: 4px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.detail-row .fundamentals-controls button.active {
+  border-color: var(--accent, #4c9aff);
+  background: var(--panel);
+}
