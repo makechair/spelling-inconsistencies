@@ -1,0 +1,13 @@
+[Unit]
+Description=Scan EDINET for new Japanese filings once a day
+
+[Timer]
+# 06:30 UTC = 15:30 JST, after the SEC job at 14:30 and clear of the daily
+# bars, the Notion corpus and the event study. Japanese filings land in the
+# afternoon JST, so this catches the same day's submissions.
+OnCalendar=*-*-* 06:30:00 UTC
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

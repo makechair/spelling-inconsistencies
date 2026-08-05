@@ -356,10 +356,62 @@ purposes」「**the Yahoo! finance API is intended for personal use only**」と
 
 | # | 内容 | 依存 |
 |---|---|---|
-| JP-A | EDINET取得・正規化（XBRL）＋PDFのS3保存 | APIキー登録 |
+| JP-A | **書類の発見・PDF/XBRLのS3保存・索引作成**（実装済み） | APIキー登録 |
+| JP-A2 | 保存したXBRL zipから概念行を抽出 | JP-A の本番実行 |
 | JP-B | 指標算出（米国側と共通の比率。通貨は全てJPY） | JP-A, Phase B |
 | JP-C | 一元表示への統合（通貨が違うので比率のみ横並び） | JP-B, Phase C |
 | JP-D（保留） | 短信の速報取り込み | 経路の費用判断 |
 
 **未決**: EDINET APIキーの取得（登録が要る）、短信経路の費用判断、
 日本株株価をJ-Quantsで賄うか。
+
+
+### JP-A 実装（2026-08-04）
+
+**EDGARとの決定的な違いが2つあり、これが段階の切り方を決めた。**
+
+1. **銘柄横断の一括取得口が無い。** EDGARの `companyfacts` に相当するものが無く、
+   書類一覧APIは**提出日単位**でしか答えない。よって「日を歩いて自社の銘柄に
+   絞り込む」形になる。既知の `docID` は飛ばす。
+2. **整形済みJSONではなく、生XBRLのZIPが返る。** 解凍とXML解析が要るため、
+   概念抽出は JP-A2 へ分けた。**JP-Aは発見・保存・索引まで**で、
+   ご要望の「PDFをS3に保存」はここで満たされる。
+
+| 成果物 | 実装 |
+|---|---|
+| ユニバース | `data/universe_jp.csv`（17銘柄） |
+| 取得・保存 | `src/usstocks/corpus/edinet.py` |
+| S3 | `corpus/edinet/code=8035/<docID>/document.pdf` と `xbrl.zip` |
+| 索引 | `corpus/edinet_index/part.parquet` |
+| 定期実行 | `usstocks-edinet.service` / `.timer`（毎日15:30 JST） |
+| 設定 | `USSTOCKS_EDINET_API_KEY`（必須） |
+| 検証 | 201テスト・ruff通過。**EDINET実レスポンスは未検証** |
+
+**証券コードは5桁で返る。** EDINETは 8035 を `80350` と書くため、
+そのまま突き合わせると1件も一致しない。先頭4桁で照合する。
+
+**書類種別で絞る。** EDINETは全提出者の全書類を返すので、
+定期報告（120/130 有報、140/150 四半期、160/170 半期）だけを採る。
+四半期報告書は2024年に廃止され半期報告書へ移行したため、年によって
+どちらも現れる。大量保有報告書などは財務諸表を含まないので除外する。
+
+**「その書類種別のファイルが無い」を200＋JSONで返す。** そのまま保存すると
+エラーメッセージをPDFとしてS3へ置くことになるので、先頭が `{` の応答は
+欠測として扱う。
+
+**APIキーはクエリパラメータで送る**（EDINETがそれしか受け付けない）。
+したがって**リクエストURLをログに出さない**。httpx例外の文面にもURLが
+入るため、例外は型名だけに置き換えている。
+
+日次実行は直近 `USSTOCKS_EDINET_LOOKBACK_DAYS`（既定7日）だけを見る。
+過去分は `--since` で明示的に取る。**当日分は一覧が後から増えるので
+走査済みにしない。**
+
+**最初にやること**（1日分で形状を確認する）:
+
+```bash
+sudo bash -c 'cd /var/lib/usstocks && set -a; . /etc/usstocks/usstocks.env; set +a; \
+  USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus \
+  USSTOCKS_UNIVERSE_JP_PATH=/opt/usstocks/current/data/universe_jp.csv \
+  runuser -u usstocks -- /opt/usstocks/current/venv/bin/python \
+    -m usstocks.corpus.edinet --since 2026-06-25 --until 2026-06-27'

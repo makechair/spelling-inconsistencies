@@ -1,0 +1,29 @@
+[Unit]
+Description=Archive EDINET filings for the Japanese universe
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/usstocks/current/data/universe_jp.csv
+
+[Service]
+Type=oneshot
+User=usstocks
+Group=usstocks
+WorkingDirectory=/var/lib/usstocks
+EnvironmentFile=/etc/usstocks/usstocks.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/env USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus USSTOCKS_UNIVERSE_JP_PATH=/opt/usstocks/current/data/universe_jp.csv /opt/usstocks/current/venv/bin/python -m usstocks.corpus.edinet
+
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/usstocks
+ProtectHome=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0027
+
+MemoryMax=512M
+TimeoutStartSec=3600

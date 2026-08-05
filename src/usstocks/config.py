@@ -180,6 +180,16 @@ class Settings(BaseSettings):
     sec_timeout_seconds: float = Field(default=30.0, gt=0)
     fundamentals_max_symbols_per_run: int = Field(default=60, ge=1, le=200)
 
+    # ---------------------------------------------------------------- EDINET
+    # Japanese filings. The v2 API requires a free subscription key, passed as
+    # a query parameter -- which is why request URLs are never logged.
+    edinet_api_key: str | None = None
+    edinet_timeout_seconds: float = Field(default=60.0, gt=0)
+    # The list API answers per submission date, so a routine run only revisits
+    # the last few days; backfill is an explicit --since.
+    edinet_lookback_days: int = Field(default=7, ge=1, le=3650)
+    universe_jp_path: Path = REPO_ROOT / "data" / "universe_jp.csv"
+
     # ------------------------------------------------------------ news corpus
     # Direct values are useful for local development. Production leaves these
     # empty and resolves the two SecureString parameters from the teiten
