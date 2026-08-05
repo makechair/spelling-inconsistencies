@@ -6,14 +6,14 @@ contained (docs/earnings-spec.md 9), not to a hypothetical.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
 from usstocks.config import Settings
 from usstocks.corpus.daily import CorpusError, read_parquet_rows
-from usstocks.corpus.fundamentals_metrics import compute, run
+from usstocks.corpus.fundamentals_metrics import build_summary, compute, run
 
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
@@ -222,3 +222,40 @@ def test_run_refuses_to_guess_when_the_facts_are_missing(tmp_path: Path):
     )
     with pytest.raises(CorpusError, match="no fundamentals Parquet"):
         run(settings, uploader=lambda p, d: None)
+
+
+def test_summary_counts_improving_metrics_without_weighting_them(tmp_path: Path):
+    """An equal-weight count is defensible; a weighted score would imply a
+    judgement about which indicator matters more that nothing supports."""
+    facts, sectors = build(tmp_path, [
+        fact("revenue", 800, start="2023-01-01", end="2023-12-31",
+             filed="2024-02-01", accession="fy23"),
+        fact("cost_of_revenue", 500, start="2023-01-01", end="2023-12-31",
+             filed="2024-02-01", accession="fy23"),
+        fact("revenue", 1000, start="2024-01-01", end="2024-12-31",
+             filed="2025-02-01", accession="fy24"),
+        fact("cost_of_revenue", 600, start="2024-01-01", end="2024-12-31",
+             filed="2025-02-01", accession="fy24"),
+        fact("revenue", 1150, start="2025-01-01", end="2025-12-31",
+             filed="2026-02-01", accession="fy25"),
+        fact("cost_of_revenue", 700, start="2025-01-01", end="2025-12-31",
+             filed="2026-02-01", accession="fy25"),
+    ])
+    summary = build_summary(compute(facts, sectors), generated_at=datetime.now(tz=UTC))
+    entry = summary["symbols"][0]
+    assert entry["symbol"] == "MU"
+    assert entry["period_end"] == "2025-12-31"
+    # Growth decelerated and the margin slipped, so neither counts as improving.
+    assert entry["improving"] == 0
+    assert entry["improving_measured"] == 2
+    assert [point["period_end"] for point in entry["history"]] == [
+        "2023-12-31", "2024-12-31", "2025-12-31"
+    ]
+
+
+def test_summary_skips_periods_with_no_revenue(tmp_path: Path):
+    """A period the filer only partly tagged would otherwise become a row with
+    an empty headline figure."""
+    facts, sectors = build(tmp_path, [fact("capex", 100)])
+    summary = build_summary(compute(facts, sectors), generated_at=datetime.now(tz=UTC))
+    assert summary["symbols"] == []

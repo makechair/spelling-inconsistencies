@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>決算分析 — US Stocks</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand brand-link" href="/">US&nbsp;Stocks</a>
+  <a class="topbar-link" href="/reports">分析レポート</a>
+  <a class="topbar-link active" href="/fundamentals" aria-current="page">決算分析</a>
+  <a class="topbar-link" href="/coverage">データ蓄積状況</a>
+</header>
+
+<main class="page">
+  <section id="overview">
+    <h1>決算分析</h1>
+    <p class="page-note" id="meta"></p>
+
+    <div class="fundamentals-controls">
+      <label>subsector
+        <select id="subsector-filter"><option value="">すべて</option></select>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="hide-incomplete">
+        指標が揃う銘柄のみ
+      </label>
+      <span class="page-note" id="row-count"></span>
+    </div>
+
+    <div class="table-scroll">
+      <table class="fundamentals-table" id="cross-section">
+        <thead>
+          <tr>
+            <th data-sort="symbol" class="sortable">銘柄</th>
+            <th data-sort="subsector" class="sortable">subsector</th>
+            <th data-sort="period_end" class="sortable">決算期</th>
+            <th data-sort="revenue" class="sortable numeric">売上</th>
+            <th data-sort="revenue_yoy" class="sortable numeric">増収率</th>
+            <th data-sort="gross_margin" class="sortable numeric">粗利率</th>
+            <th data-sort="operating_margin" class="sortable numeric">営業利益率</th>
+            <th data-sort="inventory_days" class="sortable numeric">在庫日数</th>
+            <th data-sort="capex_intensity" class="sortable numeric">設備投資／売上</th>
+            <th data-sort="rd_intensity" class="sortable numeric">R&amp;D／売上</th>
+            <th data-sort="free_cash_flow_margin" class="sortable numeric">FCFマージン</th>
+            <th data-sort="improving" class="sortable numeric" id="improving-header">改善数</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <p class="page-note">
+      増収率・粗利率・営業利益率・在庫日数の下段は前年差。改善を緑、悪化を赤で示す
+      （在庫日数は短縮が改善）。<strong>「改善数」は等重みの単純な数え上げで、
+      スコアではない</strong> — 指標間の重み付けに根拠がないため、意図的に
+      重み付けしていない。空欄は提出者がその項目を報告していないことを意味し、
+      0ではない。通貨は換算していないので、売上の絶対額は同じ通貨どうしでのみ
+      比較できる。
+    </p>
+  </section>
+
+  <section id="detail" hidden>
+    <h2 id="detail-title"></h2>
+    <p class="page-note" id="detail-meta"></p>
+    <div class="fundamentals-charts" id="detail-charts"></div>
+    <p class="page-note">
+      直近<span id="history-years"></span>年の年次実績。同じ縦軸で並べているのは
+      同一指標の推移のみで、銘柄間の水準比較は上表で行う。
+    </p>
+    <button type="button" id="close-detail">閉じる</button>
+  </section>
+</main>
+
+<footer class="footer"><span id="footer-status"></span></footer>
+<script type="module" src="/static/fundamentals.js"></script>
+</body>
+</html>

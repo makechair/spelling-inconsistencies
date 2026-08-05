@@ -659,3 +659,53 @@ def test_requesting_bars_marks_the_symbol_as_viewed(client: TestClient, settings
 
     with Repository(settings.db_path) as repo:
         assert repo.recently_viewed(timedelta(minutes=5)) == ["AAPL"]
+
+
+def test_fundamentals_summary_omits_history_but_the_detail_keeps_it(
+    client: TestClient, settings: Settings
+):
+    """History is per-symbol detail. Shipping it for every symbol multiplies
+    the table's first payload for data the table never draws."""
+    summary = {
+        "version": 1,
+        "generated_at": "2026-08-05T00:00:00+00:00",
+        "history_years": 5,
+        "direction_metrics": ["revenue_yoy_change"],
+        "symbols": [
+            {
+                "symbol": "NVDA",
+                "subsector": "logic_compute",
+                "period_end": "2026-01-25",
+                "currency": "USD",
+                "revenue": 215_940_000_000.0,
+                "gross_margin": 0.711,
+                "improving": 2,
+                "improving_measured": 4,
+                "history": [{"period_end": "2026-01-25", "revenue": 215_940_000_000.0}],
+            }
+        ],
+    }
+    path = settings.corpus_local_dir / "fundamentals" / "summary.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary), encoding="utf-8")
+
+    table = client.get("/api/fundamentals").json()
+    assert [row["symbol"] for row in table["symbols"]] == ["NVDA"]
+    assert "history" not in table["symbols"][0]
+    assert table["symbols"][0]["gross_margin"] == 0.711
+
+    detail = client.get("/api/fundamentals/nvda").json()
+    assert detail["history"][0]["revenue"] == 215_940_000_000.0
+
+
+def test_fundamentals_says_so_before_the_metrics_have_ever_run(client: TestClient):
+    assert client.get("/api/fundamentals").status_code == 404
+
+
+def test_fundamentals_detail_404s_for_a_symbol_with_no_filings(
+    client: TestClient, settings: Settings
+):
+    path = settings.corpus_local_dir / "fundamentals" / "summary.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 1, "symbols": []}), encoding="utf-8")
+    assert client.get("/api/fundamentals/NVDA").status_code == 404

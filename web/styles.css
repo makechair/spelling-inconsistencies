@@ -866,3 +866,60 @@ body {
   .case-metric-grid { grid-template-columns: 1fr 1fr; }
   .coverage-row { grid-template-columns: 72px 1fr; gap: 12px; padding-inline: 8px; }
 }
+
+/* ------------------------------------------------------- fundamentals table */
+.fundamentals-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  margin: 1rem 0 0.5rem;
+}
+.table-scroll { overflow-x: auto; }
+.fundamentals-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+}
+.fundamentals-table th,
+.fundamentals-table td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border, #2a2f3a);
+  text-align: left;
+  white-space: nowrap;
+}
+.fundamentals-table th.numeric,
+.fundamentals-table td.numeric { text-align: right; }
+.fundamentals-table th.sortable { cursor: pointer; user-select: none; }
+.fundamentals-table th.sortable:hover { text-decoration: underline; }
+.fundamentals-table th[aria-sort="descending"]::after { content: " ▼"; }
+.fundamentals-table th[aria-sort="ascending"]::after { content: " ▲"; }
+.fundamentals-table tbody tr:hover { background: rgba(255, 255, 255, 0.04); }
+/* The delta line is deliberately quieter than the level it belongs to. */
+.fundamentals-delta { font-size: 0.78rem; opacity: 0.85; }
+.fundamentals-delta.up { color: var(--up, #38a169); }
+.fundamentals-delta.down { color: var(--down, #e53e3e); }
+.linklike {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.fundamentals-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.fundamentals-chart { margin: 0; }
+.fundamentals-chart figcaption { font-weight: 600; margin-bottom: 0.25rem; }
+.fundamentals-chart svg { width: 100%; height: auto; }
+.fundamentals-chart .spark {
+  fill: none;
+  stroke: var(--accent, #4c9aff);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}

@@ -23,7 +23,16 @@ from ..db.repository import Repository
 from ..logging_setup import configure_logging
 from .auth import AccessVerifier, AuthError, extract_token
 from .deps import AppState
-from .routes import analysis, bars, coverage, export, health, live, symbols
+from .routes import (
+    analysis,
+    bars,
+    coverage,
+    export,
+    fundamentals,
+    health,
+    live,
+    symbols,
+)
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +158,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(live.router)
     app.include_router(export.router)
     app.include_router(analysis.router)
+    app.include_router(fundamentals.router)
 
     @app.get("/api/livez", include_in_schema=False)
     def livez() -> dict:
@@ -176,6 +186,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         @app.get("/coverage", include_in_schema=False)
         def data_coverage() -> FileResponse:
             return FileResponse(web_dir / "coverage.html")
+
+        @app.get("/fundamentals", include_in_schema=False)
+        def fundamentals_page() -> FileResponse:
+            return FileResponse(web_dir / "fundamentals.html")
 
         @app.get("/favicon.ico", include_in_schema=False)
         def favicon() -> FileResponse:
