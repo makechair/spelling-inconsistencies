@@ -961,3 +961,17 @@ body {
 .fundamentals-chart .spark-point {
   fill: var(--accent, #4c9aff);
 }
+
+/* Axis units sit at the ends, in their own space, so tick numbers stay bare
+   and never overlap them. */
+.fundamentals-chart .axis-unit {
+  fill: currentColor;
+  opacity: 0.55;
+  font-size: 9px;
+}
+/* Zero gets a stronger line than the other gridlines when the data crosses it. */
+.fundamentals-chart .axis-zero {
+  stroke: currentColor;
+  stroke-width: 1;
+  opacity: 0.35;
+}

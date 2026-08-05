@@ -148,8 +148,47 @@ function render() {
   document.getElementById("row-count").textContent = `${selected.length} 銘柄`;
 }
 
-function chart(title, series, format, axisLabel) {
-  const points = series.filter((entry) => entry.value != null);
+// A step of 1, 2, 2.5 or 5 times a power of ten -- the values people read
+// without doing arithmetic. Anything else gives gridlines like 45.2 and 18.0.
+function niceStep(rough) {
+  const magnitude = 10 ** Math.floor(Math.log10(rough));
+  const normalized = rough / magnitude;
+  const step = normalized <= 1 ? 1
+    : normalized <= 2 ? 2
+    : normalized <= 2.5 ? 2.5
+    : normalized <= 5 ? 5
+    : 10;
+  return step * magnitude;
+}
+
+function niceScale(min, max, ticks = 4) {
+  // Zero is always in range. A level drawn from 95 to 180 exaggerates the
+  // swing; from 0 to 200 it reads as the ~40% move it actually is.
+  let low = Math.min(0, min);
+  let high = Math.max(0, max);
+  if (low === high) high = low + 1;
+  const step = niceStep((high - low) / ticks);
+  low = Math.floor(low / step) * step;
+  high = Math.ceil(high / step) * step;
+  const values = [];
+  // Accumulate off the index: repeated addition drifts on steps like 2.5.
+  for (let index = 0; low + step * index <= high + step / 1e6; index += 1) {
+    values.push(low + step * index);
+  }
+  return { low, high, values, step };
+}
+
+function tickText(value, step) {
+  // Decimals only where the step needs them, so 0/50/100 does not print as
+  // 0.0/50.0/100.0 next to a chart that has no use for the precision.
+  const decimals = step >= 1 ? 0 : Math.min(2, Math.ceil(-Math.log10(step)));
+  return value.toFixed(decimals);
+}
+
+function chart(title, series, { scale = 1, unit = "" } = {}) {
+  const points = series
+    .filter((entry) => entry.value != null)
+    .map((entry) => ({ label: entry.label, value: entry.value * scale }));
   const figure = document.createElement("figure");
   figure.className = "fundamentals-chart";
   const caption = document.createElement("figcaption");
@@ -165,23 +204,18 @@ function chart(title, series, format, axisLabel) {
   }
 
   const values = points.map((entry) => entry.value);
-  // The vertical axis includes zero whenever the data straddles it, so a
-  // margin near break-even is not drawn as though it were mid-range.
-  let low = Math.min(...values, values.some((v) => v < 0) ? 0 : Math.min(...values));
-  let high = Math.max(...values, 0 > Math.max(...values) ? 0 : Math.max(...values));
-  if (low === high) {
-    low -= Math.abs(low) || 1;
-    high += Math.abs(high) || 1;
-  }
-  const span = high - low;
+  const axis = niceScale(Math.min(...values), Math.max(...values));
 
   const width = 300;
-  const height = 150;
-  const pad = { left: 56, right: 10, top: 10, bottom: 28 };
+  const height = 168;
+  // Top padding holds the unit on its own line, clear of the first gridline
+  // label -- the two used to sit on top of each other.
+  const pad = { left: 42, right: 12, top: 26, bottom: 30 };
   const plotWidth = width - pad.left - pad.right;
   const plotHeight = height - pad.top - pad.bottom;
   const x = (index) => pad.left + (index * plotWidth) / (points.length - 1);
-  const y = (value) => pad.top + plotHeight - ((value - low) / span) * plotHeight;
+  const y = (value) =>
+    pad.top + plotHeight - ((value - axis.low) / (axis.high - axis.low)) * plotHeight;
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -198,17 +232,23 @@ function chart(title, series, format, axisLabel) {
     return node;
   };
 
-  // Three horizontal gridlines with their values: without them the line shows
-  // a shape but no magnitude, which is not enough to judge a level by.
-  for (const fraction of [0, 0.5, 1]) {
-    const value = low + span * fraction;
+  // Units live at the ends of the axes, once. Repeating them on every tick
+  // makes the numbers long enough to collide with the plot.
+  add("text", { x: 2, y: 11, class: "axis-unit", "text-anchor": "start" }, unit);
+  add(
+    "text",
+    { x: width - pad.right, y: height - 4, class: "axis-unit", "text-anchor": "end" },
+    "決算年",
+  );
+
+  for (const value of axis.values) {
     add("line", {
-      x1: pad.left, x2: width - pad.right,
-      y1: y(value), y2: y(value), class: "axis-grid",
+      x1: pad.left, x2: width - pad.right, y1: y(value), y2: y(value),
+      class: value === 0 && axis.low < 0 ? "axis-zero" : "axis-grid",
     });
     add("text", {
-      x: pad.left - 6, y: y(value) + 3, class: "axis-label", "text-anchor": "end",
-    }, format(value));
+      x: pad.left - 5, y: y(value) + 3, class: "axis-label", "text-anchor": "end",
+    }, tickText(value, axis.step));
   }
   add("line", {
     x1: pad.left, x2: pad.left, y1: pad.top, y2: pad.top + plotHeight, class: "axis-line",
@@ -218,21 +258,18 @@ function chart(title, series, format, axisLabel) {
     y1: pad.top + plotHeight, y2: pad.top + plotHeight, class: "axis-line",
   });
 
-  // Only the ends are labelled on the time axis; five ticks in 300px collide.
   add("text", {
-    x: pad.left, y: height - 8, class: "axis-label", "text-anchor": "start",
+    x: pad.left, y: height - 16, class: "axis-label", "text-anchor": "start",
   }, points[0].label);
   add("text", {
-    x: width - pad.right, y: height - 8, class: "axis-label", "text-anchor": "end",
+    x: width - pad.right, y: height - 16, class: "axis-label", "text-anchor": "end",
   }, points[points.length - 1].label);
-  add("text", {
-    x: 4, y: pad.top + 4, class: "axis-label", "text-anchor": "start",
-  }, axisLabel);
 
   add("path", {
-    d: points.map((entry, index) =>
-      `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(entry.value).toFixed(1)}`
-    ).join(" "),
+    d: points
+      .map((entry, index) =>
+        `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(entry.value).toFixed(1)}`)
+      .join(" "),
     class: "spark",
   });
   for (const [index, entry] of points.entries()) {
@@ -240,7 +277,7 @@ function chart(title, series, format, axisLabel) {
       .append(
         Object.assign(
           document.createElementNS("http://www.w3.org/2000/svg", "title"),
-          { textContent: `${entry.label}: ${format(entry.value)}` },
+          { textContent: `${entry.label}: ${tickText(entry.value, axis.step)}${unit}` },
         ),
       );
   }
@@ -255,7 +292,7 @@ function detailCell(row, columns) {
   heading.className = "page-note";
   heading.textContent =
     `${row.symbol} ・ ${row.subsector ?? ""} ・ 通貨 ${row.currency ?? "不明"}` +
-    ` ・ 直近${(row.history ?? []).length}期の年次実績（横軸=決算年、縦軸=各指標）`;
+    ` ・ 直近${(row.history ?? []).length}期の年次実績。単位は各軸の端に示す`;
   cell.append(heading);
 
   const history = row.history ?? [];
@@ -266,15 +303,16 @@ function detailCell(row, columns) {
     }));
   const charts = document.createElement("div");
   charts.className = "fundamentals-charts";
+  const asPercent = { scale: 100, unit: "%" };
   charts.append(
-    chart("売上", series("revenue"), (v) => money(v, row.currency), `10億 ${row.currency ?? ""}`),
-    chart("増収率", series("revenue_yoy"), percent, "%"),
-    chart("粗利率", series("gross_margin"), percent, "%"),
-    chart("営業利益率", series("operating_margin"), percent, "%"),
-    chart("在庫日数", series("inventory_days"), (v) => `${DAYS.format(v)}日`, "日"),
-    chart("設備投資／売上", series("capex_intensity"), percent, "%"),
-    chart("R&D／売上", series("rd_intensity"), percent, "%"),
-    chart("FCFマージン", series("free_cash_flow_margin"), percent, "%"),
+    chart("売上", series("revenue"), { scale: 1e-9, unit: `10億 ${row.currency ?? ""}` }),
+    chart("増収率", series("revenue_yoy"), asPercent),
+    chart("粗利率", series("gross_margin"), asPercent),
+    chart("営業利益率", series("operating_margin"), asPercent),
+    chart("在庫日数", series("inventory_days"), { unit: "日" }),
+    chart("設備投資／売上", series("capex_intensity"), asPercent),
+    chart("R&D／売上", series("rd_intensity"), asPercent),
+    chart("FCFマージン", series("free_cash_flow_margin"), asPercent),
   );
   cell.append(charts);
   return cell;
