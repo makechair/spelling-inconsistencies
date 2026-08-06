@@ -74,10 +74,18 @@ function percent(value) {
   return value == null ? "" : PERCENT.format(value);
 }
 
+// An EDINET security code: three digits and a fourth character that has been
+// allowed to be a letter since 2024 (130A and the like). No US ticker takes
+// that shape, so the symbol alone settles the market.
+const JP_CODE = /^\d{3}[0-9A-Z]$/;
+
 function marketOf(row) {
-  // A symbol in neither universe file still has metrics; it gets its own tab
-  // rather than being hidden by whichever one happens to be selected.
-  return row.market ?? "その他";
+  // The metrics job labels each row from the universe file it came from, and
+  // that label wins. It is not required, though: a summary.json written
+  // before the label existed still separates correctly, so the page works the
+  // moment it is deployed rather than waiting for the next metrics run.
+  if (row.market) return row.market;
+  return JP_CODE.test(String(row.symbol ?? "")) ? "JP" : "US";
 }
 
 function inMarket(row) {
@@ -172,10 +180,7 @@ function render() {
 
 function presentMarkets() {
   const found = new Set(rows.map(marketOf));
-  return [
-    ...MARKET_ORDER.filter((name) => found.has(name)),
-    ...[...found].filter((name) => !MARKET_ORDER.includes(name)).sort(),
-  ];
+  return MARKET_ORDER.filter((name) => found.has(name));
 }
 
 // Rebuilt whenever the market changes: a subsector list carrying entries that
