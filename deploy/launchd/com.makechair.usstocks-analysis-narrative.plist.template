@@ -22,12 +22,18 @@
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
+  <!-- 17:00 JST. Both inputs have to be published before this starts: the
+       event study at 13:30, and the fundamentals summary at 16:30 (+ up to
+       five minutes of jitter). It previously ran at 14:45, the same minute
+       the summary was being written, so the Mac downloaded the previous
+       day's file and every reading guide was a day behind the figures it
+       described. -->
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>14</integer>
+    <integer>17</integer>
     <key>Minute</key>
-    <integer>45</integer>
+    <integer>0</integer>
   </dict>
   <key>StandardOutPath</key>
   <string>__LOG_DIR__/analysis-narrative.log</string>

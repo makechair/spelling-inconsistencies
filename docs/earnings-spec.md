@@ -424,7 +424,7 @@ sudo bash -c 'cd /var/lib/usstocks && set -a; . /etc/usstocks/usstocks.env; set 
 | 指標算出 | `src/usstocks/corpus/fundamentals_metrics.py` |
 | SQL | `src/usstocks/corpus/sql/fundamentals_metrics.sql` |
 | 出力 | `corpus/fundamentals_metrics/part.parquet` |
-| 定期実行 | `usstocks-fundamentals-metrics.timer`（毎日14:45 JST、EDGAR取得の15分後） |
+| 定期実行 | `usstocks-fundamentals-metrics.timer`（毎日16:30 JST、EDGAR取得と EDINET抽出の**両方**の後） |
 | 検証 | 212テスト・ruff通過 |
 
 9節の3制約をSQLの土台に置いた。**この順序でないと後段が壊れる。**

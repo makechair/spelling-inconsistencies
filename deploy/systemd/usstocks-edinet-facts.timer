@@ -3,8 +3,10 @@ Description=Re-extract EDINET facts after the archive job
 
 [Timer]
 # 06:50 UTC = 15:50 JST, twenty minutes after the EDINET archive job, so it
-# reads that run's downloads. The metrics job at 14:45 picks these up on its
-# next run rather than the same day, which is fine: filings are not urgent.
+# reads that run's downloads. The metrics job then runs at 07:30 UTC and picks
+# these up the same day. It used to run at 05:45, before this, which put every
+# Japanese filing a full day behind -- written off at the time as "filings are
+# not urgent", which confused a lag nobody chose with one somebody wanted.
 OnCalendar=*-*-* 06:50:00 UTC
 RandomizedDelaySec=300
 Persistent=true

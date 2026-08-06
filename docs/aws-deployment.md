@@ -230,7 +230,9 @@ aws configure --profile usstocks-qwen
   "$(terraform output -raw analysis_exchange_s3_uri)"
 ```
 
-launchdは日次分析の完了後、14:45 JSTにQwen3 14Bを一度だけ実行する。同じ
+launchdは日次分析と決算指標の**両方が出そろった後**、17:00 JSTにQwen3 14Bを
+一度だけ実行する（`report.json` は13:30、`fundamentals/summary.json` は16:30に
+公開される）。同じ
 `report.json` はSHA-256で判定して再処理しない。生成物は専用output prefixへ返り、
 Lightsailの15分タイマーが日次レポートへ取り込む。
 

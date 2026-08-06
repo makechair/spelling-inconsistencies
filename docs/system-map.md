@@ -29,7 +29,7 @@ Macが閉じていても、Lightsail側は止まらない。落ちるのは解�
 flowchart LR
   subgraph MAC["Mac（常時稼働ではない）"]
     TEITEN["teiten-pipeline<br/>12:00 / 18:00"]
-    QWEN["Qwen3 14B ブリッジ<br/>14:45"]
+    QWEN["Qwen3 14B ブリッジ<br/>17:00"]
   end
   subgraph EXT["外部API"]
     TIINGO["Tiingo<br/>日足・分足"]
@@ -81,7 +81,7 @@ flowchart TD
   NC --> ES
   DC["corpus<br/>日足Parquet<br/>12:30 火〜土"] --> ES["event-study 13:30<br/>反応日の特定・beta補正・<br/>条件付き集計・検証"]
   ES -->|report.json| EX["S3 analysis-exchange"]
-  EX -->|14:45| QW["Mac: Qwen3 14B<br/>根拠IDの選択と説明"]
+  EX -->|17:00| QW["Mac: Qwen3 14B<br/>根拠IDの選択と説明"]
   QW -->|ai_digest.json| EX
   EX -->|15分ごと| IM["narrative-import"]
   IM --> RPT["/reports 画面"]
@@ -97,9 +97,9 @@ flowchart TD
 flowchart TD
   EG["SEC EDGAR<br/>14:30"] --> FM
   ED["EDINET 書類取得<br/>15:30"] --> EF["EDINET XBRL解析<br/>15:50"]
-  EF --> FM["fundamentals-metrics<br/>14:45<br/>TTM・比率・履歴"]
+  EF --> FM["fundamentals-metrics<br/>16:30<br/>TTM・比率・履歴"]
   FM -->|summary.json| FEX["S3 analysis-exchange"]
-  FEX -->|14:45| FQW["Mac: Qwen3 14B<br/>銘柄ごとの読み方"]
+  FEX -->|17:00| FQW["Mac: Qwen3 14B<br/>銘柄ごとの読み方"]
   FQW -->|digest.json| FEX
   FEX -->|15分ごと| FIM["narrative-import"]
   FM --> FP["/fundamentals 画面"]
@@ -128,11 +128,11 @@ EDINETジョブへ渡る。
 | **13:30** | `usstocks-event-study` | イベントスタディ一式、`report.json` | corpus / news-corpus |
 | **14:00**（月） | `usstocks-edinet-codes` | EDINET企業一覧のミラー | — |
 | **14:30** | `usstocks-fundamentals` | EDGAR XBRLの取得 | — |
-| **14:45** | `usstocks-fundamentals-metrics` | 決算指標の算出、`summary.json` | fundamentals / edinet-facts |
-| **14:45** | Mac / launchd | Qwen3 14Bで解説生成（分析＋決算） | event-study / metrics |
 | **15:30** | `usstocks-edinet` | EDINET書類の取得（遡り90日） | watchlists |
 | **15:50** | `usstocks-edinet-facts` | EDINET XBRL→ファクト行 | edinet |
 | **16:10** | `usstocks-backup` | SQLiteの整合バックアップをS3へ | — |
+| **16:30** | `usstocks-fundamentals-metrics` | 決算指標の算出、`summary.json` | fundamentals **と** edinet-facts |
+| **17:00** | Mac / launchd | Qwen3 14Bで解説生成（分析＋決算） | event-study / metrics |
 | **17:30**（日） | `usstocks-catalog` | ティッカーカタログの更新 | — |
 | **18:00** | Mac / teiten-pipeline | 記事収集（2回目） | — |
 
@@ -148,37 +148,44 @@ systemctl list-timers 'usstocks-*' --all --no-pager
 
 ---
 
-## 4. 時刻表から読める3つの順序の問題
+## 4. 時刻表から見つかった順序の問題（2026-08-06に修正済み）
 
-**これは机上の指摘であり、本番ログでの確認はしていない。** ただし依存関係と
-時刻の組み合わせから、次の3点は構造的に起きる。
+時刻表を1枚にした結果、依存関係と時刻の組み合わせだけから読める問題が2つ
+見つかった。どちらも**本番ログではなく時刻表からの指摘**だが、構造的に起きる
+ものなので直した。
 
-### 4-1. 日本株の決算指標が常に1日遅れる
+### 4-1. 日本株の決算指標が常に1日遅れていた（修正済み）
 
-`fundamentals-metrics`（14:45）は `edinet-facts`（15:50）**より前**に走る。
-EDINETのファクトが増えても、それが指標表に載るのは**翌日の14:45**である。
-JP-A2を回した当日に表が変わらないのはこれが理由になり得る。
+`fundamentals-metrics` は14:45、`edinet-facts` は15:50。**指標の算出が、読むはず
+のファクトの抽出より前に走っていた。** EDINETのファクトが増えても、指標表に
+載るのは翌日である。JP-A2を回した当日に表が変わらなかったとしたら、これが理由に
+なり得る。
 
-直すなら `fundamentals-metrics` を16:10より後ろへ動かす（`edinet-facts` の後）。
-ただしMacのQwen（14:45）がその日の `summary.json` を読めなくなるので、
-Mac側も一緒に後ろへ動かす必要がある。
+**→ `fundamentals-metrics` を16:30へ移した。** `edinet-facts`（15:50 + 揺らぎ）
+とバックアップ（16:10〜16:20）の両方の後ろになる。unitのコメントに、ここを前へ
+戻すと日本株の1日遅れが黙って復活すると書いてある。
 
-### 4-2. Macが読む `summary.json` は前日のもの
+### 4-2. Macが読む `summary.json` が前日のものだった（修正済み）
 
-`fundamentals-metrics` の publish と Mac の launchd が**どちらも14:45**。
-`RandomizedDelaySec=300` があるぶんサーバー側が後になりやすく、Macは前日の
-ファイルをダウンロードする可能性が高い。digestで再処理を止める仕組みがあるため
-「同じ内容を2度Qwenに投げる」事故にはならないが、**解説だけ1日古い**状態が続く。
+`fundamentals-metrics` のpublishとMacのlaunchdが**どちらも14:45**だった。
+サーバー側には `RandomizedDelaySec=300` があるぶん後になりやすく、Macは前日の
+ファイルをダウンロードしていた可能性が高い。digestで再処理を止める仕組みが
+あるため「同じ内容を2度Qwenに投げる」事故にはならないが、**解説だけ1日古い**
+状態が続く。
 
-直すならMacのlaunchdを15:10前後に動かす（`deploy/launchd/*.plist.template` の
-`StartCalendarInterval`）。`report.json`（13:30生成）とは十分離れているので、
-分析レポート側への影響はない。
+**→ Macのlaunchdを17:00へ移した。** 分析レポート（13:30）と決算指標（16:30 +
+揺らぎ）の両方が出そろった後になる。Mac側の解説は3時間ほど遅くなるが、
+1日1回の読み物なので、数字と食い違わないことの方が価値が高い。
 
-### 4-3. 日足は火〜土、イベントスタディは毎日
+### 4-3. 日足は火〜土、イベントスタディは毎日 — これは問題ではない
 
-`usstocks-corpus` は火〜土（=米国市場の営業日翌日）だが、`event-study` は毎日
-走る。日曜・月曜の実行は前営業日と同じ日足で回るので、`report.json` の中身は
-実質変わらない。無駄ではあるが害はない（S3への再送はdigestで抑止される）。
+当初これを「無駄」と書いたが**誤りだった**ので訂正する。
+
+`usstocks-corpus` は火〜土だが `event-study` は毎日走る。日足が増えない日でも
+**ニュースは増える**（teitenは毎日12:00と18:00に書き込む）。日曜・月曜の実行は
+その週末の記事を取り込み、反応日が決まらないものを未接続として数える。翌営業日の
+日足が入った時点で接続される。したがって毎日走らせるのが正しく、火〜土に
+揃えると**週末の記事の反映が最大2日遅れる**。
 
 ---
 
@@ -270,7 +277,7 @@ unitが持っているので、こちらの方が本番の実行条件と一致�
 |---|---|---|
 | `/` チャート | SQLite（SSE） | collector（常時） |
 | `/reports` 分析レポート | `analysis/latest/report.json` | event-study 13:30 |
-| `/fundamentals` 決算分析 | `fundamentals/summary.json` + `digest.json` | metrics 14:45 |
+| `/fundamentals` 決算分析 | `fundamentals/summary.json` + `digest.json` | metrics 16:30 |
 | `/coverage` 蓄積状況 | SQLite | collector |
 
 APIは**計算をしない**。DuckDBもpyarrowもAPIプロセスには入れていない（1GBの
