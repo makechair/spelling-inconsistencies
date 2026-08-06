@@ -32,6 +32,7 @@ from .routes import (
     health,
     live,
     symbols,
+    watchlists,
 )
 
 log = logging.getLogger(__name__)
@@ -159,6 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(export.router)
     app.include_router(analysis.router)
     app.include_router(fundamentals.router)
+    app.include_router(watchlists.router)
 
     @app.get("/api/livez", include_in_schema=False)
     def livez() -> dict:

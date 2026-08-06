@@ -48,4 +48,7 @@ def settings(tmp_path: Path, db_path: Path, live_path: Path) -> Settings:
         primary_source="mock",
         web_dir=Path(__file__).resolve().parents[1] / "web",
         corpus_local_dir=tmp_path / "corpus",
+        # Never the repository's own file: a test that writes lists must not
+        # be able to edit the checkout it is running from.
+        watchlists_path=tmp_path / "watchlists.json",
     )

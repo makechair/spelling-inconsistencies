@@ -192,6 +192,15 @@ class Settings(BaseSettings):
     # nearly free. Deeper history is an explicit --since.
     edinet_lookback_days: int = Field(default=90, ge=1, le=3650)
     universe_jp_path: Path = REPO_ROOT / "data" / "universe_jp.csv"
+    # Every registered filer, as one static ZIP of CSV. No subscription key:
+    # this is a published download, not the v2 API.
+    edinet_code_list_url: str = (
+        "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/codelist/Edinetcode.zip"
+    )
+    # The user's own lists, and the companies they added to the universe.
+    # Production points this at the durable state directory: a release must
+    # not be able to overwrite it, and it must survive a redeploy.
+    watchlists_path: Path = REPO_ROOT / "data" / "watchlists.json"
 
     # ------------------------------------------------------------ news corpus
     # Direct values are useful for local development. Production leaves these

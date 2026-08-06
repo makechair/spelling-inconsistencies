@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh the EDINET filer list weekly
+
+[Timer]
+# Weekly is enough: a company's registration changes on the scale of
+# corporate actions, not days. Monday 05:00 UTC = 14:00 JST, ahead of the
+# EDINET scan at 06:30 so a newly listed company can be searched for and
+# added before that day's filings are walked.
+OnCalendar=Mon *-*-* 05:00:00 UTC
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target

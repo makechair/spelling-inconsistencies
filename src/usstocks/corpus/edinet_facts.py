@@ -31,7 +31,7 @@ from xml.etree import ElementTree
 from ..config import Settings, get_settings
 from ..logging_setup import configure_logging
 from .daily import CorpusError, Uploader, aws_upload, corpus_s3_root, save_state
-from .edinet import load_universe_jp
+from .edinet import japanese_universe
 from .fundamentals import INSTANT_CONCEPTS, write_fundamentals_parquet
 
 log = logging.getLogger(__name__)
@@ -282,7 +282,7 @@ def run(
     uploader: Uploader = aws_upload,
     codes: Sequence[str] | None = None,
 ) -> int:
-    entries = load_universe_jp(settings.universe_jp_path)
+    entries = japanese_universe(settings)
     by_code = {entry.code: entry for entry in entries}
     local_root = settings.corpus_local_dir
     index = _index_rows(local_root)

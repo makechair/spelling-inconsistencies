@@ -95,6 +95,33 @@ def load_universe_jp(path: Path) -> list[JapaneseEntry]:
     return entries
 
 
+def japanese_universe(settings: Settings) -> list[JapaneseEntry]:
+    """The shipped universe plus whatever the user added from the page.
+
+    Kept as an addition rather than a replacement: a release can change the
+    shipped list without touching the user's companies, and a user's company
+    survives a redeploy because the store lives outside the release. The CSV
+    wins on a collision, since it carries a reviewed subsector where an added
+    company carries a placeholder.
+    """
+    from ..watchlists import WatchlistError, companies, load
+
+    entries = load_universe_jp(settings.universe_jp_path)
+    known = {entry.code for entry in entries}
+    try:
+        store = load(settings.watchlists_path)
+    except WatchlistError as exc:
+        # A damaged store must not silently shrink the universe back to the
+        # shipped list: that would look like a successful run.
+        raise CorpusError(str(exc)) from exc
+    for company in companies(store):
+        if company.code in known:
+            continue
+        known.add(company.code)
+        entries.append(JapaneseEntry(company.code, company.name, company.subsector))
+    return entries
+
+
 def edinet_s3_root(settings: Settings) -> str:
     return f"{corpus_s3_root(settings)}/edinet"
 
@@ -122,11 +149,16 @@ def _api_key(settings: Settings) -> str:
 
 
 def _normalize_sec_code(raw: object) -> str | None:
-    """EDINET reports a five-character securities code: 8035 arrives as 80350."""
-    text = str(raw or "").strip()
-    if len(text) == 5 and text.isdigit():
+    """EDINET reports a five-character securities code: 8035 arrives as 80350.
+
+    The fourth character may be a letter -- codes issued since 2024 look like
+    130A -- so only the leading three are required to be digits. Demanding all
+    digits would quietly never match those filers.
+    """
+    text = str(raw or "").strip().upper()
+    if len(text) == 5 and text[:3].isdigit() and text[3].isalnum():
         return text[:4]
-    if len(text) == 4 and text.isdigit():
+    if len(text) == 4 and text[:3].isdigit() and text[3].isalnum():
         return text
     return None
 
@@ -271,7 +303,7 @@ def run(
     now: datetime | None = None,
     sleeper: Any = time.sleep,
 ) -> int:
-    entries = load_universe_jp(settings.universe_jp_path)
+    entries = japanese_universe(settings)
     by_code = {entry.code: entry for entry in entries}
     moment = (now or datetime.now(tz=UTC)).astimezone(UTC)
     end = until or moment.date()

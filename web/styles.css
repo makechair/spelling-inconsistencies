@@ -903,6 +903,61 @@ body {
   color: inherit;
   font-weight: 600;
 }
+.market-tabs .tab-add { color: var(--muted); }
+
+.list-actions { display: flex; gap: 0.4rem; margin-left: auto; }
+.list-actions button {
+  padding: 0.2rem 0.7rem;
+  border: 1px solid var(--panel-2);
+  border-radius: 4px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.list-actions button.active { border-color: var(--accent, #4c9aff); background: var(--panel); }
+
+/* The membership column exists in every row so the table does not reflow when
+   editing starts; only its visibility changes. */
+.fundamentals-table:not(.editing) .member-cell { display: none; }
+
+.company-search { margin: 0.75rem 0; }
+.company-search > summary { cursor: pointer; color: var(--muted); }
+.company-search-body { padding: 0.5rem 0 0; }
+.company-search-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+.company-search-controls input[type="search"] {
+  flex: 1 1 18rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--panel-2);
+  border-radius: 4px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+.company-results { list-style: none; margin: 0; padding: 0; }
+.company-results li {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.3rem 0;
+  border-top: 1px solid var(--panel-2);
+}
+.company-results li > span:first-child { flex: 1 1 auto; }
+.company-results button {
+  padding: 0.2rem 0.7rem;
+  border: 1px solid var(--panel-2);
+  border-radius: 4px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
 /* Only the rows scroll: the header has to stay readable, since by the time a
    symbol is near the bottom nobody remembers which column is which. */
 .table-scroll {

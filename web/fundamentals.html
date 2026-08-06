@@ -20,10 +20,17 @@
     <h1>決算分析</h1>
     <p class="page-note" id="meta"></p>
 
-    <div class="market-tabs" id="market-tabs" role="tablist" aria-label="市場"></div>
+    <div class="market-tabs" id="list-tabs" role="tablist" aria-label="リスト"></div>
 
     <div class="fundamentals-controls">
-      <label>subsector
+      <label>市場
+        <select id="market-filter">
+          <option value="">すべて</option>
+          <option value="US">米国</option>
+          <option value="JP">日本</option>
+        </select>
+      </label>
+      <label>業種
         <select id="subsector-filter"><option value="">すべて</option></select>
       </label>
       <label class="toggle">
@@ -31,7 +38,28 @@
         指標が揃う銘柄のみ
       </label>
       <span class="page-note" id="row-count"></span>
+      <span class="list-actions" id="list-actions"></span>
     </div>
+
+    <details class="company-search">
+      <summary>企業を検索して追加・削除</summary>
+      <div class="company-search-body">
+        <p class="page-note">
+          EDINETに登録のある上場企業を、企業名または証券コードで検索します。
+          追加した企業は次回のEDINET取り込み以降に表を出します（提出書類を取りに行くのは
+          定期実行のタイミングで、追加した瞬間ではありません）。
+        </p>
+        <div class="company-search-controls">
+          <input type="search" id="company-query" autocomplete="off"
+                 placeholder="例: 日立製作所 / 6501">
+          <label>業種
+            <select id="company-subsector"></select>
+          </label>
+        </div>
+        <p class="page-note" id="company-search-note"></p>
+        <ul class="company-results" id="company-results"></ul>
+      </div>
+    </details>
 
     <p class="page-note" id="market-note" hidden>
       <strong>米国株と日本株を並べて表示中</strong>：通貨を換算していないため、
@@ -43,8 +71,9 @@
       <table class="fundamentals-table" id="cross-section">
         <thead>
           <tr>
+            <th class="member-cell" title="このリストに入れるかどうか">リスト</th>
             <th data-sort="symbol" title="ティッカーと企業名。米国は提出書類の表記、日本は data/universe_jp.csv の表記。クリックすると直下に推移が開く" class="sortable">銘柄</th>
-            <th data-sort="subsector" title="ユニバース定義上の業種区分。data/universe.csv（米国）と data/universe_jp.csv（日本）による" class="sortable">subsector</th>
+            <th data-sort="subsector" title="ユニバース定義上の業種区分。data/universe.csv（米国）と data/universe_jp.csv（日本）による。セルにカーソルを当てると元のslugが出る" class="sortable">業種</th>
             <th data-sort="period_end" title="集計期間の末日。TTMは直近4四半期の合計、年次は通期" class="sortable">決算期</th>
             <th data-sort="revenue" title="売上高。会計基準どおりの金額で、通貨は換算していない（同じ通貨どうしでのみ比較できる）" class="sortable numeric">売上</th>
             <th data-sort="revenue_yoy" title="増収率。前年同期比。下段は前期の増収率との差で、プラスなら加速・マイナスなら減速" class="sortable numeric">増収率</th>
@@ -60,6 +89,8 @@
         <tbody></tbody>
       </table>
     </div>
+
+    <p class="page-note" id="pending-note" hidden></p>
 
     <p class="page-note">
       <strong>決算期の基準</strong>: 四半期が4つ揃う銘柄は<strong>TTM（直近12ヶ月）</strong>、

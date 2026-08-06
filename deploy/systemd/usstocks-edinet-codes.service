@@ -1,8 +1,7 @@
 [Unit]
-Description=Archive EDINET filings for the Japanese universe
+Description=Mirror EDINET's list of registered filers for company search
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/opt/usstocks/current/data/universe_jp.csv
 
 [Service]
 Type=oneshot
@@ -11,7 +10,7 @@ Group=usstocks
 WorkingDirectory=/var/lib/usstocks
 EnvironmentFile=/etc/usstocks/usstocks.env
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/usr/bin/env USSTOCKS_WATCHLISTS_PATH=/var/lib/usstocks/watchlists.json USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus USSTOCKS_UNIVERSE_JP_PATH=/opt/usstocks/current/data/universe_jp.csv /opt/usstocks/current/venv/bin/python -m usstocks.corpus.edinet
+ExecStart=/usr/bin/env USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus /opt/usstocks/current/venv/bin/python -m usstocks.corpus.edinet_codes
 
 PrivateTmp=true
 ProtectSystem=strict
@@ -25,5 +24,5 @@ LockPersonality=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 UMask=0027
 
-MemoryMax=512M
-TimeoutStartSec=3600
+MemoryMax=256M
+TimeoutStartSec=600

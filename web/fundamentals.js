@@ -4,6 +4,8 @@
 // here beyond formatting and sorting: any number shown came from the XBRL
 // facts unchanged.
 
+import { subsectorLabel } from "/static/subsectors.js";
+
 const PERCENT = new Intl.NumberFormat("ja-JP", {
   style: "percent",
   minimumFractionDigits: 1,
@@ -19,15 +21,22 @@ const DAYS = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 0 });
 // Columns whose delta is an improvement when it falls rather than rises.
 const LOWER_IS_BETTER = new Set(["inventory_days"]);
 
-// Markets are separated rather than merged: revenue is never converted, so a
-// single table sorted by size ranks a JPY figure above a USD one that is
-// several times larger.
+// The roster is organised by the user's lists; market is one filter within a
+// list rather than the top-level split. Revenue is never currency-converted,
+// so a view that mixes markets cannot be read by size -- the page says so
+// instead of preventing it.
 const MARKET_LABELS = { US: "米国", JP: "日本" };
-const MARKET_ORDER = ["US", "JP"];
-const ALL_MARKETS = "";
+const marketLabel = (row) => MARKET_LABELS[marketOf(row)] ?? "";
+const ALL_LISTS = "";
 
 let rows = [];
-let market = "US";
+let lists = [];
+let registered = [];
+let maxLists = 20;
+let activeList = ALL_LISTS;
+// Editing shows every symbol with its membership, not just the members: you
+// cannot add to a list from a view that hides everything not already in it.
+let editing = false;
 let sortKey = "revenue";
 let sortDescending = true;
 
@@ -89,13 +98,30 @@ function marketOf(row) {
 }
 
 function inMarket(row) {
-  return market === ALL_MARKETS || marketOf(row) === market;
+  const market = document.getElementById("market-filter").value;
+  return !market || marketOf(row) === market;
+}
+
+function currentList() {
+  return lists.find((entry) => entry.id === activeList) ?? null;
+}
+
+function members() {
+  return new Set(currentList()?.symbols ?? []);
+}
+
+function inList(row) {
+  const list = currentList();
+  // Editing deliberately ignores membership: the checkbox is how a symbol
+  // gets in, so the rows have to be reachable before they are members.
+  if (!list || editing) return true;
+  return list.symbols.includes(row.symbol);
 }
 
 function visibleRows() {
   const subsector = document.getElementById("subsector-filter").value;
   const completeOnly = document.getElementById("hide-incomplete").checked;
-  let selected = rows.filter(inMarket);
+  let selected = rows.filter((row) => inList(row) && inMarket(row));
   if (subsector) selected = selected.filter((row) => row.subsector === subsector);
   if (completeOnly) {
     selected = selected.filter(
@@ -121,8 +147,23 @@ function render() {
   const body = document.querySelector("#cross-section tbody");
   body.replaceChildren();
   const selected = visibleRows();
+  const held = members();
   for (const row of selected) {
     const tr = document.createElement("tr");
+
+    // Present in every row so the column's width does not jump when editing
+    // starts; CSS hides it while the table is not in edit mode.
+    const membership = document.createElement("td");
+    membership.className = "member-cell";
+    if (editing) {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = held.has(row.symbol);
+      box.title = `${currentList()?.name ?? ""} に入れる`;
+      box.addEventListener("change", () => setMembership(row.symbol, box.checked));
+      membership.append(box);
+    }
+    tr.append(membership);
 
     const symbol = document.createElement("td");
     const link = document.createElement("button");
@@ -142,7 +183,10 @@ function render() {
     tr.append(symbol);
 
     const subsector = document.createElement("td");
-    subsector.textContent = row.subsector ?? "";
+    subsector.textContent = subsectorLabel(row.subsector);
+    // The slug stays reachable: it is what the CSVs and the corpus use, so a
+    // reader tracing a row back to its source needs it.
+    if (row.subsector) subsector.title = row.subsector;
     tr.append(subsector);
 
     const period = document.createElement("td");
@@ -179,66 +223,215 @@ function render() {
     );
     body.append(tr);
   }
+  document.getElementById("cross-section").classList.toggle("editing", editing);
   document.getElementById("row-count").textContent = `${selected.length} 銘柄`;
   // The warning belongs to the mixed view only, and only when there is in
   // fact more than one market to mix.
+  const shown = new Set(selected.map(marketOf));
   document.getElementById("market-note").hidden =
-    market !== ALL_MARKETS || presentMarkets().length < 2;
+    Boolean(document.getElementById("market-filter").value) || shown.size < 2;
+  renderPending(selected);
 }
 
-function presentMarkets() {
-  const found = new Set(rows.map(marketOf));
-  return MARKET_ORDER.filter((name) => found.has(name));
+// A symbol can be in a list before anything has been fetched for it. Saying
+// so is the difference between "added and waiting" and "added and broken".
+function renderPending(selected) {
+  const note = document.getElementById("pending-note");
+  const known = new Set(rows.map((row) => row.symbol));
+  const list = currentList();
+  const wanted = list
+    ? list.symbols.filter((symbol) => !known.has(symbol))
+    : registered.map((entry) => entry.code).filter((code) => !known.has(code));
+  if (!wanted.length || editing) {
+    note.hidden = true;
+    return;
+  }
+  const named = wanted.map((symbol) => {
+    const entry = registered.find((company) => company.code === symbol);
+    return entry ? `${symbol} ${entry.name}` : symbol;
+  });
+  note.hidden = false;
+  note.textContent =
+    `取り込み待ち: ${named.join("、")}。` +
+    "EDINETの定期実行が提出書類を取得し、指標を組み直すまで表には出ません。";
 }
 
-// Rebuilt whenever the market changes: a subsector list carrying entries that
-// exist only in the other market would silently produce an empty table.
+// Rebuilt whenever the view changes: a subsector option that matches nothing
+// currently shown would silently produce an empty table.
 function fillSubsectors() {
   const filter = document.getElementById("subsector-filter");
   const previous = filter.value;
   const available = [
-    ...new Set(rows.filter(inMarket).map((row) => row.subsector).filter(Boolean)),
-  ].sort();
+    ...new Set(
+      rows
+        .filter((row) => inList(row) && inMarket(row))
+        .map((row) => row.subsector)
+        .filter(Boolean),
+    ),
+  ].sort((left, right) => subsectorLabel(left).localeCompare(subsectorLabel(right), "ja"));
   filter.replaceChildren(new Option("すべて", ""));
-  for (const subsector of available) filter.append(new Option(subsector, subsector));
+  for (const subsector of available) {
+    filter.append(new Option(subsectorLabel(subsector), subsector));
+  }
   filter.value = available.includes(previous) ? previous : "";
 }
 
-function renderMarketTabs() {
-  const tabs = document.getElementById("market-tabs");
-  const markets = presentMarkets();
-  // One market means nothing to separate, so the control would be noise.
-  if (markets.length < 2) {
-    tabs.replaceChildren();
-    return;
-  }
-  const choices = [
-    ...markets.map((name) => [name, MARKET_LABELS[name] ?? name]),
-    [ALL_MARKETS, "すべて"],
-  ];
+function refresh() {
+  // An open detail row belongs to a symbol that may no longer be listed.
+  for (const open of document.querySelectorAll("tr.detail-row")) open.remove();
+  fillSubsectors();
+  render();
+}
+
+function selectList(id) {
+  activeList = id;
+  editing = false;
+  renderListTabs();
+  refresh();
+}
+
+function renderListTabs() {
+  const tabs = document.getElementById("list-tabs");
   tabs.replaceChildren();
-  for (const [value, label] of choices) {
-    const count = rows.filter((row) => value === ALL_MARKETS || marketOf(row) === value).length;
+  const known = new Set(rows.map((row) => row.symbol));
+  const choices = [
+    [ALL_LISTS, "すべて", rows.length],
+    ...lists.map((entry) => [
+      entry.id,
+      entry.name,
+      entry.symbols.filter((symbol) => known.has(symbol)).length,
+    ]),
+  ];
+  for (const [value, label, count] of choices) {
     const button = document.createElement("button");
     button.type = "button";
     button.setAttribute("role", "tab");
     button.setAttribute("aria-controls", "cross-section");
     button.textContent = `${label} (${count})`;
-    button.className = value === market ? "active" : "";
-    button.setAttribute("aria-selected", String(value === market));
-    button.addEventListener("click", () => {
-      market = value;
-      for (const other of tabs.querySelectorAll("button")) {
-        const selected = other === button;
-        other.className = selected ? "active" : "";
-        other.setAttribute("aria-selected", String(selected));
-      }
-      // An open detail row belongs to a symbol that may no longer be listed.
-      for (const open of document.querySelectorAll("tr.detail-row")) open.remove();
-      fillSubsectors();
-      render();
-    });
+    button.className = value === activeList ? "active" : "";
+    button.setAttribute("aria-selected", String(value === activeList));
+    button.addEventListener("click", () => selectList(value));
     tabs.append(button);
+  }
+  if (lists.length < maxLists) {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "tab-add";
+    add.textContent = "＋ リスト";
+    add.title = `リストを作る（最大${maxLists}件）`;
+    add.addEventListener("click", createList);
+    tabs.append(add);
+  }
+  renderListActions();
+}
+
+function renderListActions() {
+  const actions = document.getElementById("list-actions");
+  actions.replaceChildren();
+  const list = currentList();
+  if (!list) {
+    if (lists.length >= maxLists) {
+      const note = document.createElement("span");
+      note.className = "page-note";
+      note.textContent = `リストは最大${maxLists}件`;
+      actions.append(note);
+    }
+    return;
+  }
+  const edit = document.createElement("button");
+  edit.type = "button";
+  edit.textContent = editing ? "編集を終える" : "銘柄を編集";
+  edit.className = editing ? "active" : "";
+  edit.addEventListener("click", () => {
+    editing = !editing;
+    renderListActions();
+    refresh();
+  });
+
+  const rename = document.createElement("button");
+  rename.type = "button";
+  rename.textContent = "名前を変える";
+  rename.addEventListener("click", async () => {
+    const name = window.prompt("リスト名", list.name);
+    if (name == null) return;
+    await send("PATCH", `/api/watchlists/${list.id}`, { name });
+  });
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.textContent = "リストを削除";
+  remove.addEventListener("click", async () => {
+    // The list is a view over symbols that exist elsewhere, so deleting one
+    // loses only the grouping -- worth a confirmation, not a warning.
+    if (!window.confirm(`「${list.name}」を削除します。銘柄そのものは残ります。`)) return;
+    if (await send("DELETE", `/api/watchlists/${list.id}`)) activeList = ALL_LISTS;
+  });
+
+  actions.append(edit, rename, remove);
+}
+
+async function createList() {
+  const name = window.prompt("新しいリストの名前");
+  if (name == null) return;
+  const created = await send("POST", "/api/watchlists", { name });
+  if (created) activeList = created.id;
+}
+
+async function setMembership(symbol, wanted) {
+  const list = currentList();
+  if (!list) return;
+  await send(
+    wanted ? "POST" : "DELETE",
+    wanted
+      ? `/api/watchlists/${list.id}/symbols`
+      : `/api/watchlists/${list.id}/symbols/${encodeURIComponent(symbol)}`,
+    wanted ? { symbol } : null,
+  );
+}
+
+// Every write goes through here so that the store on the server stays the
+// single source of truth: the reply is discarded and the lists are re-read,
+// rather than patched locally into something that might not match.
+async function send(method, url, body) {
+  const status = document.getElementById("footer-status");
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      status.textContent = `操作できない: ${detail.detail ?? response.status}`;
+      return null;
+    }
+    status.textContent = "";
+    const payload = response.status === 204 ? {} : await response.json();
+    await loadLists();
+    renderListTabs();
+    refresh();
+    return payload;
+  } catch (error) {
+    status.textContent = `操作できない: ${error.message}`;
+    return null;
+  }
+}
+
+async function loadLists() {
+  try {
+    const response = await fetch("/api/watchlists");
+    if (!response.ok) return;
+    const payload = await response.json();
+    lists = payload.lists ?? [];
+    registered = payload.companies ?? [];
+    maxLists = payload.max_lists ?? maxLists;
+    if (activeList && !lists.some((entry) => entry.id === activeList)) {
+      activeList = ALL_LISTS;
+    }
+  } catch {
+    // The table is readable without lists; losing them is not worth an error
+    // banner over the whole page.
+    lists = [];
   }
 }
 
@@ -426,7 +619,8 @@ function detailCell(row, columns) {
     const span = mode === "annual" ? "年次" : "四半期";
     heading.textContent =
       `${row.symbol}${row.name ? ` ${row.name}` : ""}` +
-      ` ・ ${row.subsector ?? ""} ・ 通貨 ${row.currency ?? "不明"}` +
+      ` ・ ${marketLabel(row)} ・ ${subsectorLabel(row.subsector)}` +
+      ` ・ 通貨 ${row.currency ?? "不明"}` +
       ` ・ 直近${source.length}期の${span}実績。単位は各軸の端に示す` +
       (mode === "quarter"
         ? "。四半期の売上・利益はその3ヶ月分で、年次と直接は比べられない"
@@ -452,7 +646,8 @@ function detailCell(row, columns) {
   if (!modes.length) {
     heading.textContent =
       `${row.symbol}${row.name ? ` ${row.name}` : ""}` +
-      ` ・ ${row.subsector ?? ""} ・ 推移を描けるだけの期間がまだない`;
+      ` ・ ${marketLabel(row)} ・ ${subsectorLabel(row.subsector)}` +
+      " ・ 推移を描けるだけの期間がまだない";
   } else {
     draw();
   }
@@ -514,8 +709,99 @@ async function toggleDetail(tr, symbol) {
   const row = await response.json();
   const detail = document.createElement("tr");
   detail.className = "detail-row";
-  detail.append(detailCell(row, tr.children.length));
+  // Only the columns actually on screen: the membership cell is present in
+  // every row but hidden outside edit mode, and counting it would stretch the
+  // detail cell past the table.
+  const columns = [...tr.children].filter((cell) => cell.offsetParent !== null).length;
+  detail.append(detailCell(row, columns || tr.children.length));
   tr.after(detail);
+}
+
+// ---------------------------------------------------------- company search
+
+let searchTimer = null;
+
+function wireCompanySearch() {
+  const query = document.getElementById("company-query");
+  const chooser = document.getElementById("company-subsector");
+  // The same taxonomy the table groups by, so an added company lands in a
+  // heading that already means something rather than only in 未分類.
+  chooser.replaceChildren();
+  const known = [...new Set([...rows.map((row) => row.subsector), "unclassified"])]
+    .filter(Boolean)
+    .sort((left, right) => subsectorLabel(left).localeCompare(subsectorLabel(right), "ja"));
+  for (const subsector of known) {
+    chooser.append(new Option(subsectorLabel(subsector), subsector));
+  }
+  chooser.value = "unclassified";
+
+  query.addEventListener("input", () => {
+    // Debounced: the list is thousands of companies and the user is typing a
+    // name a character at a time.
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(runCompanySearch, 250);
+  });
+}
+
+async function runCompanySearch() {
+  const query = document.getElementById("company-query").value.trim();
+  const note = document.getElementById("company-search-note");
+  const results = document.getElementById("company-results");
+  if (!query) {
+    results.replaceChildren();
+    note.textContent = "";
+    return;
+  }
+  let payload;
+  try {
+    const response = await fetch(`/api/companies/search?q=${encodeURIComponent(query)}`);
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      note.textContent = `検索できない: ${detail.detail ?? response.status}`;
+      results.replaceChildren();
+      return;
+    }
+    payload = await response.json();
+  } catch (error) {
+    note.textContent = `検索できない: ${error.message}`;
+    return;
+  }
+  const found = payload.results ?? [];
+  note.textContent = found.length ? "" : "該当なし";
+  results.replaceChildren();
+  for (const company of found) {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = `${company.code} ${company.name}`;
+    const industry = document.createElement("span");
+    industry.className = "page-note";
+    // EDINET's own industry, shown as context for the subsector choice; it is
+    // a different taxonomy and is never mapped onto ours automatically.
+    industry.textContent = company.industry ?? "";
+    const action = document.createElement("button");
+    action.type = "button";
+    if (company.added) {
+      action.textContent = "削除";
+      action.addEventListener("click", async () => {
+        if (!window.confirm(`${company.name} を取得対象から外します。`)) return;
+        if (await send("DELETE", `/api/companies/${encodeURIComponent(company.code)}`)) {
+          runCompanySearch();
+        }
+      });
+    } else {
+      action.textContent = "追加";
+      action.addEventListener("click", async () => {
+        const created = await send("POST", "/api/companies", {
+          code: company.code,
+          subsector: document.getElementById("company-subsector").value,
+          list_id: activeList || null,
+        });
+        if (created) runCompanySearch();
+      });
+    }
+    item.append(label, industry, action);
+    results.append(item);
+  }
 }
 
 async function load() {
@@ -540,14 +826,15 @@ async function load() {
   document.getElementById("improving-header").title =
     `改善した指標の数 / 測定できた指標の数（${(payload.direction_metrics ?? []).join(", ")}）`;
 
-  // Default to a single market rather than the mixed view: the table opens
-  // sorted by revenue, and that ordering is only meaningful within one
-  // currency. US unless this deployment has no US symbols at all.
-  const markets = presentMarkets();
-  if (!markets.includes(market)) market = markets[0] ?? ALL_MARKETS;
-  renderMarketTabs();
+  await loadLists();
+  renderListTabs();
   fillSubsectors();
+  wireCompanySearch();
 
+  document.getElementById("market-filter").addEventListener("change", () => {
+    fillSubsectors();
+    render();
+  });
   document.getElementById("subsector-filter").addEventListener("change", render);
   document.getElementById("hide-incomplete").addEventListener("change", render);
   for (const header of document.querySelectorAll("th.sortable")) {

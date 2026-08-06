@@ -11,7 +11,7 @@ Group=usstocks
 WorkingDirectory=/var/lib/usstocks
 EnvironmentFile=/etc/usstocks/usstocks.env
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/usr/bin/env USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus USSTOCKS_UNIVERSE_JP_PATH=/opt/usstocks/current/data/universe_jp.csv /opt/usstocks/current/venv/bin/python -m usstocks.corpus.edinet_facts
+ExecStart=/usr/bin/env USSTOCKS_WATCHLISTS_PATH=/var/lib/usstocks/watchlists.json USSTOCKS_CORPUS_LOCAL_DIR=/var/lib/usstocks/corpus USSTOCKS_UNIVERSE_JP_PATH=/opt/usstocks/current/data/universe_jp.csv /opt/usstocks/current/venv/bin/python -m usstocks.corpus.edinet_facts
 
 PrivateTmp=true
 ProtectSystem=strict
