@@ -41,12 +41,18 @@ def _modules() -> tuple[Any, Any]:
     return duckdb, pq
 
 
+# Which market each universe file describes. The metrics are market-agnostic
+# -- a margin is a margin -- but the rows still have to carry the label,
+# because revenue in JPY sorted against revenue in USD produces a ranking that
+# means nothing. sectors.parquet has no suffix because it predates the split.
+SECTOR_MARKETS = {"sectors.parquet": "US", "sectors_jp.parquet": "JP"}
+
+
 def discover_inputs(local_root: Path) -> tuple[list[Path], list[Path]]:
     facts = sorted((local_root / "fundamentals").glob("symbol=*/part.parquet"))
     if not facts:
         raise CorpusError("no fundamentals Parquet found; run the EDGAR loader first")
-    # Both universes, when the Japanese one has been built: the metrics job
-    # does not need to know which market a symbol came from.
+    # Both universes, when the Japanese one has been built.
     sectors = [
         path
         for path in (
@@ -76,9 +82,20 @@ def compute(facts: list[Path], sectors: list[Path] | Path) -> Any:
             [str(path) for path in facts], hive_partitioning=False
         ).create_view("fundamentals_input")
         sector_paths = [sectors] if isinstance(sectors, Path) else list(sectors)
-        connection.from_parquet(
-            [str(path) for path in sector_paths], hive_partitioning=False
-        ).create_view("sectors_input")
+        # Read each universe separately and tag it, rather than reading them as
+        # one set of files: which file a symbol was registered in is the only
+        # authority on its market, and it is not written inside the file.
+        # Columns are named rather than starred so an extra column in one
+        # universe cannot misalign the union.
+        connection.execute(
+            "CREATE OR REPLACE TEMP VIEW sectors_input AS "
+            + " UNION ALL ".join(
+                "SELECT symbol, subsector, '{}' AS market FROM read_parquet('{}')".format(
+                    SECTOR_MARKETS.get(path.name, "US"), str(path).replace("'", "''")
+                )
+                for path in sector_paths
+            )
+        )
         sql = (
             resources.files("usstocks.corpus")
             .joinpath("sql/fundamentals_metrics.sql")
@@ -155,6 +172,7 @@ def trailing_twelve_months(quarters: list[dict[str, Any]]) -> dict[str, Any] | N
     return {
         "symbol": latest["symbol"],
         "subsector": latest.get("subsector"),
+        "market": latest.get("market"),
         "period_type": "ttm",
         "period_start": window[0]["period_start"],
         "period_end": latest["period_end"],
@@ -277,6 +295,10 @@ def build_summary(table: Any, *, generated_at: datetime) -> dict[str, Any]:
             {
                 "symbol": symbol,
                 "subsector": latest.get("subsector"),
+                # US or JP. A symbol missing from both universe files keeps a
+                # null here and the page files it under "その他" rather than
+                # dropping it, since a metric row exists for it either way.
+                "market": latest.get("market"),
                 # Which basis produced these figures, so the reader is never
                 # left guessing whether a date is the fiscal year or a window.
                 "basis": basis,

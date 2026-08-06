@@ -875,6 +875,34 @@ body {
   align-items: center;
   margin: 1rem 0 0.5rem;
 }
+/* Market tabs. Revenue is not currency-converted, so which market is on
+   screen is a precondition for reading the table, not just another filter --
+   hence a tab strip above the filters rather than a control among them. */
+.market-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 1rem 0 0;
+  border-bottom: 1px solid var(--panel-2);
+}
+.market-tabs button {
+  padding: 0.35rem 0.9rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: none;
+  color: var(--muted, inherit);
+  font: inherit;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.market-tabs button:hover { color: inherit; }
+.market-tabs button.active {
+  border-color: var(--panel-2);
+  background: var(--panel);
+  color: inherit;
+  font-weight: 600;
+}
 /* Only the rows scroll: the header has to stay readable, since by the time a
    symbol is near the bottom nobody remembers which column is which. */
 .table-scroll {

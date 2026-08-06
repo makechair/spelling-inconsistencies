@@ -19,7 +19,15 @@ const DAYS = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 0 });
 // Columns whose delta is an improvement when it falls rather than rises.
 const LOWER_IS_BETTER = new Set(["inventory_days"]);
 
+// Markets are separated rather than merged: revenue is never converted, so a
+// single table sorted by size ranks a JPY figure above a USD one that is
+// several times larger.
+const MARKET_LABELS = { US: "米国", JP: "日本" };
+const MARKET_ORDER = ["US", "JP"];
+const ALL_MARKETS = "";
+
 let rows = [];
+let market = "US";
 let sortKey = "revenue";
 let sortDescending = true;
 
@@ -66,10 +74,20 @@ function percent(value) {
   return value == null ? "" : PERCENT.format(value);
 }
 
+function marketOf(row) {
+  // A symbol in neither universe file still has metrics; it gets its own tab
+  // rather than being hidden by whichever one happens to be selected.
+  return row.market ?? "その他";
+}
+
+function inMarket(row) {
+  return market === ALL_MARKETS || marketOf(row) === market;
+}
+
 function visibleRows() {
   const subsector = document.getElementById("subsector-filter").value;
   const completeOnly = document.getElementById("hide-incomplete").checked;
-  let selected = rows;
+  let selected = rows.filter(inMarket);
   if (subsector) selected = selected.filter((row) => row.subsector === subsector);
   if (completeOnly) {
     selected = selected.filter(
@@ -146,6 +164,69 @@ function render() {
     body.append(tr);
   }
   document.getElementById("row-count").textContent = `${selected.length} 銘柄`;
+  // The warning belongs to the mixed view only, and only when there is in
+  // fact more than one market to mix.
+  document.getElementById("market-note").hidden =
+    market !== ALL_MARKETS || presentMarkets().length < 2;
+}
+
+function presentMarkets() {
+  const found = new Set(rows.map(marketOf));
+  return [
+    ...MARKET_ORDER.filter((name) => found.has(name)),
+    ...[...found].filter((name) => !MARKET_ORDER.includes(name)).sort(),
+  ];
+}
+
+// Rebuilt whenever the market changes: a subsector list carrying entries that
+// exist only in the other market would silently produce an empty table.
+function fillSubsectors() {
+  const filter = document.getElementById("subsector-filter");
+  const previous = filter.value;
+  const available = [
+    ...new Set(rows.filter(inMarket).map((row) => row.subsector).filter(Boolean)),
+  ].sort();
+  filter.replaceChildren(new Option("すべて", ""));
+  for (const subsector of available) filter.append(new Option(subsector, subsector));
+  filter.value = available.includes(previous) ? previous : "";
+}
+
+function renderMarketTabs() {
+  const tabs = document.getElementById("market-tabs");
+  const markets = presentMarkets();
+  // One market means nothing to separate, so the control would be noise.
+  if (markets.length < 2) {
+    tabs.replaceChildren();
+    return;
+  }
+  const choices = [
+    ...markets.map((name) => [name, MARKET_LABELS[name] ?? name]),
+    [ALL_MARKETS, "すべて"],
+  ];
+  tabs.replaceChildren();
+  for (const [value, label] of choices) {
+    const count = rows.filter((row) => value === ALL_MARKETS || marketOf(row) === value).length;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-controls", "cross-section");
+    button.textContent = `${label} (${count})`;
+    button.className = value === market ? "active" : "";
+    button.setAttribute("aria-selected", String(value === market));
+    button.addEventListener("click", () => {
+      market = value;
+      for (const other of tabs.querySelectorAll("button")) {
+        const selected = other === button;
+        other.className = selected ? "active" : "";
+        other.setAttribute("aria-selected", String(selected));
+      }
+      // An open detail row belongs to a symbol that may no longer be listed.
+      for (const open of document.querySelectorAll("tr.detail-row")) open.remove();
+      fillSubsectors();
+      render();
+    });
+    tabs.append(button);
+  }
 }
 
 // A step of 1, 2, 2.5 or 5 times a power of ten -- the values people read
@@ -444,15 +525,15 @@ async function load() {
   document.getElementById("improving-header").title =
     `改善した指標の数 / 測定できた指標の数（${(payload.direction_metrics ?? []).join(", ")}）`;
 
-  const filter = document.getElementById("subsector-filter");
-  for (const subsector of [...new Set(rows.map((row) => row.subsector).filter(Boolean))].sort()) {
-    const option = document.createElement("option");
-    option.value = subsector;
-    option.textContent = subsector;
-    filter.append(option);
-  }
+  // Default to a single market rather than the mixed view: the table opens
+  // sorted by revenue, and that ordering is only meaningful within one
+  // currency. US unless this deployment has no US symbols at all.
+  const markets = presentMarkets();
+  if (!markets.includes(market)) market = markets[0] ?? ALL_MARKETS;
+  renderMarketTabs();
+  fillSubsectors();
 
-  filter.addEventListener("change", render);
+  document.getElementById("subsector-filter").addEventListener("change", render);
   document.getElementById("hide-incomplete").addEventListener("change", render);
   for (const header of document.querySelectorAll("th.sortable")) {
     header.addEventListener("click", () => {

@@ -20,6 +20,8 @@
     <h1>決算分析</h1>
     <p class="page-note" id="meta"></p>
 
+    <div class="market-tabs" id="market-tabs" role="tablist" aria-label="市場"></div>
+
     <div class="fundamentals-controls">
       <label>subsector
         <select id="subsector-filter"><option value="">すべて</option></select>
@@ -31,12 +33,18 @@
       <span class="page-note" id="row-count"></span>
     </div>
 
+    <p class="page-note" id="market-note" hidden>
+      <strong>米国株と日本株を並べて表示中</strong>：通貨を換算していないため、
+      売上の絶対額と、それによる並び替えは市場をまたぐと比較になりません。
+      比率（増収率・粗利率・営業利益率・在庫日数など）は市場をまたいでも比較できます。
+    </p>
+
     <div class="table-scroll">
       <table class="fundamentals-table" id="cross-section">
         <thead>
           <tr>
             <th data-sort="symbol" title="ティッカー。クリックすると直下に推移が開く" class="sortable">銘柄</th>
-            <th data-sort="subsector" title="ユニバース定義上の業種区分。data/universe.csv による" class="sortable">subsector</th>
+            <th data-sort="subsector" title="ユニバース定義上の業種区分。data/universe.csv（米国）と data/universe_jp.csv（日本）による" class="sortable">subsector</th>
             <th data-sort="period_end" title="集計期間の末日。TTMは直近4四半期の合計、年次は通期" class="sortable">決算期</th>
             <th data-sort="revenue" title="売上高。会計基準どおりの金額で、通貨は換算していない（同じ通貨どうしでのみ比較できる）" class="sortable numeric">売上</th>
             <th data-sort="revenue_yoy" title="増収率。前年同期比。下段は前期の増収率との差で、プラスなら加速・マイナスなら減速" class="sortable numeric">増収率</th>

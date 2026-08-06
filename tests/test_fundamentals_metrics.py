@@ -327,3 +327,80 @@ def test_quarters_that_do_not_span_a_year_are_not_summed(tmp_path: Path):
     built, sectors = build(tmp_path, facts)
     entry = build_summary(compute(built, sectors), generated_at=datetime.now(tz=UTC))["symbols"][0]
     assert entry["basis"] == "annual"
+
+
+def write_sectors(path: Path, entries):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"symbol": symbol, "subsector": sub} for symbol, sub in entries],
+            schema=pa.schema([("symbol", pa.string()), ("subsector", pa.string())]),
+        ),
+        path,
+    )
+    return path
+
+
+def build_two_markets(tmp_path: Path):
+    """One US filer and one Japanese one, as production has since JP-A2."""
+    rows = []
+    for symbol in ("MU", "8035"):
+        directory = tmp_path / "fundamentals" / f"symbol={symbol}"
+        directory.mkdir(parents=True)
+        unit = "USD" if symbol == "MU" else "JPY"
+        pq.write_table(
+            pa.Table.from_pylist(
+                [
+                    fact("revenue", 1000, symbol=symbol, unit=unit),
+                    fact("cost_of_revenue", 600, symbol=symbol, unit=unit),
+                ],
+                schema=FACT_SCHEMA,
+            ),
+            directory / "part.parquet",
+        )
+        rows.append(directory / "part.parquet")
+    return rows, [
+        write_sectors(tmp_path / "universe" / "sectors.parquet", [("MU", "memory_storage")]),
+        write_sectors(tmp_path / "universe" / "sectors_jp.parquet", [("8035", "equipment")]),
+    ]
+
+
+def test_each_symbol_is_labelled_with_the_universe_it_came_from(tmp_path: Path):
+    """Revenue is never converted, so the page has to be able to separate the
+    markets. Which universe file a symbol is registered in is the only record
+    of that -- the facts themselves do not say."""
+    facts, sectors = build_two_markets(tmp_path)
+    markets = {row["symbol"]: row["market"] for row in rows_of(compute(facts, sectors))}
+    assert markets == {"MU": "US", "8035": "JP"}
+
+
+def test_the_market_reaches_the_summary(tmp_path: Path):
+    facts, sectors = build_two_markets(tmp_path)
+    summary = build_summary(compute(facts, sectors), generated_at=datetime.now(tz=UTC))
+    assert {entry["symbol"]: entry["market"] for entry in summary["symbols"]} == {
+        "MU": "US", "8035": "JP",
+    }
+    # The currency stays with the row: a JPY figure beside a USD one is only
+    # readable because each says which it is.
+    assert {entry["symbol"]: entry["currency"] for entry in summary["symbols"]} == {
+        "MU": "USD", "8035": "JPY",
+    }
+
+
+def test_a_trailing_twelve_month_row_keeps_its_market(tmp_path: Path):
+    """The TTM window is assembled in Python from the quarters, so anything it
+    does not copy across is lost for exactly the filers who report quarterly."""
+    facts = [
+        fact("revenue", 1000, start="2024-01-01", end="2024-12-31",
+             filed="2025-02-01", accession="fy24"),
+    ]
+    for index, (start, end) in enumerate([
+        ("2025-01-01", "2025-03-31"), ("2025-04-01", "2025-06-30"),
+        ("2025-07-01", "2025-09-30"), ("2025-10-01", "2025-12-31"),
+    ]):
+        facts.append(quarter("revenue", 300, start=start, end=end,
+                             accession=f"q{index}", filed="2026-01-15"))
+    built, sectors = build(tmp_path, facts)
+    entry = build_summary(compute(built, sectors), generated_at=datetime.now(tz=UTC))["symbols"][0]
+    assert entry["basis"] == "ttm"
+    assert entry["market"] == "US"

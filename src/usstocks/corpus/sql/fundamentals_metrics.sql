@@ -224,6 +224,9 @@ CREATE OR REPLACE TEMP TABLE fundamentals_metrics AS
 SELECT
     metrics.*,
     sectors_input.subsector,
+    -- Carried through so the page can separate the markets. Revenue is never
+    -- converted, so a table that mixes them cannot be sorted by size.
+    sectors_input.market,
     CASE
         WHEN previous.revenue_yoy IS NOT NULL
         THEN metrics.revenue_yoy - previous.revenue_yoy
