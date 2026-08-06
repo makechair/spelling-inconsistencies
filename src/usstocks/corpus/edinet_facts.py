@@ -180,7 +180,13 @@ def instance_documents(archive: Path) -> Iterator[tuple[str, bytes]]:
 
 
 def normalize_instance(
-    code: str, payload: bytes, *, doc_id: str, form: str, filed: date | None
+    code: str,
+    payload: bytes,
+    *,
+    doc_id: str,
+    form: str,
+    filed: date | None,
+    entity_name: str = "",
 ) -> list[dict[str, object]]:
     try:
         root = ElementTree.fromstring(payload)
@@ -230,7 +236,11 @@ def normalize_instance(
             {
                 "symbol": code,
                 "cik": "",
-                "entity_name": "",
+                # From the universe file, not from the filing. jpcrp carries a
+                # CompanyName, but this parser ignores that taxonomy on
+                # purpose, and a 4-digit code on its own tells a reader
+                # nothing.
+                "entity_name": entity_name,
                 "concept": concept,
                 "xbrl_tag": _local_name(element.tag),
                 "unit": unit,
@@ -298,7 +308,8 @@ def run(
         for name, payload in instance_documents(archive):
             try:
                 rows = normalize_instance(
-                    code, payload, doc_id=doc_id, form=form, filed=filed
+                    code, payload, doc_id=doc_id, form=form, filed=filed,
+                    entity_name=by_code[code].name,
                 )
             except CorpusError as exc:
                 log.warning("%s (%s): %s", doc_id, name, exc)

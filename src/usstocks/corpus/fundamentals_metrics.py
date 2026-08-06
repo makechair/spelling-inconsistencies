@@ -173,6 +173,7 @@ def trailing_twelve_months(quarters: list[dict[str, Any]]) -> dict[str, Any] | N
         "symbol": latest["symbol"],
         "subsector": latest.get("subsector"),
         "market": latest.get("market"),
+        "entity_name": latest.get("entity_name"),
         "period_type": "ttm",
         "period_start": window[0]["period_start"],
         "period_end": latest["period_end"],
@@ -294,6 +295,10 @@ def build_summary(table: Any, *, generated_at: datetime) -> dict[str, Any]:
         symbols.append(
             {
                 "symbol": symbol,
+                # As the filer wrote it (EDGAR) or as the universe file lists
+                # it (EDINET). A 4-digit Japanese code is unreadable without
+                # it, and so are half the US tickers.
+                "name": latest.get("entity_name"),
                 "subsector": latest.get("subsector"),
                 # US or JP. A symbol missing from both universe files keeps a
                 # null here and the page files it under "その他" rather than

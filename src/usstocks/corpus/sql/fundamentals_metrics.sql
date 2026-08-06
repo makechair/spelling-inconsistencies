@@ -27,6 +27,16 @@ FROM (
 )
 WHERE rank = 1;
 
+-- One name per filer, from the newest filing that carries one. Filers rename
+-- themselves, and the comparatives inside an old filing keep the old name.
+-- Blank rather than null where the loader had none to record, so the join
+-- below cannot resurrect a name from a stale filing.
+CREATE OR REPLACE TEMP TABLE names AS
+SELECT symbol, arg_max(entity_name, filed) AS entity_name
+FROM periodic
+WHERE entity_name IS NOT NULL AND entity_name <> ''
+GROUP BY symbol;
+
 -- Duration facts, labelled by how long they cover. Anything that is not
 -- recognisably a quarter, half or year is dropped rather than guessed at.
 CREATE OR REPLACE TEMP TABLE flows AS
@@ -224,6 +234,7 @@ CREATE OR REPLACE TEMP TABLE fundamentals_metrics AS
 SELECT
     metrics.*,
     sectors_input.subsector,
+    names.entity_name,
     -- Carried through so the page can separate the markets. Revenue is never
     -- converted, so a table that mixes them cannot be sorted by size.
     sectors_input.market,
@@ -233,6 +244,7 @@ SELECT
     END AS revenue_yoy_change
 FROM metrics
 LEFT JOIN sectors_input ON sectors_input.symbol = metrics.symbol
+LEFT JOIN names ON names.symbol = metrics.symbol
 LEFT JOIN metrics AS previous
     ON previous.symbol = metrics.symbol
    AND previous.period_type = metrics.period_type

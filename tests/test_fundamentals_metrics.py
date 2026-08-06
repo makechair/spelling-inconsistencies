@@ -404,3 +404,38 @@ def test_a_trailing_twelve_month_row_keeps_its_market(tmp_path: Path):
     entry = build_summary(compute(built, sectors), generated_at=datetime.now(tz=UTC))["symbols"][0]
     assert entry["basis"] == "ttm"
     assert entry["market"] == "US"
+
+
+def test_the_filer_name_travels_to_the_summary(tmp_path: Path):
+    """A ticker alone is unreadable -- more so for the Japanese symbols, whose
+    identifier is four digits."""
+    facts, sectors = build(tmp_path, [
+        fact("revenue", 1000),
+        fact("cost_of_revenue", 600),
+    ])
+    entry = build_summary(compute(facts, sectors), generated_at=datetime.now(tz=UTC))["symbols"][0]
+    assert entry["name"] == "Example"
+
+
+def test_the_newest_filings_name_wins(tmp_path: Path):
+    """Filers rename themselves, and an old filing's comparatives keep the old
+    name. Taking any of them would show the wrong one at random."""
+    old = fact("revenue", 800, start="2024-01-01", end="2024-12-31",
+               filed="2025-02-01", accession="fy24")
+    old["entity_name"] = "Old Name Inc"
+    new = fact("revenue", 1000, start="2025-01-01", end="2025-12-31",
+               filed="2026-02-01", accession="fy25")
+    new["entity_name"] = "New Name Inc"
+    facts, sectors = build(tmp_path, [old, new])
+    names = {row["symbol"]: row["entity_name"] for row in rows_of(compute(facts, sectors))}
+    assert names == {"MU": "New Name Inc"}
+
+
+def test_a_symbol_with_no_recorded_name_is_not_given_one(tmp_path: Path):
+    """Blank means the loader had nothing to record. Filling it from a stale
+    filing would put a name on a row that never carried it."""
+    blank = fact("revenue", 1000)
+    blank["entity_name"] = ""
+    facts, sectors = build(tmp_path, [blank])
+    entry = build_summary(compute(facts, sectors), generated_at=datetime.now(tz=UTC))["symbols"][0]
+    assert entry["name"] is None

@@ -141,3 +141,15 @@ def test_describe_lists_what_a_filing_holds(tmp_path):
     described = describe_archive(archive)
     assert "NetSales" in described
     assert "CompanyName" not in described  # jpcrp is not a financial taxonomy
+
+
+def test_the_company_name_comes_from_the_universe_file():
+    """EDINET identifies a filer by a four-digit code. The instance does carry
+    a CompanyName, but it sits in jpcrp, which this parser ignores on purpose
+    -- so the name has to come from the universe entry instead."""
+    rows = normalize_instance(
+        "8035", INSTANCE.encode("utf-8"),
+        doc_id="S100ABCD", form="20-F", filed=date(2026, 6, 25),
+        entity_name="東京エレクトロン",
+    )
+    assert {row["entity_name"] for row in rows} == {"東京エレクトロン"}

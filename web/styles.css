@@ -919,6 +919,13 @@ body {
   background: var(--panel);
   box-shadow: 0 1px 0 var(--panel-2);
 }
+/* Beside the ticker, not under it: the row is already two lines deep in the
+   numeric columns, and a third would loosen the whole table. */
+.entity-name {
+  margin-left: 0.45rem;
+  color: var(--muted);
+  font-size: 0.85em;
+}
 .fundamentals-table {
   border-collapse: collapse;
   width: 100%;

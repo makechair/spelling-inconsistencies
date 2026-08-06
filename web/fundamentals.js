@@ -131,6 +131,14 @@ function render() {
     link.textContent = row.symbol;
     link.addEventListener("click", () => toggleDetail(tr, row.symbol));
     symbol.append(link);
+    // A 4-digit Japanese code says nothing on its own, and neither do half the
+    // US tickers. Absent until the metrics job has run with names in it.
+    if (row.name) {
+      const name = document.createElement("span");
+      name.className = "entity-name";
+      name.textContent = row.name;
+      symbol.append(name);
+    }
     tr.append(symbol);
 
     const subsector = document.createElement("td");
@@ -417,7 +425,8 @@ function detailCell(row, columns) {
     );
     const span = mode === "annual" ? "年次" : "四半期";
     heading.textContent =
-      `${row.symbol} ・ ${row.subsector ?? ""} ・ 通貨 ${row.currency ?? "不明"}` +
+      `${row.symbol}${row.name ? ` ${row.name}` : ""}` +
+      ` ・ ${row.subsector ?? ""} ・ 通貨 ${row.currency ?? "不明"}` +
       ` ・ 直近${source.length}期の${span}実績。単位は各軸の端に示す` +
       (mode === "quarter"
         ? "。四半期の売上・利益はその3ヶ月分で、年次と直接は比べられない"
@@ -442,7 +451,8 @@ function detailCell(row, columns) {
 
   if (!modes.length) {
     heading.textContent =
-      `${row.symbol} ・ ${row.subsector ?? ""} ・ 推移を描けるだけの期間がまだない`;
+      `${row.symbol}${row.name ? ` ${row.name}` : ""}` +
+      ` ・ ${row.subsector ?? ""} ・ 推移を描けるだけの期間がまだない`;
   } else {
     draw();
   }
