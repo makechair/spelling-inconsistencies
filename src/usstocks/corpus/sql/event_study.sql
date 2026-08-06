@@ -181,6 +181,67 @@ WHERE historical_base.adj_close <> 0
   AND subject.raw_return IS NOT NULL
 GROUP BY subject.event_key, subject.horizon;
 
+-- Daily returns, and the equal-weight return of a symbol's peers on the same
+-- day. The peer average excludes the symbol itself: leaving it in would make
+-- every symbol partly its own benchmark, and most of all in the small
+-- subsectors where the effect is largest.
+CREATE OR REPLACE TEMP TABLE symbol_daily_returns AS
+SELECT
+    daily.symbol,
+    daily.date,
+    daily.trading_index,
+    sector.subsector,
+    daily.adj_close / previous.adj_close - 1 AS symbol_return
+FROM daily_indexed AS daily
+INNER JOIN daily_indexed AS previous
+    ON previous.symbol = daily.symbol
+   AND previous.trading_index = daily.trading_index - 1
+INNER JOIN sectors_input AS sector
+    ON sector.symbol = daily.symbol
+WHERE previous.adj_close <> 0;
+
+CREATE OR REPLACE TEMP TABLE peer_daily_returns AS
+SELECT
+    member.symbol,
+    member.date,
+    member.trading_index,
+    member.symbol_return,
+    (sector_totals.return_sum - member.symbol_return)
+        / nullif(sector_totals.member_count - 1, 0) AS peer_return
+FROM symbol_daily_returns AS member
+INNER JOIN (
+    SELECT subsector, date, sum(symbol_return) AS return_sum, count(*) AS member_count
+    FROM symbol_daily_returns
+    GROUP BY subsector, date
+) AS sector_totals
+    ON sector_totals.subsector = member.subsector
+   AND sector_totals.date = member.date;
+
+-- How much of its sector's move a symbol usually takes, estimated on the days
+-- before the event and never including it.
+--
+-- Subtracting the peer average outright assumes every member moves one for
+-- one with its sector. They do not: a high-beta name rises more than the
+-- group on an up day, so a flat difference reports abnormal strength every
+-- time the sector rises and abnormal weakness every time it falls. That
+-- pattern is an artefact of the assumption, not news.
+CREATE OR REPLACE TEMP TABLE symbol_betas AS
+SELECT
+    symbol,
+    date,
+    trading_index,
+    regr_slope(symbol_return, peer_return) OVER window_before AS raw_beta,
+    regr_count(symbol_return, peer_return) OVER window_before AS beta_observations
+FROM peer_daily_returns
+WHERE peer_return IS NOT NULL
+WINDOW window_before AS (
+    PARTITION BY symbol
+    ORDER BY trading_index
+    -- Ends the day before, so the event being measured is never part of the
+    -- estimate that measures it.
+    ROWS BETWEEN 120 PRECEDING AND 1 PRECEDING
+);
+
 CREATE OR REPLACE TEMP TABLE peer_benchmarks AS
 SELECT
     subject.event_key,
@@ -221,16 +282,49 @@ SELECT
         THEN peer.benchmark_return
         ELSE NULL
     END AS benchmark_return,
+    -- An estimate is only used where there is enough of it, and only inside a
+    -- range a real sector member occupies. An outlier slope from sixty noisy
+    -- days would move the headline figure further than the assumption it
+    -- replaces, so anything outside falls back to one and says so.
+    coalesce(beta.beta, 1.0) AS beta,
+    coalesce(beta.beta_observations, 0) AS beta_observations,
+    CASE WHEN beta.beta IS NULL THEN 'assumed' ELSE 'estimated' END AS beta_source,
+    CASE
+        WHEN coalesce(peer.peer_count, 0) >= parameters.min_peers
+        THEN peer.benchmark_return * coalesce(beta.beta, 1.0)
+        ELSE NULL
+    END AS sector_attributed_return,
+    CASE
+        WHEN subject.raw_return IS NOT NULL
+         AND coalesce(peer.peer_count, 0) >= parameters.min_peers
+        THEN subject.raw_return - peer.benchmark_return * coalesce(beta.beta, 1.0)
+        ELSE NULL
+    END AS abnormal_return,
+    -- The previous definition, kept so a changed number can be traced to the
+    -- change rather than to the day's news.
     CASE
         WHEN subject.raw_return IS NOT NULL
          AND coalesce(peer.peer_count, 0) >= parameters.min_peers
         THEN subject.raw_return - peer.benchmark_return
         ELSE NULL
-    END AS abnormal_return
+    END AS equal_weight_abnormal_return
 FROM event_subject_returns AS subject
 LEFT JOIN peer_benchmarks AS peer
     ON peer.event_key = subject.event_key
    AND peer.horizon = subject.horizon
+LEFT JOIN (
+    SELECT
+        symbol,
+        date,
+        CASE
+            WHEN beta_observations >= 60 AND raw_beta BETWEEN 0.2 AND 3.0
+            THEN raw_beta
+        END AS beta,
+        beta_observations
+    FROM symbol_betas
+) AS beta
+    ON beta.symbol = subject.symbol
+   AND beta.date = subject.reaction_date
 LEFT JOIN historical_percentiles AS historical
     ON historical.event_key = subject.event_key
    AND historical.horizon = subject.horizon
@@ -277,6 +371,18 @@ SELECT
     max(CASE WHEN horizon = 2 THEN abnormal_return END) AS abnormal_return_2d,
     max(CASE WHEN horizon = 5 THEN abnormal_return END) AS abnormal_return_5d,
     max(CASE WHEN horizon = 20 THEN abnormal_return END) AS abnormal_return_20d,
+    -- Beta is a property of the symbol on the day, not of the horizon.
+    any_value(beta) AS beta,
+    any_value(beta_observations) AS beta_observations,
+    any_value(beta_source) AS beta_source,
+    max(CASE WHEN horizon = 1 THEN sector_attributed_return END)
+        AS sector_attributed_return_1d,
+    max(CASE WHEN horizon = 5 THEN sector_attributed_return END)
+        AS sector_attributed_return_5d,
+    max(CASE WHEN horizon = 1 THEN equal_weight_abnormal_return END)
+        AS equal_weight_abnormal_return_1d,
+    max(CASE WHEN horizon = 5 THEN equal_weight_abnormal_return END)
+        AS equal_weight_abnormal_return_5d,
     max(CASE WHEN horizon = 0 THEN exploratory_benchmark_return END)
         AS exploratory_benchmark_return_0d,
     max(CASE WHEN horizon = 1 THEN exploratory_benchmark_return END)
@@ -1356,3 +1462,81 @@ SELECT
     END AS ci95_high
 FROM with_variance
 ORDER BY sample, dimension, group_value, metric, horizon;
+
+-- Where the news is, per symbol, and where it stops being usable.
+--
+-- Two different shortfalls look identical in the totals: a symbol nobody
+-- writes about, and a symbol that is written about but whose articles never
+-- reach a price series. The first is a crawl problem and the second is a
+-- corpus problem, and they are fixed in different places, so they are
+-- counted separately here rather than summed into one coverage number.
+CREATE OR REPLACE TEMP TABLE symbol_news_coverage AS
+WITH universe AS (
+    SELECT symbol, subsector FROM sectors_input
+    UNION
+    SELECT DISTINCT symbol, CAST(NULL AS VARCHAR) AS subsector
+    FROM events_timed_input
+    WHERE symbol NOT IN (SELECT symbol FROM sectors_input)
+),
+priced AS (
+    SELECT symbol, count(*) AS sessions, min(date) AS first_session, max(date) AS last_session
+    FROM daily_indexed
+    GROUP BY symbol
+),
+mentioned AS (
+    SELECT symbol, count(*) AS events, min(event_date) AS first_event, max(event_date) AS last_event
+    FROM events_timed_input
+    GROUP BY symbol
+),
+connected AS (
+    SELECT symbol, count(*) AS matched_events
+    FROM aligned_events
+    GROUP BY symbol
+),
+lost AS (
+    SELECT
+        symbol,
+        count(*) AS unmatched_events,
+        count(*) FILTER (WHERE reason = 'symbol_not_in_daily_corpus') AS no_price_series,
+        count(*) FILTER (WHERE reason = 'no_session_on_or_after_candidate')
+            AS no_session_after_event
+    FROM event_unmatched
+    GROUP BY symbol
+)
+SELECT
+    universe.symbol,
+    universe.subsector,
+    coalesce(mentioned.events, 0) AS events,
+    coalesce(connected.matched_events, 0) AS matched_events,
+    coalesce(lost.unmatched_events, 0) AS unmatched_events,
+    coalesce(lost.no_price_series, 0) AS no_price_series,
+    coalesce(lost.no_session_after_event, 0) AS no_session_after_event,
+    coalesce(priced.sessions, 0) AS sessions,
+    priced.first_session,
+    priced.last_session,
+    mentioned.first_event,
+    mentioned.last_event,
+    CASE
+        WHEN coalesce(mentioned.events, 0) = 0 THEN NULL
+        ELSE coalesce(connected.matched_events, 0)::DOUBLE / mentioned.events
+    END AS attach_rate,
+    -- One diagnosis per symbol, chosen in the order the problems have to be
+    -- fixed in: a symbol with no price series cannot connect anything, so
+    -- that is reported before the article count.
+    CASE
+        WHEN coalesce(priced.sessions, 0) = 0 THEN 'no_price_series'
+        WHEN coalesce(lost.no_price_series, 0) > 0 THEN 'partly_unpriced'
+        WHEN coalesce(mentioned.events, 0) = 0 THEN 'no_articles'
+        WHEN coalesce(lost.unmatched_events, 0) > 0 THEN 'some_events_dropped'
+        -- Below a year of sessions the conditional surfaces stay mostly
+        -- blank whatever the news does, because the overlap correction
+        -- divides the effective sample by the horizon.
+        WHEN coalesce(priced.sessions, 0) < 252 THEN 'short_price_history'
+        WHEN coalesce(mentioned.events, 0) < 5 THEN 'few_articles'
+        ELSE 'ok'
+    END AS diagnosis
+FROM universe
+LEFT JOIN priced USING (symbol)
+LEFT JOIN mentioned USING (symbol)
+LEFT JOIN connected USING (symbol)
+LEFT JOIN lost USING (symbol);

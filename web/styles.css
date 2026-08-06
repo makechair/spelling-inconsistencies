@@ -1099,3 +1099,7 @@ body {
   border-color: var(--accent, #4c9aff);
   background: var(--panel);
 }
+
+/* A row with something to fix. Marked rather than filtered out: the rows that
+   are fine are the comparison that makes the others readable. */
+.report-row-flagged { background: rgba(148, 163, 184, 0.08); }

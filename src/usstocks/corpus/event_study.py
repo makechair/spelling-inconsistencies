@@ -37,6 +37,7 @@ OUTPUT_NAMES = (
     "event_returns.parquet",
     "event_summary.parquet",
     "event_unmatched.parquet",
+    "symbol_news_coverage.parquet",
     "report.json",
     "report.md",
     "report.html",
@@ -756,6 +757,7 @@ def _report_payload(
     smoothed_trade_plan_rows: list[dict[str, object]],
     validation_result_rows: list[dict[str, object]],
     validation_example_rows: list[dict[str, object]],
+    coverage_rows: list[dict[str, object]],
     previous: dict[str, Any] | None,
 ) -> dict[str, object]:
     counts = {
@@ -798,6 +800,9 @@ def _report_payload(
             "min_peers": metadata["min_peers"],
             "counts": counts,
             "unmatched_symbols": metadata["unmatched_symbols"],
+            # Per symbol, so that "few articles" and "articles that never
+            # reached a price series" stop looking like the same shortfall.
+            "symbol_news_coverage": coverage_rows,
             "ticker_inventory": ticker_inventory,
             "previous_report_date": previous.get("report_date") if previous else None,
             "comparison": {
@@ -1544,6 +1549,9 @@ def run(
         event_case_context = connection.execute(
             "SELECT * FROM event_case_context ORDER BY event_key"
         ).to_arrow_table()
+        symbol_news_coverage = connection.execute(
+            "SELECT * FROM symbol_news_coverage ORDER BY events DESC, symbol"
+        ).to_arrow_table()
         return_surface = connection.execute(
             "SELECT * FROM return_surface ORDER BY symbol, move_bucket, horizon"
         ).to_arrow_table()
@@ -1576,9 +1584,11 @@ def run(
     _write_parquet(paths["event_returns.parquet"], event_returns, pq)
     _write_parquet(paths["event_summary.parquet"], event_summary, pq)
     _write_parquet(paths["event_unmatched.parquet"], event_unmatched, pq)
+    _write_parquet(paths["symbol_news_coverage.parquet"], symbol_news_coverage, pq)
     summary_rows = event_summary.to_pylist()
     event_rows = event_returns.to_pylist()
     context_rows = event_case_context.to_pylist()
+    coverage_rows = symbol_news_coverage.to_pylist()
     return_surface_rows = return_surface.to_pylist()
     return_trade_plan_rows = return_trade_plan.to_pylist()
     smoothed_surface_rows = smoothed_return_surface.to_pylist()
@@ -1597,6 +1607,7 @@ def run(
         smoothed_trade_plan_rows,
         validation_result_rows,
         validation_example_rows,
+        coverage_rows,
         previous_report,
     )
     _write_text(

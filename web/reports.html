@@ -147,13 +147,13 @@
         </article>
         <article>
           <h3>個別銘柄と同業要因の分解</h3>
-          <p class="report-chart-description">選択した反応日について、銘柄自身の累計リターンと同subsector銘柄の平均を並べ、差分を個別要因の候補として表示します。</p>
+          <p class="report-chart-description">選択した反応日について、銘柄自身の累計リターンと、同subsector平均に<strong>その銘柄のbeta（同業の動きに対する連動の大きさ）を掛けた同業寄与分</strong>を並べ、残りを個別要因の候補として表示します。betaは反応日より前の120営業日で推定し、推定できないときは1として扱います。</p>
           <p id="peer-summary" class="report-analog-summary"></p>
           <svg id="peer-chart" viewBox="0 0 720 320" role="img"
                aria-label="選択銘柄と同業平均の期間別累計リターン比較"></svg>
           <div class="report-chart-guide">
             <strong>判断の読み方</strong>
-            <p>銘柄と同業平均が同方向・同程度ならセクター要因が強く、差分が大きければ個別要因の可能性が高まります。差分は因果関係の証明ではありません。</p>
+            <p>同業寄与分と実際の動きが近ければセクター要因が強く、残差が大きければ個別要因の可能性が高まります。差分は因果関係の証明ではありません。betaが1から離れた銘柄は、同業平均をそのまま引くと上昇日に強く・下落日に弱く見え続けるため、連動の大きさで補正しています。</p>
             <p id="peer-interpretation" class="report-chart-interpretation"></p>
           </div>
         </article>
@@ -228,6 +228,28 @@
           <article><span>未接続</span><strong id="count-unmatched">—</strong></article>
           <article><span>時刻なし</span><strong id="count-date-only">—</strong></article>
           <article><span>重複窓あり</span><strong id="count-overlap">—</strong></article>
+        </div>
+        <h3>銘柄別の記事数と接続状況</h3>
+        <p class="report-section-note">
+          「記事が少ない」と「記事はあるが日足に接続していない」は別の問題で、直す場所も違います。
+          合計値ではどちらも同じ不足に見えるため、銘柄ごとに分けて数えています。
+          <strong>接続率</strong>は、その銘柄を指す記事のうち反応取引日を決められた割合です。
+        </p>
+        <div class="report-table-wrap">
+          <table class="report-table" id="symbol-coverage-table">
+            <thead>
+              <tr>
+                <th>銘柄</th>
+                <th>業種</th>
+                <th>記事</th>
+                <th>接続</th>
+                <th>接続率</th>
+                <th>日足</th>
+                <th>診断</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
         </div>
       </section>
     </details>
@@ -340,7 +362,9 @@
       <h2>この分析の読み方</h2>
       <ul>
         <li><code>raw_return</code>は反応取引日の直前終値を基準にした調整済みリターンです。</li>
-        <li><code>abnormal_return</code>は同subsectorの等ウェイトreturnを差し引きます。</li>
+        <li><code>abnormal_return</code>は同subsectorの等ウェイトreturnに、その銘柄のbetaを掛けたものを差し引きます。betaは反応日<strong>より前</strong>の120営業日で推定し（推定に使う期間にイベント当日は入りません）、観測が60日未満か0.2〜3.0の範囲外なら1として扱い<code>beta_source</code>に<code>assumed</code>と記録します。</li>
+        <li><code>equal_weight_abnormal_return</code>は旧定義（beta=1）で、変化がbeta補正によるものか当日のニュースによるものかを切り分けるために併記します。</li>
+        <li>betaは日次リターンで推定し、複数日の累計リターンに適用します。複利の二次項が残りますが、補正しない場合の偏りより一桁小さい量です。</li>
         <li>「今回の読み取り」は算出済み指標が根拠です。Qwen表示時も数値計算は行わせず、根拠IDの選択と説明の整理だけに使用します。</li>
         <li>個別ケースの数値表には、推論文の根拠となる決定論的な算出値を全期間分掲載します。</li>
         <li>過去の日次版も同じ定義で保存するため、データ追加による結果の変化を比較できます。</li>

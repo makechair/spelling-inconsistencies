@@ -42,6 +42,59 @@ const elements = {
 const HORIZONS = [0, 1, 2, 5, 20];
 let activeReport = null;
 
+// One line per symbol, ordered by what to fix first: a ticker with articles
+// and no price series is a corpus problem, a ticker with no articles is a
+// crawl problem, and a short history is neither -- it only needs time.
+const COVERAGE_DIAGNOSIS = {
+  no_price_series: "日足なし（記事は接続できない）",
+  partly_unpriced: "一部の記事が日足に接続していない",
+  no_articles: "記事なし",
+  some_events_dropped: "一部の記事が反応日を決められない",
+  short_price_history: "日足が1年未満（条件付き集計は埋まりにくい）",
+  few_articles: "記事が少ない（5件未満）",
+  ok: "—",
+};
+const COVERAGE_ORDER = [
+  "no_price_series",
+  "partly_unpriced",
+  "no_articles",
+  "some_events_dropped",
+  "short_price_history",
+  "few_articles",
+  "ok",
+];
+
+function renderSymbolCoverage(report) {
+  const body = document.querySelector("#symbol-coverage-table tbody");
+  if (!body) return;
+  body.replaceChildren();
+  const rows = [...(report.symbol_news_coverage || [])].sort((left, right) => {
+    const rank = COVERAGE_ORDER.indexOf(left.diagnosis) - COVERAGE_ORDER.indexOf(right.diagnosis);
+    if (rank !== 0) return rank;
+    return Number(right.events || 0) - Number(left.events || 0);
+  });
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    const cells = [
+      row.symbol,
+      row.subsector ?? "—",
+      number(row.events, 0),
+      number(row.matched_events, 0),
+      row.attach_rate == null ? "—" : percent(row.attach_rate),
+      number(row.sessions, 0),
+      COVERAGE_DIAGNOSIS[row.diagnosis] ?? row.diagnosis,
+    ];
+    cells.forEach((value, index) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      if (index >= 2 && index <= 5) cell.className = "numeric";
+      tr.append(cell);
+    });
+    if (row.diagnosis !== "ok") tr.className = "report-row-flagged";
+    body.append(tr);
+  }
+}
+
 const countIds = {
   news_pages: "count-pages",
   ticker_events: "count-events",
@@ -1817,6 +1870,7 @@ function renderReport(report) {
     `未接続銘柄: ${(report.unmatched_symbols || []).join(", ") || "なし"} / ` +
       `benchmark最低peer数: ${report.min_peers}`,
   );
+  renderSymbolCoverage(report);
   renderObservation(report);
   renderTickerFocus(report);
   renderCaseStudies(report, elements.focusSymbol.value);
