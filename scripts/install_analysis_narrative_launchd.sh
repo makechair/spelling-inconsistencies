@@ -31,4 +31,10 @@ sed \
 plutil -lint "${TARGET}"
 launchctl bootout "gui/${UID}" "${TARGET}" 2>/dev/null || true
 launchctl bootstrap "gui/${UID}" "${TARGET}"
-echo "installed ${TARGET} (daily 14:45 JST)"
+# Read the time back out of what was just written. The previous version
+# printed a fixed "14:45", which kept saying so after the template moved to
+# 17:00 -- a confirmation message that cannot be wrong is worth the two calls.
+# launchd fires on the Mac's local timezone, so that is what this reports.
+hour="$(plutil -extract StartCalendarInterval.Hour raw "${TARGET}")"
+minute="$(plutil -extract StartCalendarInterval.Minute raw "${TARGET}")"
+printf 'installed %s (daily %02d:%02d local time)\n' "${TARGET}" "${hour}" "${minute}"
