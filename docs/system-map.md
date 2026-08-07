@@ -219,6 +219,23 @@ systemctl list-timers 'usstocks-*' --all --no-pager
 **リリースには `deploy/` が入らない。** systemd unitを更新するときの参照先は
 `/opt/usstocks/app/deploy/systemd/` であって `current` ではない。
 
+**unitはデプロイでは入らない。** deploy-agentはvenvとwebを差し替えるだけなので、
+新しいunitを足したときは手で入れるか `install.sh` を通す必要がある。入れ忘れると
+**timerだけあってserviceが無い**状態になり、`Refusing to start, unit ... to
+trigger not loaded` で静かに発火しなくなる（2026-08-07に
+`usstocks-fundamentals-metrics.service` がこの状態だった。timerは登録済みだったが
+一度も動いておらず、指標は手動実行のぶんしか更新されていなかった）。
+
+`ls -l /etc/systemd/system/usstocks-*` で **.service と .timer が対で揃っているか**
+を見るのが、この故障を見つける唯一の確実な方法である。
+
+```bash
+# globはsudoの前のシェルが展開する。/opt/usstocks は 0750 なので ubuntu では
+# 展開できず、リテラルのまま渡って cannot stat になる。root側で展開させる。
+sudo bash -c 'install -m 0644 /opt/usstocks/app/deploy/systemd/usstocks-*.{service,timer} /etc/systemd/system/'
+sudo systemctl daemon-reload
+```
+
 S3側は `corpus/`（コーパス本体）、`analysis-exchange/`（Macとの受け渡し）、
 バックアップの3系統。`analysis-exchange` はMac用IAMユーザーの権限が
 `input/latest/*` の読取と `output/*` の書込だけに絞ってある。
