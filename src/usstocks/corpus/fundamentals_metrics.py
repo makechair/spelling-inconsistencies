@@ -68,6 +68,34 @@ def discover_inputs(local_root: Path) -> tuple[list[Path], list[Path]]:
     return facts, sectors
 
 
+def latest_prices(local_root: Path) -> dict[str, Any]:
+    """The most recent close per symbol, or nothing when there is no corpus.
+
+    Optional on purpose: the metrics table predates the price join and is
+    still complete without it. Its absence costs the valuation columns, not
+    the run.
+    """
+    duckdb, _ = _modules()
+    paths = sorted((local_root / "daily").glob("symbol=*/part.parquet"))
+    if not paths:
+        return {}
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute("SET threads = 1")
+        rows = connection.execute(
+            """
+            SELECT symbol, arg_max("adjClose", date) AS close, max(date) AS date
+            FROM read_parquet($paths)
+            WHERE "adjClose" IS NOT NULL
+            GROUP BY symbol
+            """,
+            {"paths": [str(path) for path in paths]},
+        ).fetchall()
+    finally:
+        connection.close()
+    return {str(symbol): {"close": close, "date": date} for symbol, close, date in rows}
+
+
 def metrics_s3_root(settings: Settings) -> str:
     return f"{corpus_s3_root(settings)}/fundamentals_metrics"
 
@@ -190,6 +218,15 @@ def trailing_twelve_months(quarters: list[dict[str, Any]]) -> dict[str, Any] | N
             None if cost in (None, 0) or latest.get("inventory") is None
             else latest["inventory"] / cost * span
         ),
+        "net_income": total("net_income"),
+        "free_cash_flow": (
+            None if operating_cash_flow is None or capex is None
+            else operating_cash_flow - capex
+        ),
+        # Balances, so the closing figure stands rather than a sum.
+        "equity": latest.get("equity"),
+        "shares_outstanding": latest.get("shares_outstanding"),
+        "foreign_private_issuer": latest.get("foreign_private_issuer"),
         "capex_intensity": _ratio(capex, revenue),
         "rd_intensity": _ratio(total("research_development"), revenue),
         "free_cash_flow_margin": (
@@ -200,7 +237,57 @@ def trailing_twelve_months(quarters: list[dict[str, Any]]) -> dict[str, Any] | N
     }
 
 
-def build_summary(table: Any, *, generated_at: datetime) -> dict[str, Any]:
+def valuation(row: dict[str, Any], price: dict[str, Any] | None) -> dict[str, Any]:
+    """Price-based ratios, or nothing at all.
+
+    Withheld entirely for foreign private issuers. Their US listing is an ADR
+    representing some number of ordinary shares -- five to one for TSM -- and
+    the corpus records no ratio, so multiplying the ADR price by the ordinary
+    share count is wrong by that factor. A price/earnings ratio five times too
+    low reads as a bargain rather than as an error, which is the worst way for
+    a number to be wrong.
+
+    Withheld too where the filer does not report in USD: the price is in USD
+    and dividing it by a figure in another currency produces a plausible
+    number that means nothing.
+    """
+    blank = {
+        "price": None, "price_date": None, "market_cap": None,
+        "pe_ratio": None, "ps_ratio": None, "pb_ratio": None,
+        "fcf_yield": None, "valuation_withheld": None,
+    }
+    if row.get("foreign_private_issuer"):
+        return blank | {"valuation_withheld": "adr_share_ratio_unknown"}
+    if (row.get("revenue_unit") or "USD") != "USD":
+        return blank | {"valuation_withheld": "reporting_currency_not_usd"}
+    shares = row.get("shares_outstanding")
+    if price is None or not shares:
+        return blank | {"valuation_withheld": "no_price_or_share_count"}
+    close = float(price["close"])
+    market_cap = close * float(shares)
+    net_income = row.get("net_income")
+    equity = row.get("equity")
+    free_cash_flow = row.get("free_cash_flow")
+    return {
+        "price": close,
+        "price_date": price["date"].isoformat(),
+        "market_cap": market_cap,
+        # A negative denominator is not a cheap multiple, it is a loss. Left
+        # empty rather than printed as a negative ratio nobody reads as one.
+        "pe_ratio": (
+            market_cap / net_income
+            if net_income is not None and net_income > 0 else None
+        ),
+        "ps_ratio": _ratio(market_cap, row.get("revenue")),
+        "pb_ratio": market_cap / equity if equity is not None and equity > 0 else None,
+        "fcf_yield": free_cash_flow / market_cap if free_cash_flow is not None else None,
+        "valuation_withheld": None,
+    }
+
+
+def build_summary(
+    table: Any, *, generated_at: datetime, prices: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """The cross-sectional view, prepared here so the API only serves a file.
 
     Putting DuckDB in the API process would spend memory the 1GB instance does
@@ -325,6 +412,7 @@ def build_summary(table: Any, *, generated_at: datetime) -> dict[str, Any]:
                 "equity_ratio": latest.get("equity_ratio"),
                 "improving": improving,
                 "improving_measured": measured,
+                **valuation(latest, (prices or {}).get(symbol)),
                 "history": history,
                 "quarterly_history": quarterly_history,
             }
@@ -369,7 +457,9 @@ def run(settings: Settings, *, uploader: Uploader = aws_upload) -> int:
     path = local_root / "fundamentals_metrics" / "part.parquet"
     digest = write_metrics(path, table)
 
-    summary = build_summary(table, generated_at=datetime.now(tz=UTC))
+    summary = build_summary(
+        table, generated_at=datetime.now(tz=UTC), prices=latest_prices(local_root)
+    )
     summary_path = local_root / "fundamentals" / "summary.json"
     write_summary(summary_path, summary)
 

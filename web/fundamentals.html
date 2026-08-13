@@ -83,6 +83,11 @@
             <th data-sort="capex_intensity" title="設備投資÷売上高。供給能力の増減。業界全体で上がると次サイクルの供給過剰を示唆する" class="sortable numeric">設備投資／売上</th>
             <th data-sort="rd_intensity" title="研究開発費÷売上高。将来の競争力への投下" class="sortable numeric">R&amp;D／売上</th>
             <th data-sort="free_cash_flow_margin" title="FCFマージン＝（営業CF−設備投資）÷売上高。手元に残る現金の割合" class="sortable numeric">FCFマージン</th>
+            <th data-sort="market_cap" title="株価×発行済株式数。株価は日足コーパスの直近終値" class="sortable numeric">時価総額</th>
+            <th data-sort="pe_ratio" title="時価総額÷純利益。赤字の期は空欄（負の倍率は割安ではない）" class="sortable numeric">PER</th>
+            <th data-sort="pb_ratio" title="時価総額÷自己資本" class="sortable numeric">PBR</th>
+            <th data-sort="ps_ratio" title="時価総額÷売上高。赤字でも読める倍率" class="sortable numeric">PSR</th>
+            <th data-sort="fcf_yield" title="FCF÷時価総額" class="sortable numeric">FCF利回り</th>
             <th data-sort="improving" title="改善した指標の数／測定できた指標の数。増収率・粗利率・営業利益率・在庫日数の4つを等重みで数えただけで、スコアではない" class="sortable numeric" id="improving-header">改善数</th>
           </tr>
         </thead>
@@ -101,6 +106,17 @@
       重み付けしていない。空欄は提出者がその項目を報告していないことを意味し、
       0ではない。通貨は換算していないので、売上の絶対額は同じ通貨どうしでのみ
       比較できる。
+    </p>
+    <p class="page-note">
+      <strong>株価指標が空欄の銘柄について</strong>：
+      外国民間発行体（20-F・40-F・6-Kで提出する会社）は、米国上場されているのが
+      <strong>ADR</strong>で、これが原株何株にあたるかをこのコーパスは持っていません
+      （TSMは1 ADR＝原株5株）。ADRの株価に原株の発行済株式数を掛けると時価総額が
+      その倍率だけ狂い、<strong>PERが実際より低く出て「割安」に見えます</strong>。
+      誤りとしては最悪の出方なので、これらの銘柄では株価指標を一切出しません。
+      米ドル以外で計上している会社も同じ理由で出しません（株価はドル建てです）。
+      EV/EBITDAは、有利子負債と減価償却費をこのコーパスが概念として持っていないため
+      未実装です。総負債で代用すると企業価値を大きく過大評価します。
     </p>
   </section>
 

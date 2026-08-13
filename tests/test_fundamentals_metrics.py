@@ -439,3 +439,74 @@ def test_a_symbol_with_no_recorded_name_is_not_given_one(tmp_path: Path):
     facts, sectors = build(tmp_path, [blank])
     entry = build_summary(compute(facts, sectors), generated_at=datetime.now(tz=UTC))["symbols"][0]
     assert entry["name"] is None
+
+
+def valuation_row(**overrides):
+    row = {
+        "revenue_unit": "USD",
+        "shares_outstanding": 1_000_000.0,
+        "net_income": 5_000_000.0,
+        "equity": 20_000_000.0,
+        "free_cash_flow": 4_000_000.0,
+        "revenue": 50_000_000.0,
+        "foreign_private_issuer": False,
+    }
+    return row | overrides
+
+
+PRICE = {"close": 100.0, "date": date(2026, 8, 6)}
+
+
+def test_the_valuation_ratios_divide_the_market_cap_by_the_figures():
+    from usstocks.corpus.fundamentals_metrics import valuation
+
+    result = valuation(valuation_row(), PRICE)
+    assert result["market_cap"] == pytest.approx(100_000_000.0)
+    assert result["pe_ratio"] == pytest.approx(20.0)
+    assert result["pb_ratio"] == pytest.approx(5.0)
+    assert result["ps_ratio"] == pytest.approx(2.0)
+    assert result["fcf_yield"] == pytest.approx(0.04)
+    assert result["valuation_withheld"] is None
+
+
+def test_an_adr_filer_gets_no_valuation_at_all():
+    """TSM's ADR is five ordinary shares. Multiplying the ADR price by the
+    ordinary share count gives a market cap five times too small and a P/E
+    that reads as a bargain rather than as an error."""
+    from usstocks.corpus.fundamentals_metrics import valuation
+
+    result = valuation(valuation_row(foreign_private_issuer=True), PRICE)
+    assert result["pe_ratio"] is None
+    assert result["market_cap"] is None
+    assert result["valuation_withheld"] == "adr_share_ratio_unknown"
+
+
+def test_a_filer_reporting_in_another_currency_gets_none_either():
+    """The price is in USD. Dividing it by a figure in TWD produces a
+    plausible number that means nothing."""
+    from usstocks.corpus.fundamentals_metrics import valuation
+
+    result = valuation(valuation_row(revenue_unit="TWD"), PRICE)
+    assert result["valuation_withheld"] == "reporting_currency_not_usd"
+
+
+def test_a_loss_making_filer_shows_no_pe_rather_than_a_negative_one():
+    """A negative multiple is not a cheap one, and nobody reads it as a loss."""
+    from usstocks.corpus.fundamentals_metrics import valuation
+
+    result = valuation(valuation_row(net_income=-1_000_000.0), PRICE)
+    assert result["pe_ratio"] is None
+    # The sales multiple still stands: revenue is positive whatever the
+    # bottom line did, and it is the figure that stays readable through a loss.
+    assert result["ps_ratio"] == pytest.approx(2.0)
+    assert result["valuation_withheld"] is None
+
+
+def test_no_price_means_no_ratios_and_a_reason():
+    from usstocks.corpus.fundamentals_metrics import valuation
+
+    assert valuation(valuation_row(), None)["valuation_withheld"] == "no_price_or_share_count"
+    assert (
+        valuation(valuation_row(shares_outstanding=None), PRICE)["valuation_withheld"]
+        == "no_price_or_share_count"
+    )

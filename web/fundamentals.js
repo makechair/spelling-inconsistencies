@@ -28,6 +28,13 @@ const LOWER_IS_BETTER = new Set(["inventory_days"]);
 const MARKET_LABELS = { US: "米国", JP: "日本" };
 const marketLabel = (row) => MARKET_LABELS[marketOf(row)] ?? "";
 const ALL_LISTS = "";
+// Why a row has no price ratios. Saying which of the three it is turns an
+// empty cell into a fact about the filer.
+const WITHHELD_REASONS = {
+  adr_share_ratio_unknown: "ADRの原株比率が不明",
+  reporting_currency_not_usd: "計上通貨が米ドルではない",
+  no_price_or_share_count: "株価または株式数が無い",
+};
 
 let rows = [];
 let lists = [];
@@ -81,6 +88,15 @@ function cell(main, change, key) {
 
 function percent(value) {
   return value == null ? "" : PERCENT.format(value);
+}
+
+const MULTIPLE = new Intl.NumberFormat("ja-JP", {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+});
+
+function multiple(value) {
+  return value == null ? "" : `${MULTIPLE.format(value)}倍`;
 }
 
 // An EDINET security code: three digits and a fourth character that has been
@@ -218,6 +234,11 @@ function render() {
     tr.append(cell(percent(row.capex_intensity)));
     tr.append(cell(percent(row.rd_intensity)));
     tr.append(cell(percent(row.free_cash_flow_margin)));
+    tr.append(cell(row.market_cap == null ? "" : money(row.market_cap, "USD")));
+    tr.append(cell(multiple(row.pe_ratio)));
+    tr.append(cell(multiple(row.pb_ratio)));
+    tr.append(cell(multiple(row.ps_ratio)));
+    tr.append(cell(percent(row.fcf_yield)));
     tr.append(
       cell(row.improving_measured ? `${row.improving}/${row.improving_measured}` : ""),
     );
@@ -621,6 +642,7 @@ function detailCell(row, columns) {
       `${row.symbol}${row.name ? ` ${row.name}` : ""}` +
       ` ・ ${marketLabel(row)} ・ ${subsectorLabel(row.subsector)}` +
       ` ・ 通貨 ${row.currency ?? "不明"}` +
+      (row.valuation_withheld ? ` ・ 株価指標なし（${WITHHELD_REASONS[row.valuation_withheld] ?? row.valuation_withheld}）` : "") +
       ` ・ 直近${source.length}期の${span}実績。単位は各軸の端に示す` +
       (mode === "quarter"
         ? "。四半期の売上・利益はその3ヶ月分で、年次と直接は比べられない"

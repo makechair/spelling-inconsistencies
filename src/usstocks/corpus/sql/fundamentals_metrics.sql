@@ -27,6 +27,20 @@ FROM (
 )
 WHERE rank = 1;
 
+-- Which filers are foreign private issuers. Their US-listed security is an
+-- ADR or ADS representing some number of ordinary shares -- five for one in
+-- TSM's case -- and nothing in this corpus records the ratio. Multiplying an
+-- ADR price by the ordinary share count is therefore wrong by that factor,
+-- so every valuation ratio is withheld for these filers rather than printed
+-- several times too large.
+CREATE OR REPLACE TEMP TABLE filer_types AS
+SELECT
+    symbol,
+    bool_or(regexp_replace(form, '/A$', '') IN ('20-F', '40-F', '6-K'))
+        AS foreign_private_issuer
+FROM periodic
+GROUP BY symbol;
+
 -- One name per filer, from the newest filing that carries one. Filers rename
 -- themselves, and the comparatives inside an old filing keep the old name.
 -- Blank rather than null where the loader had none to record, so the join
@@ -141,6 +155,12 @@ SELECT
     operating_cash_flow,
     capex,
     inventory,
+    -- Carried out of the wide table so the valuation ratios downstream have a
+    -- book value and a share count to divide by.
+    equity,
+    equity_unit,
+    assets,
+    cash_and_equivalents,
     CASE
         WHEN revenue IS NOT NULL AND revenue <> 0
              AND gross_profit IS NOT NULL AND gross_profit_unit = revenue_unit
@@ -235,6 +255,7 @@ SELECT
     metrics.*,
     sectors_input.subsector,
     names.entity_name,
+    coalesce(filer_types.foreign_private_issuer, FALSE) AS foreign_private_issuer,
     -- Carried through so the page can separate the markets. Revenue is never
     -- converted, so a table that mixes them cannot be sorted by size.
     sectors_input.market,
@@ -245,6 +266,7 @@ SELECT
 FROM metrics
 LEFT JOIN sectors_input ON sectors_input.symbol = metrics.symbol
 LEFT JOIN names ON names.symbol = metrics.symbol
+LEFT JOIN filer_types ON filer_types.symbol = metrics.symbol
 LEFT JOIN metrics AS previous
     ON previous.symbol = metrics.symbol
    AND previous.period_type = metrics.period_type
