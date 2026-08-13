@@ -12,7 +12,12 @@ ExecStart=/opt/usstocks/current/analysis-import.sh
 
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/usstocks/corpus/analysis
+# Both directories this script writes. The fundamentals guide was added to
+# the script without being added here, so every run since has died on
+# ProtectSystem with "Read-only file system" -- ninety-six failures a day, and
+# the decision digest never arrived. A path added to the script has to be
+# added here in the same change.
+ReadWritePaths=/var/lib/usstocks/corpus/analysis /var/lib/usstocks/corpus/fundamentals
 ProtectHome=true
 NoNewPrivileges=true
 RestrictSUIDSGID=true

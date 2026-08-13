@@ -214,7 +214,27 @@ journalctl -u 'usstocks-*' --since '3 days ago' --no-pager | grep -i "timed out\
 
 ---
 
-## 5. ストレージの配置
+## 4-5. 書き込み許可はunit側にもある（2026-08-13）
+
+`usstocks-analysis-narrative-import` は8月11日以降、**15分ごとに失敗し続けていた**。
+
+```
+install: cannot change permissions of '/var/lib/usstocks/corpus/fundamentals':
+Read-only file system
+```
+
+原因はディスクでもS3でもなく、**unitの `ReadWritePaths`**。`ProtectSystem=strict`
+の下では、そこに挙げた道以外は読み取り専用になる。決算の解説をスクリプトに
+足したとき、この行を広げ忘れていた。
+
+**分析レポート側の解説は届いていた。** スクリプトは
+「analysisをsync → fundamentalsのディレクトリを用意」の順で、落ちるのは後半だから
+である。届いていなかったのは**決算の解説だけ**で、それでもunitは毎回失敗を報告し、
+1日96件のノイズを出していた。
+
+**教訓**: スクリプトに書き込み先を足したら、**同じ変更でunitの `ReadWritePaths`
+にも足す**。片方だけ直すと、ディスクにもS3にも異常が無いのに書けないという、
+いちばん見つけにくい形で壊れる。
 
 ```
 /var/lib/usstocks/                 # 永続。デプロイで消えない
