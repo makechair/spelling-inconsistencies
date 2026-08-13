@@ -1103,3 +1103,23 @@ body {
 /* A row with something to fix. Marked rather than filtered out: the rows that
    are fine are the comparison that makes the others readable. */
 .report-row-flagged { background: rgba(148, 163, 184, 0.08); }
+
+/* The screen. Two inputs per row so a range reads as one control, and a grid
+   so fourteen of them stay scannable instead of becoming a column. */
+.screen-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0.5rem 0;
+}
+.screen-field { display: flex; align-items: center; gap: 0.4rem; }
+.screen-field > span { flex: 1 1 auto; color: var(--muted); font-size: 0.9em; }
+.screen-field input {
+  width: 5.5rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--panel-2);
+  border-radius: 4px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}

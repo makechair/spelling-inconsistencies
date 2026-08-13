@@ -68,12 +68,17 @@ def discover_inputs(local_root: Path) -> tuple[list[Path], list[Path]]:
     return facts, sectors
 
 
-def latest_prices(local_root: Path) -> dict[str, Any]:
-    """The most recent close per symbol, or nothing when there is no corpus.
+def price_state(local_root: Path) -> dict[str, Any]:
+    """The latest close and the technical state that goes with it.
 
     Optional on purpose: the metrics table predates the price join and is
-    still complete without it. Its absence costs the valuation columns, not
-    the run.
+    still complete without it. Its absence costs the price columns, not the
+    run.
+
+    Every indicator is guarded on having enough history to mean anything. A
+    200-day average computed over 60 sessions is not a slow average, it is a
+    fast one wearing the wrong label, and it would put a symbol at the top of
+    a screen for a reason that does not exist.
     """
     duckdb, _ = _modules()
     paths = sorted((local_root / "daily").glob("symbol=*/part.parquet"))
@@ -82,18 +87,90 @@ def latest_prices(local_root: Path) -> dict[str, Any]:
     connection = duckdb.connect(":memory:")
     try:
         connection.execute("SET threads = 1")
+        connection.execute("SET memory_limit = '256MB'")
         rows = connection.execute(
             """
-            SELECT symbol, arg_max("adjClose", date) AS close, max(date) AS date
-            FROM read_parquet($paths)
-            WHERE "adjClose" IS NOT NULL
-            GROUP BY symbol
+            WITH base AS (
+                SELECT
+                    symbol,
+                    date,
+                    "adjClose" AS close,
+                    "adjVolume" AS volume,
+                    row_number() OVER (PARTITION BY symbol ORDER BY date) AS position,
+                    count(*) OVER (PARTITION BY symbol) AS sessions
+                FROM read_parquet($paths)
+                WHERE "adjClose" IS NOT NULL
+            ),
+            with_returns AS (
+                SELECT
+                    *,
+                    close / lag(close) OVER (PARTITION BY symbol ORDER BY date) - 1
+                        AS daily_return
+                FROM base
+            ),
+            indicators AS (
+                SELECT
+                    symbol, date, close, volume, sessions, position,
+                    avg(close) OVER fifty AS sma_50,
+                    avg(close) OVER two_hundred AS sma_200,
+                    max(close) OVER year AS high_52w,
+                    min(close) OVER year AS low_52w,
+                    -- Excludes today: a day is only a spike against the days
+                    -- before it, and including it dampens what it measures.
+                    median(volume) OVER sixty_before AS median_volume_60,
+                    avg(greatest(daily_return, 0)) OVER fortnight AS avg_gain,
+                    avg(greatest(-daily_return, 0)) OVER fortnight AS avg_loss,
+                    lag(close, 21) OVER (PARTITION BY symbol ORDER BY date) AS close_1m,
+                    lag(close, 63) OVER (PARTITION BY symbol ORDER BY date) AS close_3m,
+                    lag(close, 252) OVER (PARTITION BY symbol ORDER BY date) AS close_12m
+                FROM with_returns
+                WINDOW
+                    fifty AS (PARTITION BY symbol ORDER BY date ROWS 49 PRECEDING),
+                    two_hundred AS (PARTITION BY symbol ORDER BY date ROWS 199 PRECEDING),
+                    year AS (PARTITION BY symbol ORDER BY date ROWS 251 PRECEDING),
+                    sixty_before AS (
+                        PARTITION BY symbol ORDER BY date
+                        ROWS BETWEEN 60 PRECEDING AND 1 PRECEDING
+                    ),
+                    fortnight AS (PARTITION BY symbol ORDER BY date ROWS 13 PRECEDING)
+            )
+            SELECT
+                symbol,
+                date,
+                close,
+                sessions,
+                CASE WHEN sessions >= 50 AND sma_50 > 0
+                     THEN close / sma_50 - 1 END AS sma_50_gap,
+                CASE WHEN sessions >= 200 AND sma_200 > 0
+                     THEN close / sma_200 - 1 END AS sma_200_gap,
+                CASE WHEN sessions >= 252 AND high_52w > 0
+                     THEN close / high_52w - 1 END AS drawdown_from_52w_high,
+                CASE WHEN sessions >= 252 AND low_52w > 0
+                     THEN close / low_52w - 1 END AS gain_from_52w_low,
+                CASE WHEN sessions >= 60 AND median_volume_60 > 0
+                     THEN volume / median_volume_60 END AS volume_ratio_60d,
+                -- Cutler's RSI: a simple average of the last fourteen days
+                -- rather than Wilder's smoothing. The two disagree by a few
+                -- points, so the name matters more than the difference.
+                CASE
+                    WHEN sessions >= 15 AND avg_gain + avg_loss > 0
+                    THEN 100 * avg_gain / (avg_gain + avg_loss)
+                END AS rsi_14,
+                CASE WHEN close_1m > 0 THEN close / close_1m - 1 END AS return_1m,
+                CASE WHEN close_3m > 0 THEN close / close_3m - 1 END AS return_3m,
+                CASE WHEN close_12m > 0 THEN close / close_12m - 1 END AS return_12m
+            FROM indicators
+            WHERE position = sessions
             """,
             {"paths": [str(path) for path in paths]},
-        ).fetchall()
+        )
+        columns = [description[0] for description in rows.description]
+        return {
+            str(row[0]): dict(zip(columns, row, strict=True))
+            for row in rows.fetchall()
+        }
     finally:
         connection.close()
-    return {str(symbol): {"close": close, "date": date} for symbol, close, date in rows}
 
 
 def metrics_s3_root(settings: Settings) -> str:
@@ -285,6 +362,29 @@ def valuation(row: dict[str, Any], price: dict[str, Any] | None) -> dict[str, An
     }
 
 
+TECHNICAL_FIELDS = (
+    "sma_50_gap",
+    "sma_200_gap",
+    "drawdown_from_52w_high",
+    "gain_from_52w_low",
+    "volume_ratio_60d",
+    "rsi_14",
+    "return_1m",
+    "return_3m",
+    "return_12m",
+)
+
+
+def technicals(price: dict[str, Any] | None) -> dict[str, Any]:
+    """The price state, as it is -- no currency guard.
+
+    Unlike the valuation ratios, these are all price against its own price.
+    An ADR's 50-day average is its own average and a receipt ratio cancels
+    out, so the columns withheld above are readable here.
+    """
+    return {name: (price or {}).get(name) for name in TECHNICAL_FIELDS}
+
+
 def build_summary(
     table: Any, *, generated_at: datetime, prices: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -413,6 +513,7 @@ def build_summary(
                 "improving": improving,
                 "improving_measured": measured,
                 **valuation(latest, (prices or {}).get(symbol)),
+                **technicals((prices or {}).get(symbol)),
                 "history": history,
                 "quarterly_history": quarterly_history,
             }
@@ -458,7 +559,7 @@ def run(settings: Settings, *, uploader: Uploader = aws_upload) -> int:
     digest = write_metrics(path, table)
 
     summary = build_summary(
-        table, generated_at=datetime.now(tz=UTC), prices=latest_prices(local_root)
+        table, generated_at=datetime.now(tz=UTC), prices=price_state(local_root)
     )
     summary_path = local_root / "fundamentals" / "summary.json"
     write_summary(summary_path, summary)

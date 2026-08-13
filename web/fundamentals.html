@@ -41,6 +41,21 @@
       <span class="list-actions" id="list-actions"></span>
     </div>
 
+    <details class="company-search" id="screen">
+      <summary>条件で絞り込む（スクリーニング）</summary>
+      <div class="company-search-body">
+        <p class="page-note">
+          決算指標とテクニカルを<strong>同じ表で</strong>絞り込みます。空欄の条件は無視します。
+          値が無い銘柄は、その条件を指定した時点で外れます（欠測は「条件を満たさない」ではなく
+          「判定できない」ですが、スクリーニングとしては外すのが安全側です）。
+        </p>
+        <div class="screen-grid" id="screen-grid"></div>
+        <div class="list-actions">
+          <button type="button" id="screen-reset">条件をすべて消す</button>
+        </div>
+      </div>
+    </details>
+
     <details class="company-search">
       <summary>企業を検索して追加・削除</summary>
       <div class="company-search-body">
@@ -88,6 +103,12 @@
             <th data-sort="pb_ratio" title="時価総額÷自己資本" class="sortable numeric">PBR</th>
             <th data-sort="ps_ratio" title="時価総額÷売上高。赤字でも読める倍率" class="sortable numeric">PSR</th>
             <th data-sort="fcf_yield" title="FCF÷時価総額" class="sortable numeric">FCF利回り</th>
+            <th data-sort="volume_ratio_60d" title="直近の出来高÷直前60営業日の中央値。当日は基準に含めない（含めると急増そのものを薄める）" class="sortable numeric">出来高比</th>
+            <th data-sort="rsi_14" title="RSI(14)。Cutler版（単純平均）で、Wilderの平滑化とは数ポイント違う" class="sortable numeric">RSI</th>
+            <th data-sort="sma_50_gap" title="株価÷50日移動平均−1" class="sortable numeric">50日乖離</th>
+            <th data-sort="sma_200_gap" title="株価÷200日移動平均−1。日足が200本未満の銘柄は空欄" class="sortable numeric">200日乖離</th>
+            <th data-sort="drawdown_from_52w_high" title="52週高値からの下落率。日足が252本未満の銘柄は空欄" class="sortable numeric">52週高値から</th>
+            <th data-sort="return_3m" title="63営業日前からのリターン" class="sortable numeric">3ヶ月</th>
             <th data-sort="improving" title="改善した指標の数／測定できた指標の数。増収率・粗利率・営業利益率・在庫日数の4つを等重みで数えただけで、スコアではない" class="sortable numeric" id="improving-header">改善数</th>
           </tr>
         </thead>
@@ -96,6 +117,7 @@
     </div>
 
     <p class="page-note" id="pending-note" hidden></p>
+    <p class="page-note" id="screen-note" hidden></p>
 
     <p class="page-note">
       <strong>決算期の基準</strong>: 四半期が4つ揃う銘柄は<strong>TTM（直近12ヶ月）</strong>、

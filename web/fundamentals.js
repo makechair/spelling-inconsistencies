@@ -134,10 +134,51 @@ function inList(row) {
   return list.symbols.includes(row.symbol);
 }
 
+// The screen. Each row is a field, a direction and the unit the value is
+// entered in -- percentages are typed as percentages and stored as fractions,
+// because nobody screens for "0.15".
+const SCREEN_FIELDS = [
+  ["revenue_yoy", "増収率", "percent", ["min", "max"]],
+  ["gross_margin", "粗利率", "percent", ["min", "max"]],
+  ["operating_margin", "営業利益率", "percent", ["min", "max"]],
+  ["inventory_days", "在庫日数", "raw", ["min", "max"]],
+  ["pe_ratio", "PER", "raw", ["min", "max"]],
+  ["pb_ratio", "PBR", "raw", ["min", "max"]],
+  ["ps_ratio", "PSR", "raw", ["min", "max"]],
+  ["fcf_yield", "FCF利回り", "percent", ["min", "max"]],
+  ["volume_ratio_60d", "出来高比", "raw", ["min", "max"]],
+  ["rsi_14", "RSI", "raw", ["min", "max"]],
+  ["sma_50_gap", "50日乖離", "percent", ["min", "max"]],
+  ["sma_200_gap", "200日乖離", "percent", ["min", "max"]],
+  ["drawdown_from_52w_high", "52週高値から", "percent", ["min", "max"]],
+  ["return_3m", "3ヶ月リターン", "percent", ["min", "max"]],
+];
+
+const screen = new Map();
+
+function activeScreen() {
+  return [...screen.entries()].filter(([, value]) => Number.isFinite(value));
+}
+
+function passesScreen(row) {
+  for (const [key, threshold] of activeScreen()) {
+    const [field, bound] = key.split(":");
+    const value = row[field];
+    // A missing value is "cannot tell", not "fails". Dropping it is the safe
+    // side for a screen: a symbol shown as matching should actually match.
+    if (value == null) return false;
+    if (bound === "min" && value < threshold) return false;
+    if (bound === "max" && value > threshold) return false;
+  }
+  return true;
+}
+
 function visibleRows() {
   const subsector = document.getElementById("subsector-filter").value;
   const completeOnly = document.getElementById("hide-incomplete").checked;
-  let selected = rows.filter((row) => inList(row) && inMarket(row));
+  let selected = rows.filter(
+    (row) => inList(row) && inMarket(row) && passesScreen(row),
+  );
   if (subsector) selected = selected.filter((row) => row.subsector === subsector);
   if (completeOnly) {
     selected = selected.filter(
@@ -239,6 +280,12 @@ function render() {
     tr.append(cell(multiple(row.pb_ratio)));
     tr.append(cell(multiple(row.ps_ratio)));
     tr.append(cell(percent(row.fcf_yield)));
+    tr.append(cell(multiple(row.volume_ratio_60d)));
+    tr.append(cell(row.rsi_14 == null ? "" : MULTIPLE.format(row.rsi_14)));
+    tr.append(cell(percent(row.sma_50_gap)));
+    tr.append(cell(percent(row.sma_200_gap)));
+    tr.append(cell(percent(row.drawdown_from_52w_high)));
+    tr.append(cell(percent(row.return_3m)));
     tr.append(
       cell(row.improving_measured ? `${row.improving}/${row.improving_measured}` : ""),
     );
@@ -252,6 +299,46 @@ function render() {
   document.getElementById("market-note").hidden =
     Boolean(document.getElementById("market-filter").value) || shown.size < 2;
   renderPending(selected);
+  const conditions = activeScreen().length;
+  const note = document.getElementById("screen-note");
+  note.hidden = conditions === 0;
+  note.textContent = conditions
+    ? `${conditions}件の条件で絞り込み中。値が無い銘柄はその条件で外れています。`
+    : "";
+}
+
+function buildScreen() {
+  const grid = document.getElementById("screen-grid");
+  grid.replaceChildren();
+  for (const [field, label, unit, bounds] of SCREEN_FIELDS) {
+    const wrap = document.createElement("div");
+    wrap.className = "screen-field";
+    const name = document.createElement("span");
+    name.textContent = unit === "percent" ? `${label}（%）` : label;
+    wrap.append(name);
+    for (const bound of bounds) {
+      const input = document.createElement("input");
+      input.type = "number";
+      input.step = "any";
+      input.placeholder = bound === "min" ? "以上" : "以下";
+      input.dataset.key = `${field}:${bound}`;
+      input.dataset.unit = unit;
+      input.addEventListener("input", () => {
+        const raw = Number.parseFloat(input.value);
+        const value = unit === "percent" ? raw / 100 : raw;
+        if (Number.isFinite(value)) screen.set(input.dataset.key, value);
+        else screen.delete(input.dataset.key);
+        render();
+      });
+      wrap.append(input);
+    }
+    grid.append(wrap);
+  }
+  document.getElementById("screen-reset").addEventListener("click", () => {
+    screen.clear();
+    for (const input of grid.querySelectorAll("input")) input.value = "";
+    render();
+  });
 }
 
 // A symbol can be in a list before anything has been fetched for it. Saying
@@ -852,6 +939,7 @@ async function load() {
   renderListTabs();
   fillSubsectors();
   wireCompanySearch();
+  buildScreen();
 
   document.getElementById("market-filter").addEventListener("change", () => {
     fillSubsectors();

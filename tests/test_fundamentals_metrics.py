@@ -510,3 +510,83 @@ def test_no_price_means_no_ratios_and_a_reason():
         valuation(valuation_row(shares_outstanding=None), PRICE)["valuation_withheld"]
         == "no_price_or_share_count"
     )
+
+
+def write_prices(root: Path, symbol: str, closes: list[float], volumes: list[float]):
+    from datetime import timedelta
+
+    days: list[date] = []
+    current = date(2024, 1, 1)
+    while len(days) < len(closes):
+        if current.weekday() < 5:
+            days.append(current)
+        current += timedelta(days=1)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {"symbol": symbol, "date": day, "adjClose": close, "adjVolume": volume}
+                for day, close, volume in zip(days, closes, volumes, strict=True)
+            ],
+            schema=pa.schema([
+                ("symbol", pa.string()), ("date", pa.date32()),
+                ("adjClose", pa.float64()), ("adjVolume", pa.float64()),
+            ]),
+        ),
+        root / "daily" / f"symbol={symbol}" / "part.parquet",
+    )
+
+
+def test_a_short_history_leaves_the_slow_indicators_empty(tmp_path: Path):
+    """A 200-day average over 60 sessions is a fast average wearing the wrong
+    label. It would put a symbol at the top of a screen for a reason that does
+    not exist."""
+    from usstocks.corpus.fundamentals_metrics import price_state
+
+    (tmp_path / "daily" / "symbol=SHORT").mkdir(parents=True)
+    write_prices(tmp_path, "SHORT", [100.0] * 80, [1000.0] * 80)
+    state = price_state(tmp_path)["SHORT"]
+    assert state["sma_50_gap"] is not None       # 80 sessions is enough
+    assert state["sma_200_gap"] is None
+    assert state["drawdown_from_52w_high"] is None
+    assert state["volume_ratio_60d"] is not None
+
+
+def test_a_volume_spike_is_measured_against_the_days_before_it(tmp_path: Path):
+    """Including today in its own baseline dampens exactly what the ratio is
+    there to detect."""
+    from usstocks.corpus.fundamentals_metrics import price_state
+
+    (tmp_path / "daily" / "symbol=SPIKE").mkdir(parents=True)
+    write_prices(tmp_path, "SPIKE", [100.0] * 100, [1000.0] * 99 + [5000.0])
+    assert price_state(tmp_path)["SPIKE"]["volume_ratio_60d"] == pytest.approx(5.0)
+
+
+def test_rsi_is_a_hundred_when_every_day_rose(tmp_path: Path):
+    from usstocks.corpus.fundamentals_metrics import price_state
+
+    (tmp_path / "daily" / "symbol=UP").mkdir(parents=True)
+    rising = [100.0 * (1.01**index) for index in range(60)]
+    write_prices(tmp_path, "UP", rising, [1000.0] * 60)
+    assert price_state(tmp_path)["UP"]["rsi_14"] == pytest.approx(100.0)
+
+
+def test_the_drawdown_is_measured_from_the_52_week_high(tmp_path: Path):
+    from usstocks.corpus.fundamentals_metrics import price_state
+
+    (tmp_path / "daily" / "symbol=FELL").mkdir(parents=True)
+    # Up to 200, then back to 150: a quarter below the high, still above start.
+    closes = [100.0 + index for index in range(101)] + [200.0 - index for index in range(1, 152)]
+    write_prices(tmp_path, "FELL", closes, [1000.0] * len(closes))
+    state = price_state(tmp_path)["FELL"]
+    assert state["drawdown_from_52w_high"] == pytest.approx(49.0 / 200 - 1, rel=1e-6)
+    assert state["gain_from_52w_low"] is not None
+
+
+def test_the_technical_columns_are_not_withheld_for_adr_filers():
+    """Price against its own price: a receipt ratio cancels out, so the
+    columns the valuation guard removes are still readable here."""
+    from usstocks.corpus.fundamentals_metrics import technicals
+
+    state = {"rsi_14": 55.0, "sma_50_gap": 0.1, "volume_ratio_60d": 2.0}
+    assert technicals(state)["rsi_14"] == 55.0
+    assert technicals(None)["rsi_14"] is None
