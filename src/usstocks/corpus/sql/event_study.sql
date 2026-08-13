@@ -1484,14 +1484,18 @@ priced AS (
     FROM daily_indexed
     GROUP BY symbol
 ),
+-- News only. Earnings events are generated from filings, and counting them
+-- as articles would report a symbol nobody writes about as well covered.
 mentioned AS (
     SELECT symbol, count(*) AS events, min(event_date) AS first_event, max(event_date) AS last_event
     FROM events_timed_input
+    WHERE ticker_origin <> 'filing'
     GROUP BY symbol
 ),
 connected AS (
     SELECT symbol, count(*) AS matched_events
     FROM aligned_events
+    WHERE ticker_origin <> 'filing'
     GROUP BY symbol
 ),
 lost AS (
@@ -1502,6 +1506,7 @@ lost AS (
         count(*) FILTER (WHERE reason = 'no_session_on_or_after_candidate')
             AS no_session_after_event
     FROM event_unmatched
+    WHERE ticker_origin <> 'filing'
     GROUP BY symbol
 )
 SELECT

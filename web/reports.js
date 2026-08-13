@@ -151,6 +151,8 @@ const countIds = {
   unmatched_events: "count-unmatched",
   date_only_events: "count-date-only",
   overlapping_events: "count-overlap",
+  earnings_events: "count-earnings",
+  earnings_matched: "count-earnings-matched",
 };
 
 function text(id, value) {

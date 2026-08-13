@@ -271,3 +271,121 @@ def test_the_ratio_columns_do_not_claim_to_be_a_sharpe(report: dict):
     assert high["return_to_volatility"] == pytest.approx(
         high["annualised_mean_return"] / high["annualised_volatility"], rel=1e-9
     )
+
+
+FACT_SCHEMA_NAMES = [
+    "symbol", "cik", "entity_name", "concept", "xbrl_tag", "unit",
+    "period_start", "period_end", "fiscal_year", "fiscal_period",
+    "form", "accession", "filed", "value",
+]
+
+
+def revenue_fact(symbol, *, start, end, filed, form, accession):
+    import pyarrow as pa  # noqa: F401  (imported for the schema helper below)
+
+    return {
+        "symbol": symbol, "cik": "1", "entity_name": f"{symbol} Inc",
+        "concept": "revenue", "xbrl_tag": "Revenues", "unit": "USD",
+        "period_start": start, "period_end": end,
+        "fiscal_year": 2025, "fiscal_period": "Q3",
+        "form": form, "accession": accession, "filed": filed, "value": 1000.0,
+    }
+
+
+def write_facts(path: Path, rows):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    schema = pa.schema([
+        ("symbol", pa.string()), ("cik", pa.string()), ("entity_name", pa.string()),
+        ("concept", pa.string()), ("xbrl_tag", pa.string()), ("unit", pa.string()),
+        ("period_start", pa.date32()), ("period_end", pa.date32()),
+        ("fiscal_year", pa.int64()), ("fiscal_period", pa.string()),
+        ("form", pa.string()), ("accession", pa.string()), ("filed", pa.date32()),
+        ("value", pa.float64()),
+    ])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pylist(list(rows), schema=schema), path)
+
+
+@pytest.fixture
+def report_with_filings(tmp_path: Path) -> dict:
+    corpus = tmp_path / "corpus"
+    days = sessions(date(2025, 1, 2), SESSIONS)
+    entries = [UniverseEntry(name, "logic_compute") for name in ("HIGH", "PEER1", "PEER2")]
+    write_universe_parquet(corpus / "universe" / "sectors.parquet", entries)
+    for entry in entries:
+        write_daily_parquet(
+            corpus / "daily" / f"symbol={entry.symbol}" / "part.parquet",
+            daily_rows(entry.symbol, days, closes(1.0)),
+        )
+    # No news at all: the earnings events have to stand on their own.
+    write_partition(corpus / "news" / f"date={days[0].isoformat()}" / "part.parquet", [])
+
+    period_end = date(2025, 3, 31)
+    announced = days[EVENT_INDEX]
+    write_facts(
+        corpus / "fundamentals" / "symbol=HIGH" / "part.parquet",
+        [
+            # The 8-K that announced the quarter, and the 10-Q that repeated
+            # it weeks later. The market moved on the first.
+            revenue_fact("HIGH", start=date(2025, 1, 1), end=period_end,
+                         filed=announced, form="8-K", accession="a"),
+            revenue_fact("HIGH", start=date(2025, 1, 1), end=period_end,
+                         filed=days[EVENT_INDEX + 15], form="10-Q", accession="b"),
+        ],
+    )
+
+    settings = Settings(
+        db_path=tmp_path / "market.db",
+        live_db_path=tmp_path / "live.db",
+        corpus_local_dir=corpus,
+        backup_s3_uri="s3://example-bucket",
+        auth_mode="disabled",
+    )
+    run(settings, uploader=lambda path, destination: None,
+        now=datetime(2026, 1, 5, 8, 0, tzinfo=UTC))
+    return json.loads(
+        (corpus / "analysis" / "latest" / "report.json").read_text(encoding="utf-8")
+    )
+
+
+def test_the_announcement_date_wins_over_the_periodic_report(report_with_filings: dict):
+    """A quarter is announced in an 8-K and repeated in the 10-Q weeks later.
+    Dating the event by the 10-Q would measure the drift after everyone
+    already knew."""
+    events = [
+        case for case in report_with_filings["case_studies"]
+        if case["event_type"] == "earnings"
+    ]
+    assert len(events) == 1
+    assert events[0]["symbol"] == "HIGH"
+    assert events[0]["ticker_evidence"] == "8-K"
+
+
+def test_earnings_events_are_counted_apart_from_the_news_corpus(report_with_filings: dict):
+    """Reporting filings as articles would show the crawl improving on a day
+    nothing was crawled."""
+    counts = report_with_filings["counts"]
+    assert counts["earnings_events"] == 1
+    assert counts["earnings_matched"] == 1
+    assert counts["ticker_events"] == 0
+    coverage = {row["symbol"]: row for row in report_with_filings["symbol_news_coverage"]}
+    assert coverage["HIGH"]["events"] == 0
+    assert coverage["HIGH"]["diagnosis"] == "no_articles"
+
+
+def test_a_filing_before_its_own_period_end_is_not_an_announcement(tmp_path: Path):
+    """Only a mis-tagged row can report a period that has not finished."""
+    from usstocks.corpus.event_study import _build_earnings_events
+
+    duckdb = pytest.importorskip("duckdb")
+    pa = pytest.importorskip("pyarrow")
+    path = tmp_path / "part.parquet"
+    write_facts(path, [
+        revenue_fact("HIGH", start=date(2025, 1, 1), end=date(2025, 3, 31),
+                     filed=date(2025, 2, 1), form="8-K", accession="early"),
+    ])
+    connection = duckdb.connect(":memory:")
+    connection.from_parquet(str(path)).create_view("fundamentals_input")
+    assert _build_earnings_events(connection, pa).num_rows == 0

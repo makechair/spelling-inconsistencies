@@ -140,10 +140,15 @@ def _analysis_modules() -> tuple[Any, Any, Any]:
     return duckdb, pa, pq
 
 
-def _discover_inputs(local_root: Path) -> tuple[list[Path], list[Path], Path]:
+def _discover_inputs(
+    local_root: Path,
+) -> tuple[list[Path], list[Path], Path, list[Path]]:
     daily = sorted(local_root.glob("daily/symbol=*/part.parquet"))
     news = sorted(local_root.glob("news/date=*/part.parquet"))
     sectors = local_root / "universe" / "sectors.parquet"
+    # Optional: the report predates the filings corpus and still works without
+    # it. Its absence costs the earnings events, not the run.
+    fundamentals = sorted(local_root.glob("fundamentals/symbol=*/part.parquet"))
     missing: list[str] = []
     if not daily:
         missing.append("daily/symbol=*/part.parquet")
@@ -153,7 +158,7 @@ def _discover_inputs(local_root: Path) -> tuple[list[Path], list[Path], Path]:
         missing.append("universe/sectors.parquet")
     if missing:
         raise CorpusError("event study input is missing: " + ", ".join(missing))
-    return daily, news, sectors
+    return daily, news, sectors, fundamentals
 
 
 def _timed_event_schema(pa: Any) -> Any:
@@ -258,6 +263,88 @@ def _build_timed_events(connection: Any, pa: Any) -> Any:
             row["timing_bucket"] = bucket
             rows.append(row)
     return pa.Table.from_pylist(rows, schema=_timed_event_schema(pa))
+
+
+EARNINGS_ORIGIN = "filing"
+
+
+def _build_earnings_events(connection: Any, pa: Any) -> Any:
+    """One event per reported period, dated when the figures first appeared.
+
+    The date is the *earliest* filing that carried that period's revenue, not
+    the periodic report's own date. A company announces its quarter in an 8-K
+    and repeats it in the 10-Q weeks later; the market moved on the first one.
+    Taking the 10-Q would measure the drift after everyone already knew.
+
+    Filings carry no time of day, only a date. Most land after the close, so
+    the reaction is often the following session: the 0-day figure for these
+    events is unreliable and the 1-day and beyond are the honest read. That is
+    said on the page rather than papered over by guessing at a time.
+    """
+    rows = connection.execute(
+        """
+        SELECT
+            symbol,
+            period_end,
+            min(filed) AS announced,
+            arg_min(form, filed) AS form,
+            arg_min(fiscal_year, filed) AS fiscal_year,
+            arg_min(fiscal_period, filed) AS fiscal_period,
+            arg_min(entity_name, filed) AS entity_name
+        FROM fundamentals_input
+        WHERE concept = 'revenue'
+          AND period_start IS NOT NULL
+          AND filed IS NOT NULL
+          -- A filing cannot report a period before that period has ended.
+          -- Anything earlier is a mis-tagged row, not an announcement.
+          AND filed >= period_end
+          -- Quarters, halves and years; nothing of an unrecognised length.
+          AND date_diff('day', period_start, period_end) BETWEEN 60 AND 400
+        GROUP BY symbol, period_end
+        ORDER BY symbol, period_end
+        """
+    ).to_arrow_table()
+
+    events: list[dict[str, object]] = []
+    for row in rows.to_pylist():
+        symbol = str(row["symbol"])
+        period_end = row["period_end"]
+        candidate, quality, bucket = classify_event_time(None, row["announced"])
+        label = str(row.get("fiscal_period") or "").strip()
+        period = f"{row.get('fiscal_year') or ''}{f' {label}' if label else ''}".strip()
+        events.append(
+            {
+                "event_key": f"earnings:{symbol}:{period_end.isoformat()}",
+                # Not a Notion page. The key doubles as the identifier so
+                # nothing downstream has to special-case a null.
+                "page_id": f"earnings:{symbol}:{period_end.isoformat()}",
+                "symbol": symbol,
+                "ticker_origin": EARNINGS_ORIGIN,
+                "ticker_evidence": str(row.get("form") or ""),
+                "event_date": row["announced"],
+                "published_at": None,
+                "headline": (
+                    f"{symbol} 決算発表 {period}（{period_end.isoformat()} 期"
+                    f"／{row.get('form') or '不明'}）"
+                ),
+                "summary_ja": str(row.get("entity_name") or ""),
+                "my_take": "",
+                "event_type": "earnings",
+                # Left null rather than invented: nothing in a filing says
+                # whether the market should have liked it.
+                "sentiment": None,
+                "confidence": None,
+                "importance": None,
+                "category": "earnings",
+                "source": "EDGAR",
+                "url": "",
+                "notion_url": "",
+                "candidate_date": candidate,
+                "timing_quality": quality,
+                "timing_bucket": bucket,
+            }
+        )
+    return pa.Table.from_pylist(events, schema=_timed_event_schema(pa))
 
 
 def _write_parquet(path: Path, table: Any, pq: Any) -> None:
@@ -770,6 +857,10 @@ def _report_payload(
         "unmatched_events": metadata["unmatched_events"],
         "date_only_events": metadata["date_only_events"],
         "overlapping_events": metadata["overlapping_events"],
+        # Filings, not articles. Kept beside the Notion counters rather than
+        # folded into them, because they measure different pipelines.
+        "earnings_events": metadata["earnings_events"],
+        "earnings_matched": metadata["earnings_matched"],
     }
     previous_counts = previous.get("counts", {}) if previous else {}
     case_studies = _case_studies(event_rows, context_rows)
@@ -1438,7 +1529,8 @@ def _metadata(connection: Any, min_peers: int) -> dict[str, object]:
     unmatched_symbols = [
         row[0]
         for row in connection.execute(
-            "SELECT DISTINCT symbol FROM event_unmatched ORDER BY symbol"
+            "SELECT DISTINCT symbol FROM event_unmatched "
+            f"WHERE ticker_origin <> '{EARNINGS_ORIGIN}' ORDER BY symbol"
         ).fetchall()
     ]
     ticker_inventory: dict[str, dict[str, object]] = {}
@@ -1446,6 +1538,7 @@ def _metadata(connection: Any, min_peers: int) -> dict[str, object]:
         """
         SELECT symbol, ticker_origin, count(*)
         FROM events_timed_input
+        WHERE ticker_origin <> 'filing'
         GROUP BY symbol, ticker_origin
         ORDER BY symbol, ticker_origin
         """
@@ -1460,16 +1553,40 @@ def _metadata(connection: Any, min_peers: int) -> dict[str, object]:
         origins[str(origin)] = int(events)
     return {
         "news_pages": _scalar(connection, "SELECT count(*) FROM news_input"),
-        "ticker_events": _scalar(connection, "SELECT count(*) FROM events_timed_input"),
-        "matched_events": _scalar(connection, "SELECT count(*) FROM aligned_events"),
-        "unmatched_events": _scalar(connection, "SELECT count(*) FROM event_unmatched"),
+        # The coverage counters are about the Notion corpus. Earnings events
+        # are generated from filings, so counting them here would report the
+        # crawl as having improved on a day nothing was crawled.
+        "ticker_events": _scalar(
+            connection,
+            f"SELECT count(*) FROM events_timed_input WHERE ticker_origin <> '{EARNINGS_ORIGIN}'",
+        ),
+        "matched_events": _scalar(
+            connection,
+            f"SELECT count(*) FROM aligned_events WHERE ticker_origin <> '{EARNINGS_ORIGIN}'",
+        ),
+        "unmatched_events": _scalar(
+            connection,
+            f"SELECT count(*) FROM event_unmatched WHERE ticker_origin <> '{EARNINGS_ORIGIN}'",
+        ),
         "date_only_events": _scalar(
             connection,
-            "SELECT count(*) FROM events_timed_input WHERE timing_quality = 'date_only'",
+            "SELECT count(*) FROM events_timed_input "
+            f"WHERE timing_quality = 'date_only' AND ticker_origin <> '{EARNINGS_ORIGIN}'",
         ),
         "overlapping_events": _scalar(
             connection,
-            "SELECT count(*) FROM aligned_decorated WHERE overlap_count > 0",
+            "SELECT count(*) FROM aligned_decorated "
+            f"WHERE overlap_count > 0 AND ticker_origin <> '{EARNINGS_ORIGIN}'",
+        ),
+        # Counted separately, so a reader can see both without either
+        # standing in for the other.
+        "earnings_events": _scalar(
+            connection,
+            f"SELECT count(*) FROM events_timed_input WHERE ticker_origin = '{EARNINGS_ORIGIN}'",
+        ),
+        "earnings_matched": _scalar(
+            connection,
+            f"SELECT count(*) FROM aligned_events WHERE ticker_origin = '{EARNINGS_ORIGIN}'",
         ),
         "latest_daily_date": _scalar(connection, "SELECT max(date) FROM daily_indexed"),
         "latest_news_edit": _scalar(connection, "SELECT max(last_edited_at) FROM news_input"),
@@ -1491,7 +1608,7 @@ def run(
 ) -> int:
     duckdb, pa, pq = _analysis_modules()
     local_root = settings.corpus_local_dir
-    daily_paths, news_paths, sectors_path = _discover_inputs(local_root)
+    daily_paths, news_paths, sectors_path, fundamentals_paths = _discover_inputs(local_root)
     run_at = now or datetime.now(tz=UTC)
     if run_at.tzinfo is None:
         run_at = run_at.replace(tzinfo=UTC)
@@ -1524,6 +1641,14 @@ def run(
         ).create_view("sectors_input")
 
         timed_events = _build_timed_events(connection, pa)
+        if fundamentals_paths:
+            connection.from_parquet(
+                [str(path) for path in fundamentals_paths],
+                hive_partitioning=False,
+            ).create_view("fundamentals_input")
+            earnings = _build_earnings_events(connection, pa)
+            if earnings.num_rows:
+                timed_events = pa.concat_tables([timed_events, earnings])
         connection.register("events_timed_input", timed_events)
         connection.register(
             "analysis_parameters",

@@ -229,6 +229,15 @@
           <article><span>時刻なし</span><strong id="count-date-only">—</strong></article>
           <article><span>重複窓あり</span><strong id="count-overlap">—</strong></article>
         </div>
+        <p class="report-section-note">
+          上の6つは<strong>Notion記事</strong>の話です。決算イベントは提出書類から生成するので、
+          記事の集計には混ぜていません（混ぜると、何もクロールしていない日にクロールが
+          改善したように見えます）。
+        </p>
+        <div class="report-cards">
+          <article><span>決算イベント</span><strong id="count-earnings">—</strong></article>
+          <article><span>決算・日足へ接続</span><strong id="count-earnings-matched">—</strong></article>
+        </div>
         <h3>銘柄別の記事数と接続状況</h3>
         <p class="report-section-note">
           「記事が少ない」と「記事はあるが日足に接続していない」は別の問題で、直す場所も違います。
@@ -404,6 +413,8 @@
       <h2>この分析の読み方</h2>
       <ul>
         <li><code>raw_return</code>は反応取引日の直前終値を基準にした調整済みリターンです。</li>
+        <li><strong>決算イベント</strong>は提出書類から生成し、日付は<strong>その期の売上を最初に載せた提出書類</strong>の提出日です（決算発表の8-Kがあればそれ、無ければ10-Q等）。10-Qの日付を使うと、市場が既に知った後のドリフトを測ることになります。</li>
+        <li>提出書類には<strong>時刻がありません</strong>。多くは引け後に出るため反応は翌営業日になりがちで、決算イベントの<strong>0日目の数値は信頼できません</strong>。1日目以降を見てください。</li>
         <li><code>abnormal_return</code>は同subsectorの等ウェイトreturnに、その銘柄のbetaを掛けたものを差し引きます。betaは反応日<strong>より前</strong>の120営業日で推定し（推定に使う期間にイベント当日は入りません）、観測が60日未満か0.2〜3.0の範囲外なら1として扱い<code>beta_source</code>に<code>assumed</code>と記録します。</li>
         <li><code>equal_weight_abnormal_return</code>は旧定義（beta=1）で、変化がbeta補正によるものか当日のニュースによるものかを切り分けるために併記します。</li>
         <li>betaは日次リターンで推定し、複数日の累計リターンに適用します。複利の二次項が残りますが、補正しない場合の偏りより一桁小さい量です。</li>
