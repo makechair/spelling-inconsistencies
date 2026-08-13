@@ -21,6 +21,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from importlib import resources
 from pathlib import Path
+from time import monotonic
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -266,6 +267,16 @@ def _build_timed_events(connection: Any, pa: Any) -> Any:
 
 
 EARNINGS_ORIGIN = "filing"
+
+# Above this, a statement is worth a line in the log. Below it, forty lines of
+# "0.0s" would hide the handful that decide whether the job finishes.
+SLOW_STATEMENT_SECONDS = 5.0
+
+
+def _statement_label(statement: str) -> str:
+    """The table a statement builds, for the log line."""
+    match = re.search(r"CREATE OR REPLACE TEMP TABLE (\w+)", statement)
+    return match.group(1) if match else statement.strip().split("\n", 1)[0][:60]
 
 
 def _build_earnings_events(connection: Any, pa: Any) -> Any:
@@ -1670,12 +1681,25 @@ def run(
         ):
             if not statement.strip():
                 continue
+            started = monotonic()
             try:
                 connection.execute(statement)
             except duckdb.Error as exc:
                 raise CorpusError(
                     f"event study statement {statement_number} failed: {exc}"
                 ) from exc
+            # Timed because this job has run into its own timeout, and a
+            # fifteen-minute failure that names no statement is a guess
+            # waiting to happen. Only the slow ones are logged: naming all
+            # forty would bury the three that matter.
+            elapsed = monotonic() - started
+            if elapsed >= SLOW_STATEMENT_SECONDS:
+                log.info(
+                    "statement %d took %.1fs: %s",
+                    statement_number,
+                    elapsed,
+                    _statement_label(statement),
+                )
 
         event_returns = connection.execute(
             "SELECT * FROM event_returns ORDER BY reaction_date, symbol, page_id"

@@ -28,4 +28,10 @@ UMask=0027
 # DuckDB is explicitly limited to one thread and 256 MB internally. The
 # systemd ceiling leaves room for Python, Arrow and report serialization.
 MemoryMax=512M
-TimeoutStartSec=900
+# Fifteen minutes was not enough: the scheduled runs on 2026-08-12 and 08-13
+# were both killed after consuming almost exactly that in CPU, so the report
+# stopped being regenerated without anything on the page saying so. The job is
+# single-threaded and CPU-bound, and it grows with the square of the history,
+# so the ceiling has to sit well above the current cost rather than just above
+# it. Per-statement timings are logged for anything over five seconds.
+TimeoutStartSec=3600
