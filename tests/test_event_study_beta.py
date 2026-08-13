@@ -226,3 +226,48 @@ def test_a_short_price_history_is_reported_as_the_reason(report: dict):
     assert coverage["HIGH"]["attach_rate"] == pytest.approx(1.0)
     assert coverage["HIGH"]["sessions"] == SESSIONS
     assert coverage["HIGH"]["diagnosis"] == "short_price_history"
+
+
+def test_the_unconditional_profile_is_reported_per_symbol(report: dict):
+    """Every other figure on the report is conditional. A 3% edge reads
+    differently on a symbol that moves 1% a day and one that moves 4%."""
+    profile = {row["symbol"]: row for row in report["symbol_risk_profile"]}
+    assert set(profile) == {"HIGH", "PEER1", "PEER2", "PEER3", "QUIET"}
+    # HIGH moves twice as far as the peers every single day, by construction.
+    assert profile["HIGH"]["annualised_volatility"] == pytest.approx(
+        2 * profile["PEER1"]["annualised_volatility"], rel=1e-6
+    )
+    assert profile["HIGH"]["sessions"] == SESSIONS - 1  # the first day has no return
+
+
+def test_a_drawdown_is_measured_from_the_running_peak(report: dict):
+    """Not from the first price: a symbol that rose and then fell has a
+    drawdown even when it ends above where it started."""
+    profile = {row["symbol"]: row for row in report["symbol_risk_profile"]}
+    assert profile["HIGH"]["max_drawdown"] < 0
+    # Twice the daily moves means a deeper trough than the peers see.
+    assert profile["HIGH"]["max_drawdown"] < profile["PEER1"]["max_drawdown"]
+
+
+def test_perfectly_matched_symbols_report_a_correlation_of_one(report: dict):
+    """The peers are the same series here, and HIGH is that series doubled --
+    a linear transform, so every pair is 1.0. Anything else would mean the
+    coefficient is not measuring what it claims to."""
+    pairs = {
+        (row["symbol"], row["peer"]): row["correlation"]
+        for row in report["symbol_correlations"]
+    }
+    assert pairs[("HIGH", "PEER1")] == pytest.approx(1.0)
+    assert pairs[("PEER1", "PEER2")] == pytest.approx(1.0)
+    # Each unordered pair appears once, not twice.
+    assert ("PEER1", "HIGH") not in pairs
+
+
+def test_the_ratio_columns_do_not_claim_to_be_a_sharpe(report: dict):
+    """There is no risk-free rate in this corpus, so the numerator is the
+    whole return. The value still has to be arithmetically what it says."""
+    profile = {row["symbol"]: row for row in report["symbol_risk_profile"]}
+    high = profile["HIGH"]
+    assert high["return_to_volatility"] == pytest.approx(
+        high["annualised_mean_return"] / high["annualised_volatility"], rel=1e-9
+    )

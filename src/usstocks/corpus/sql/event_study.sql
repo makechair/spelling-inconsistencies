@@ -191,6 +191,7 @@ SELECT
     daily.date,
     daily.trading_index,
     sector.subsector,
+    daily.adj_close,
     daily.adj_close / previous.adj_close - 1 AS symbol_return
 FROM daily_indexed AS daily
 INNER JOIN daily_indexed AS previous
@@ -1540,3 +1541,75 @@ LEFT JOIN priced USING (symbol)
 LEFT JOIN mentioned USING (symbol)
 LEFT JOIN connected USING (symbol)
 LEFT JOIN lost USING (symbol);
+
+-- Unconditional behaviour, per symbol. Everything else on the report is
+-- conditional -- returns given a move, given an event -- and a conditional
+-- figure cannot be read without knowing what the symbol does ordinarily. A
+-- 3% edge means one thing on a name that moves 1% a day and another on one
+-- that moves 4%.
+CREATE OR REPLACE TEMP TABLE symbol_risk_profile AS
+WITH daily AS (
+    SELECT
+        symbol,
+        date,
+        trading_index,
+        adj_close,
+        symbol_return,
+        max(adj_close) OVER (
+            PARTITION BY symbol ORDER BY trading_index
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS running_peak
+    FROM symbol_daily_returns
+)
+SELECT
+    symbol,
+    count(*) AS sessions,
+    min(date) AS first_session,
+    max(date) AS last_session,
+    -- Annualised on 252 sessions. The scaling assumes returns are independent
+    -- across days, which they are not exactly; it is the convention, and the
+    -- ranking between symbols is what this column is for.
+    stddev_samp(symbol_return) * sqrt(252) AS annualised_volatility,
+    avg(symbol_return) * 252 AS annualised_mean_return,
+    -- Deliberately not called a Sharpe ratio: there is no risk-free rate in
+    -- this corpus, so the numerator is the whole return rather than the
+    -- excess. Comparable across these symbols, not against a published Sharpe.
+    CASE
+        WHEN stddev_samp(symbol_return) > 0
+        THEN avg(symbol_return) * 252 / (stddev_samp(symbol_return) * sqrt(252))
+    END AS return_to_volatility,
+    -- Downside deviation counts only the losing days, so a symbol is not
+    -- penalised for the size of its gains.
+    sqrt(avg(pow(least(symbol_return, 0), 2))) * sqrt(252) AS downside_deviation,
+    CASE
+        WHEN avg(pow(least(symbol_return, 0), 2)) > 0
+        THEN avg(symbol_return) * 252
+             / (sqrt(avg(pow(least(symbol_return, 0), 2))) * sqrt(252))
+    END AS return_to_downside,
+    min(adj_close / running_peak - 1) AS max_drawdown,
+    avg(CAST(symbol_return > 0 AS INTEGER)) AS positive_day_rate,
+    min(symbol_return) AS worst_day,
+    max(symbol_return) AS best_day,
+    quantile_cont(symbol_return, 0.05) AS daily_return_p05,
+    quantile_cont(symbol_return, 0.95) AS daily_return_p95
+FROM daily
+GROUP BY symbol;
+
+-- How much of each pair moves together. Semiconductors share one cycle, so a
+-- basket of them can be a single bet wearing the clothes of a portfolio; this
+-- is the table that says so.
+CREATE OR REPLACE TEMP TABLE symbol_correlations AS
+SELECT
+    left_side.symbol AS symbol,
+    right_side.symbol AS peer,
+    count(*) AS overlapping_sessions,
+    corr(left_side.symbol_return, right_side.symbol_return) AS correlation
+FROM symbol_daily_returns AS left_side
+INNER JOIN symbol_daily_returns AS right_side
+    ON right_side.date = left_side.date
+   AND right_side.symbol > left_side.symbol
+GROUP BY left_side.symbol, right_side.symbol
+-- Two symbols listed at different times overlap by however much they share.
+-- Under a quarter of common history the coefficient is noise with a decimal
+-- point, so it is dropped rather than shown faintly.
+HAVING count(*) >= 60;

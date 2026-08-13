@@ -254,6 +254,48 @@
       </section>
     </details>
 
+    <details class="report-supporting">
+      <summary>銘柄の素の性質と相関を見る</summary>
+      <section class="report-supporting-body">
+        <p class="report-section-note">
+          このレポートの他の数値はすべて<strong>条件付き</strong>です（ある変動の後、
+          あるイベントの後）。条件付きの数値は、その銘柄が普段どう動くかを知らないと
+          読めません。3%の優位は、1日1%動く銘柄と4%動く銘柄では意味が違います。
+        </p>
+        <div class="report-table-wrap">
+          <table class="report-table" id="risk-profile-table">
+            <thead>
+              <tr>
+                <th>銘柄</th>
+                <th title="日次リターンの標準偏差を252営業日で年率換算">年率ボラティリティ</th>
+                <th title="日次平均リターンの252営業日換算">年率リターン</th>
+                <th title="年率リターン ÷ 年率ボラティリティ。無リスク金利を引いていないのでシャープレシオではない">リターン/ボラ</th>
+                <th title="下落日だけの二乗平均平方根を年率換算した下方偏差で割った値">リターン/下方偏差</th>
+                <th title="その時点までの最高値からの下落率の最小値">最大ドローダウン</th>
+                <th title="日次リターンがプラスだった日の割合">上昇日率</th>
+                <th title="日次リターンの5%点と95%点">日次5%〜95%</th>
+                <th>日足</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <h3>相関の高い組み合わせ</h3>
+        <p class="report-section-note">
+          半導体は同じサイクルで動くため、分散したつもりが1つの賭けになっていることがあります。
+          重複期間が60営業日未満の組は係数が雑音になるので除いています。
+        </p>
+        <div class="report-table-wrap">
+          <table class="report-table" id="correlation-table">
+            <thead>
+              <tr><th>銘柄</th><th>相手</th><th>相関係数</th><th>重複日数</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </details>
+
     <section>
       <div class="report-section-heading">
         <div>

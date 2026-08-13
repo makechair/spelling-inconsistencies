@@ -38,6 +38,7 @@ OUTPUT_NAMES = (
     "event_summary.parquet",
     "event_unmatched.parquet",
     "symbol_news_coverage.parquet",
+    "symbol_risk_profile.parquet",
     "report.json",
     "report.md",
     "report.html",
@@ -758,6 +759,8 @@ def _report_payload(
     validation_result_rows: list[dict[str, object]],
     validation_example_rows: list[dict[str, object]],
     coverage_rows: list[dict[str, object]],
+    risk_rows: list[dict[str, object]],
+    correlation_rows: list[dict[str, object]],
     previous: dict[str, Any] | None,
 ) -> dict[str, object]:
     counts = {
@@ -803,6 +806,11 @@ def _report_payload(
             # Per symbol, so that "few articles" and "articles that never
             # reached a price series" stop looking like the same shortfall.
             "symbol_news_coverage": coverage_rows,
+            # What each symbol does when nothing in particular is happening.
+            # Every other figure on the report is conditional, and a
+            # conditional number cannot be read without this one.
+            "symbol_risk_profile": risk_rows,
+            "symbol_correlations": correlation_rows,
             "ticker_inventory": ticker_inventory,
             "previous_report_date": previous.get("report_date") if previous else None,
             "comparison": {
@@ -1529,7 +1537,12 @@ def run(
             .joinpath("sql/event_study.sql")
             .read_text(encoding="utf-8")
         )
-        for statement_number, statement in enumerate(sql.split(";"), start=1):
+        # Split on statement terminators only. A bare split(";") also cuts at
+        # semicolons inside comments, which turns a sentence of prose into a
+        # parse error a hundred lines from where it was written.
+        for statement_number, statement in enumerate(
+            re.split(r";\s*\n", sql), start=1
+        ):
             if not statement.strip():
                 continue
             try:
@@ -1551,6 +1564,12 @@ def run(
         ).to_arrow_table()
         symbol_news_coverage = connection.execute(
             "SELECT * FROM symbol_news_coverage ORDER BY events DESC, symbol"
+        ).to_arrow_table()
+        symbol_risk_profile = connection.execute(
+            "SELECT * FROM symbol_risk_profile ORDER BY annualised_volatility DESC"
+        ).to_arrow_table()
+        symbol_correlations = connection.execute(
+            "SELECT * FROM symbol_correlations ORDER BY correlation DESC"
         ).to_arrow_table()
         return_surface = connection.execute(
             "SELECT * FROM return_surface ORDER BY symbol, move_bucket, horizon"
@@ -1585,10 +1604,13 @@ def run(
     _write_parquet(paths["event_summary.parquet"], event_summary, pq)
     _write_parquet(paths["event_unmatched.parquet"], event_unmatched, pq)
     _write_parquet(paths["symbol_news_coverage.parquet"], symbol_news_coverage, pq)
+    _write_parquet(paths["symbol_risk_profile.parquet"], symbol_risk_profile, pq)
     summary_rows = event_summary.to_pylist()
     event_rows = event_returns.to_pylist()
     context_rows = event_case_context.to_pylist()
     coverage_rows = symbol_news_coverage.to_pylist()
+    risk_rows = symbol_risk_profile.to_pylist()
+    correlation_rows = symbol_correlations.to_pylist()
     return_surface_rows = return_surface.to_pylist()
     return_trade_plan_rows = return_trade_plan.to_pylist()
     smoothed_surface_rows = smoothed_return_surface.to_pylist()
@@ -1608,6 +1630,8 @@ def run(
         validation_result_rows,
         validation_example_rows,
         coverage_rows,
+        risk_rows,
+        correlation_rows,
         previous_report,
     )
     _write_text(

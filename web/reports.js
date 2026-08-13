@@ -64,6 +64,55 @@ const COVERAGE_ORDER = [
   "ok",
 ];
 
+function renderRiskProfile(report) {
+  const body = document.querySelector("#risk-profile-table tbody");
+  if (!body) return;
+  body.replaceChildren();
+  for (const row of report.symbol_risk_profile || []) {
+    const tr = document.createElement("tr");
+    const cells = [
+      row.symbol,
+      percent(row.annualised_volatility),
+      percent(row.annualised_mean_return, true),
+      number(row.return_to_volatility, 2),
+      number(row.return_to_downside, 2),
+      percent(row.max_drawdown, true),
+      percent(row.positive_day_rate),
+      `${percent(row.daily_return_p05, true)} 〜 ${percent(row.daily_return_p95, true)}`,
+      number(row.sessions, 0),
+    ];
+    cells.forEach((value, index) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      if (index >= 1) cell.className = "numeric";
+      tr.append(cell);
+    });
+    body.append(tr);
+  }
+
+  const pairs = document.querySelector("#correlation-table tbody");
+  if (!pairs) return;
+  pairs.replaceChildren();
+  // The top of the list is the point: the pairs that move together are the
+  // ones a basket fails to diversify. Twenty is enough to see the pattern
+  // without printing every combination of the universe.
+  for (const row of (report.symbol_correlations || []).slice(0, 20)) {
+    const tr = document.createElement("tr");
+    for (const [index, value] of [
+      row.symbol,
+      row.peer,
+      number(row.correlation, 2),
+      number(row.overlapping_sessions, 0),
+    ].entries()) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      if (index >= 2) cell.className = "numeric";
+      tr.append(cell);
+    }
+    pairs.append(tr);
+  }
+}
+
 function renderSymbolCoverage(report) {
   const body = document.querySelector("#symbol-coverage-table tbody");
   if (!body) return;
@@ -1871,6 +1920,7 @@ function renderReport(report) {
       `benchmark最低peer数: ${report.min_peers}`,
   );
   renderSymbolCoverage(report);
+  renderRiskProfile(report);
   renderObservation(report);
   renderTickerFocus(report);
   renderCaseStudies(report, elements.focusSymbol.value);
