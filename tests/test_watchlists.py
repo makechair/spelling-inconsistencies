@@ -118,3 +118,44 @@ def test_a_saved_store_reads_back_identically(tmp_path: Path):
     watchlists.register_company(store, code="6501", name="日立製作所")
     watchlists.save(path, store)
     assert watchlists.load(path) == store
+
+
+def test_a_quantity_needs_the_symbol_to_be_in_the_list():
+    store = watchlists.empty_store()
+    entry = watchlists.create_list(store, "main")
+    with pytest.raises(watchlists.WatchlistError, match="not in this list"):
+        watchlists.set_quantity(store, entry["id"], "NVDA", 100)
+    watchlists.add_symbol(store, entry["id"], "NVDA")
+    watchlists.set_quantity(store, entry["id"], "NVDA", 100)
+    assert entry["quantities"] == {"NVDA": 100.0}
+
+
+def test_clearing_a_quantity_is_not_the_same_as_setting_zero():
+    """Zero is a position that was closed; absent is one never sized. Only
+    the second should drop out of the risk figures entirely."""
+    store = watchlists.empty_store()
+    entry = watchlists.create_list(store, "main")
+    watchlists.add_symbol(store, entry["id"], "NVDA")
+    watchlists.set_quantity(store, entry["id"], "NVDA", 0)
+    assert entry["quantities"] == {"NVDA": 0.0}
+    watchlists.set_quantity(store, entry["id"], "NVDA", None)
+    assert entry["quantities"] == {}
+
+
+def test_a_negative_quantity_is_refused():
+    store = watchlists.empty_store()
+    entry = watchlists.create_list(store, "main")
+    watchlists.add_symbol(store, entry["id"], "NVDA")
+    with pytest.raises(watchlists.WatchlistError):
+        watchlists.set_quantity(store, entry["id"], "NVDA", -10)
+
+
+def test_removing_a_symbol_takes_its_quantity_with_it():
+    """A share count for a symbol the list no longer holds would keep sizing
+    a position nothing shows."""
+    store = watchlists.empty_store()
+    entry = watchlists.create_list(store, "main")
+    watchlists.add_symbol(store, entry["id"], "NVDA")
+    watchlists.set_quantity(store, entry["id"], "NVDA", 100)
+    watchlists.remove_symbol(store, entry["id"], "NVDA")
+    assert entry["quantities"] == {}

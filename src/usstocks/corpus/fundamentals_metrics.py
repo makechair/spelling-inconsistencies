@@ -329,9 +329,8 @@ def valuation(row: dict[str, Any], price: dict[str, Any] | None) -> dict[str, An
     number that means nothing.
     """
     blank = {
-        "price": None, "price_date": None, "market_cap": None,
-        "pe_ratio": None, "ps_ratio": None, "pb_ratio": None,
-        "fcf_yield": None, "valuation_withheld": None,
+        "market_cap": None, "pe_ratio": None, "ps_ratio": None,
+        "pb_ratio": None, "fcf_yield": None, "valuation_withheld": None,
     }
     if row.get("foreign_private_issuer"):
         return blank | {"valuation_withheld": "adr_share_ratio_unknown"}
@@ -346,8 +345,6 @@ def valuation(row: dict[str, Any], price: dict[str, Any] | None) -> dict[str, An
     equity = row.get("equity")
     free_cash_flow = row.get("free_cash_flow")
     return {
-        "price": close,
-        "price_date": price["date"].isoformat(),
         "market_cap": market_cap,
         # A negative denominator is not a cheap multiple, it is a loss. Left
         # empty rather than printed as a negative ratio nobody reads as one.
@@ -381,8 +378,19 @@ def technicals(price: dict[str, Any] | None) -> dict[str, Any]:
     Unlike the valuation ratios, these are all price against its own price.
     An ADR's 50-day average is its own average and a receipt ratio cancels
     out, so the columns withheld above are readable here.
+
+    The close lives here rather than with the valuation for the same reason.
+    An ADR has a price; what it does not have is a share count that can be
+    multiplied by it. Risk figures need the price and never the share count,
+    so withholding it there would have taken those symbols out of the
+    portfolio for no reason.
     """
-    return {name: (price or {}).get(name) for name in TECHNICAL_FIELDS}
+    state = price or {}
+    date = state.get("date")
+    return {name: state.get(name) for name in TECHNICAL_FIELDS} | {
+        "price": state.get("close"),
+        "price_date": date.isoformat() if date is not None else None,
+    }
 
 
 def build_summary(

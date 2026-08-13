@@ -219,6 +219,22 @@ function render() {
       box.title = `${currentList()?.name ?? ""} に入れる`;
       box.addEventListener("change", () => setMembership(row.symbol, box.checked));
       membership.append(box);
+      // Sizing the position is part of putting it in the list, so the input
+      // is here rather than on a separate screen. Optional: a list works as a
+      // grouping with no quantities at all.
+      const quantity = document.createElement("input");
+      quantity.type = "number";
+      quantity.min = "0";
+      quantity.step = "any";
+      quantity.className = "holding-input";
+      quantity.placeholder = "株数";
+      quantity.value = currentList()?.quantities?.[row.symbol] ?? "";
+      quantity.disabled = !held.has(row.symbol);
+      quantity.addEventListener("change", () => {
+        const parsed = Number.parseFloat(quantity.value);
+        setHolding(row.symbol, Number.isFinite(parsed) ? parsed : null);
+      });
+      membership.append(quantity);
     }
     tr.append(membership);
 
@@ -396,6 +412,7 @@ function selectList(id) {
   editing = false;
   renderListTabs();
   refresh();
+  loadRisk();
 }
 
 function renderListTabs() {
@@ -483,6 +500,78 @@ async function createList() {
   if (name == null) return;
   const created = await send("POST", "/api/watchlists", { name });
   if (created) activeList = created.id;
+}
+
+async function setHolding(symbol, quantity) {
+  const list = currentList();
+  if (!list) return;
+  await send("PUT", `/api/watchlists/${list.id}/holdings`, { symbol, quantity });
+  loadRisk();
+}
+
+// Value at risk for the active list. Absent until something is sized, which
+// is why the panel is hidden rather than showing a zero.
+async function loadRisk() {
+  const panel = document.getElementById("risk-panel");
+  const list = currentList();
+  if (!list || !Object.keys(list.quantities ?? {}).length) {
+    panel.hidden = true;
+    return;
+  }
+  const horizon = document.getElementById("risk-horizon").value;
+  const confidence = document.getElementById("risk-confidence").value;
+  let payload;
+  try {
+    const response = await fetch(
+      `/api/risk/${list.id}?horizon_days=${horizon}&confidence=${confidence}`,
+    );
+    if (!response.ok) {
+      panel.hidden = true;
+      return;
+    }
+    payload = await response.json();
+  } catch {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const money0 = new Intl.NumberFormat("ja-JP", { maximumFractionDigits: 0 });
+  document.getElementById("risk-summary").textContent =
+    payload.value_at_risk == null
+      ? "ボラティリティが分かる銘柄がありません。"
+      : `評価額 ${money0.format(payload.portfolio_value)} USD ・ ` +
+        `VaR ${money0.format(payload.value_at_risk)} USD` +
+        `（${PERCENT.format(payload.value_at_risk_fraction)}）・ ` +
+        `分散効果 ${money0.format(payload.diversification_benefit)} USD` +
+        `（各銘柄を単独で足すと ${money0.format(payload.undiversified_value_at_risk)}）`;
+
+  const body = document.querySelector("#risk-table tbody");
+  body.replaceChildren();
+  for (const position of payload.positions ?? []) {
+    const tr = document.createElement("tr");
+    for (const [index, value] of [
+      position.symbol,
+      money0.format(position.value),
+      PERCENT.format(position.weight),
+      PERCENT.format(position.annualised_volatility),
+      money0.format(position.standalone_value_at_risk),
+      position.worst_day == null ? "" : PERCENT.format(position.worst_day),
+      position.worst_day_loss == null ? "" : money0.format(position.worst_day_loss),
+    ].entries()) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      if (index >= 1) cell.className = "numeric";
+      tr.append(cell);
+    }
+    body.append(tr);
+  }
+  const missing = [...(payload.skipped_symbols ?? []), ...(payload.unpriced_symbols ?? [])];
+  const note = document.getElementById("risk-missing");
+  note.hidden = !missing.length;
+  note.textContent = missing.length
+    ? `リスクを計算できなかった保有: ${missing.join("、")}。` +
+      "ボラティリティか株価が無い銘柄で、除外しています（リスクが無いという意味ではありません）。"
+    : "";
 }
 
 async function setMembership(symbol, wanted) {
@@ -940,6 +1029,10 @@ async function load() {
   fillSubsectors();
   wireCompanySearch();
   buildScreen();
+  for (const id of ["risk-horizon", "risk-confidence"]) {
+    document.getElementById(id).addEventListener("change", loadRisk);
+  }
+  loadRisk();
 
   document.getElementById("market-filter").addEventListener("change", () => {
     fillSubsectors();

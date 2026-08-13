@@ -162,3 +162,99 @@ def test_the_shipped_universe_wins_a_collision(settings: Settings, tmp_path: Pat
     entries = japanese_universe(settings)
     assert len(entries) == 1
     assert entries[0].subsector == "equipment"
+
+
+def seed_risk_inputs(settings: Settings) -> None:
+    """Stand in for the metrics job and the event study."""
+    fundamentals = settings.corpus_local_dir / "fundamentals"
+    fundamentals.mkdir(parents=True, exist_ok=True)
+    (fundamentals / "summary.json").write_text(
+        json.dumps({
+            "generated_at": "2026-08-07T07:30:00+00:00",
+            "symbols": [
+                {"symbol": "NVDA", "price": 100.0},
+                {"symbol": "MU", "price": 50.0},
+                {"symbol": "NOPRICE"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    analysis = settings.corpus_local_dir / "analysis" / "latest"
+    analysis.mkdir(parents=True, exist_ok=True)
+    (analysis / "report.json").write_text(
+        json.dumps({
+            "symbol_risk_profile": [
+                {"symbol": "NVDA", "annualised_volatility": 0.5, "worst_day": -0.19},
+                {"symbol": "MU", "annualised_volatility": 0.4, "worst_day": -0.16},
+            ],
+            "symbol_correlations": [
+                {"symbol": "MU", "peer": "NVDA", "correlation": 0.8},
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+
+def sized_list(client: TestClient, holdings: dict[str, float]) -> str:
+    list_id = client.post("/api/watchlists", json={"name": "保有"}).json()["id"]
+    for symbol, quantity in holdings.items():
+        client.post(f"/api/watchlists/{list_id}/symbols", json={"symbol": symbol})
+        client.put(
+            f"/api/watchlists/{list_id}/holdings",
+            json={"symbol": symbol, "quantity": quantity},
+        )
+    return list_id
+
+
+def test_a_list_with_no_quantities_says_so_rather_than_reporting_zero_risk(
+    client: TestClient, settings: Settings
+):
+    seed_risk_inputs(settings)
+    list_id = client.post("/api/watchlists", json={"name": "見るだけ"}).json()["id"]
+    client.post(f"/api/watchlists/{list_id}/symbols", json={"symbol": "NVDA"})
+    response = client.get(f"/api/risk/{list_id}")
+    assert response.status_code == 409
+    assert "quantities" in response.json()["detail"]
+
+
+def test_the_risk_endpoint_values_the_positions_and_diversifies_them(
+    client: TestClient, settings: Settings
+):
+    seed_risk_inputs(settings)
+    list_id = sized_list(client, {"NVDA": 100, "MU": 200})
+    payload = client.get(f"/api/risk/{list_id}").json()
+    # 100 x 100 + 200 x 50 = 20,000.
+    assert payload["portfolio_value"] == pytest.approx(20_000.0)
+    assert 0 < payload["value_at_risk"] < payload["undiversified_value_at_risk"]
+    assert payload["list_name"] == "保有"
+    assert payload["priced_through"] == "2026-08-07T07:30:00+00:00"
+
+
+def test_a_held_symbol_with_no_price_is_named(client: TestClient, settings: Settings):
+    """An unvalued position is not an absent one."""
+    seed_risk_inputs(settings)
+    list_id = sized_list(client, {"NVDA": 100, "NOPRICE": 10})
+    payload = client.get(f"/api/risk/{list_id}").json()
+    assert payload["unpriced_symbols"] == ["NOPRICE"]
+
+
+def test_the_horizon_and_confidence_are_the_caller_s(client: TestClient, settings: Settings):
+    seed_risk_inputs(settings)
+    list_id = sized_list(client, {"NVDA": 100})
+    one = client.get(f"/api/risk/{list_id}").json()["value_at_risk"]
+    ten = client.get(
+        f"/api/risk/{list_id}", params={"horizon_days": 10, "confidence": 0.99}
+    ).json()["value_at_risk"]
+    assert ten > one
+    assert client.get(f"/api/risk/{list_id}", params={"confidence": 0.9}).status_code == 400
+
+
+def test_clearing_a_holding_removes_it_from_the_risk(client: TestClient, settings: Settings):
+    seed_risk_inputs(settings)
+    list_id = sized_list(client, {"NVDA": 100, "MU": 200})
+    client.put(
+        f"/api/watchlists/{list_id}/holdings",
+        json={"symbol": "MU", "quantity": None},
+    )
+    payload = client.get(f"/api/risk/{list_id}").json()
+    assert payload["portfolio_value"] == pytest.approx(10_000.0)

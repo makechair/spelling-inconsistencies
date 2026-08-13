@@ -120,6 +120,114 @@ def drop_symbol(
     return entry
 
 
+@router.put("/watchlists/{list_id}/holdings")
+def set_holding(
+    list_id: str,
+    symbol: str = Body(..., embed=True),
+    quantity: float | None = Body(None, embed=True),
+    settings: Settings = Depends(get_settings_dep),
+) -> dict[str, Any]:
+    """How many shares the list holds of this symbol; null clears it."""
+    store = _load(settings)
+    entry = _guard(lambda: watchlists.set_quantity(store, list_id, symbol, quantity))
+    _save(settings, store)
+    return entry
+
+
+def _summary(settings: Settings) -> dict[str, Any]:
+    path = settings.corpus_local_dir / "fundamentals" / "summary.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _analysis(settings: Settings) -> dict[str, Any]:
+    path = settings.corpus_local_dir / "analysis" / "latest" / "report.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+@router.get("/risk/{list_id}")
+def portfolio_risk(
+    list_id: str,
+    confidence: float = Query(0.95),
+    horizon_days: int = Query(1, ge=1, le=20),
+    settings: Settings = Depends(get_settings_dep),
+) -> dict[str, Any]:
+    """Value at risk for the quantities held on one list.
+
+    Assembled from files the jobs already wrote: volatilities and pairwise
+    correlations from the event study, the latest close from the fundamentals
+    summary. No DuckDB, no Parquet -- the arithmetic is small enough to do in
+    this process and nothing else here would be.
+    """
+    from ...risk import portfolio_var
+
+    store = _load(settings)
+    entry = _guard(lambda: watchlists.get_list(store, list_id))
+    quantities = {
+        symbol: amount
+        for symbol, amount in (entry.get("quantities") or {}).items()
+        if amount
+    }
+    if not quantities:
+        raise HTTPException(
+            status_code=409,
+            detail="this list has no quantities; set a share count on a symbol first",
+        )
+
+    summary = _summary(settings)
+    prices = {
+        str(row.get("symbol")): row.get("price")
+        for row in summary.get("symbols", [])
+        if row.get("price") is not None
+    }
+    analysis = _analysis(settings)
+    volatilities = {
+        str(row.get("symbol")): row.get("annualised_volatility")
+        for row in analysis.get("symbol_risk_profile", [])
+    }
+    worst_days = {
+        str(row.get("symbol")): row.get("worst_day")
+        for row in analysis.get("symbol_risk_profile", [])
+    }
+    correlations = {
+        (str(row.get("symbol")), str(row.get("peer"))): row.get("correlation")
+        for row in analysis.get("symbol_correlations", [])
+    }
+
+    positions: dict[str, float] = {}
+    unpriced: list[str] = []
+    for symbol, amount in quantities.items():
+        price = prices.get(symbol)
+        if price is None:
+            unpriced.append(symbol)
+            continue
+        positions[symbol] = float(amount) * float(price)
+    try:
+        result = portfolio_var(
+            positions,
+            volatilities,
+            correlations,
+            confidence=confidence,
+            horizon_days=horizon_days,
+            worst_days=worst_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result | {
+        "list_id": list_id,
+        "list_name": entry.get("name"),
+        "priced_through": summary.get("generated_at"),
+        # Held, sized, and with no price to value it by. Named rather than
+        # dropped: an unvalued position is not an absent one.
+        "unpriced_symbols": sorted(unpriced),
+    }
+
+
 def _companies_path(settings: Settings) -> Path:
     return settings.corpus_local_dir / "edinet_codes" / "companies.json"
 

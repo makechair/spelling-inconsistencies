@@ -114,6 +114,11 @@ def _find_list(store: dict[str, Any], list_id: str) -> dict[str, Any]:
     raise WatchlistError(f"no such list: {list_id}")
 
 
+def get_list(store: dict[str, Any], list_id: str) -> dict[str, Any]:
+    """The list, or a WatchlistError naming what was asked for."""
+    return _find_list(store, list_id)
+
+
 def _next_id(store: dict[str, Any]) -> str:
     # Sequential rather than random: the id shows up in URLs the user may
     # bookmark, and a readable one is easier to reason about in the file.
@@ -164,6 +169,38 @@ def remove_symbol(store: dict[str, Any], list_id: str, symbol: str) -> dict[str,
     entry = _find_list(store, list_id)
     cleaned = normalize_symbol(symbol)
     entry["symbols"] = [held for held in entry["symbols"] if held != cleaned]
+    # A quantity for a symbol the list no longer holds would keep sizing a
+    # position nothing shows.
+    entry.get("quantities", {}).pop(cleaned, None)
+    return entry
+
+
+def set_quantity(
+    store: dict[str, Any], list_id: str, symbol: str, quantity: float | None
+) -> dict[str, Any]:
+    """How many shares of this symbol the list represents.
+
+    Optional per symbol. A list is a grouping first and a portfolio second:
+    the table works with no quantities at all, and the risk figures simply
+    cover whichever symbols have one. Setting None clears it, which is not the
+    same as zero -- zero is a position that was closed, None is one that was
+    never sized.
+    """
+    entry = _find_list(store, list_id)
+    cleaned = normalize_symbol(symbol)
+    if cleaned not in entry["symbols"]:
+        raise WatchlistError(f"{cleaned} is not in this list")
+    quantities = entry.setdefault("quantities", {})
+    if quantity is None:
+        quantities.pop(cleaned, None)
+        return entry
+    try:
+        amount = float(quantity)
+    except (TypeError, ValueError) as exc:
+        raise WatchlistError(f"not a quantity: {quantity!r}") from exc
+    if amount < 0 or amount != amount or amount in (float("inf"), float("-inf")):
+        raise WatchlistError("a quantity cannot be negative or infinite")
+    quantities[cleaned] = amount
     return entry
 
 
@@ -214,6 +251,7 @@ def unregister_company(store: dict[str, Any], code: str) -> None:
         raise WatchlistError(f"no such company: {code}")
     for entry in store["lists"]:
         entry["symbols"] = [held for held in entry["symbols"] if held != cleaned]
+        entry.get("quantities", {}).pop(cleaned, None)
 
 
 def companies(store: dict[str, Any]) -> list[Company]:

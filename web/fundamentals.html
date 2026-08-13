@@ -116,6 +116,50 @@
       </table>
     </div>
 
+    <section class="risk-panel" id="risk-panel" hidden>
+      <h2>保有リスク（VaR）</h2>
+      <div class="fundamentals-controls">
+        <label>保有期間
+          <select id="risk-horizon">
+            <option value="1">1営業日</option>
+            <option value="5">5営業日</option>
+            <option value="10">10営業日</option>
+            <option value="20">20営業日</option>
+          </select>
+        </label>
+        <label>信頼水準
+          <select id="risk-confidence">
+            <option value="0.95">95%</option>
+            <option value="0.99">99%</option>
+          </select>
+        </label>
+      </div>
+      <p class="page-note" id="risk-summary"></p>
+      <div class="table-scroll">
+        <table class="fundamentals-table" id="risk-table">
+          <thead>
+            <tr>
+              <th>銘柄</th><th class="numeric">評価額</th><th class="numeric">構成比</th>
+              <th class="numeric">年率ボラ</th><th class="numeric">単独VaR</th>
+              <th class="numeric">実際の最悪日</th><th class="numeric">その日の損失額</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="page-note" id="risk-missing" hidden></p>
+      <p class="page-note">
+        <strong>これは分散共分散法で、リターンが正規分布に従うと仮定しています。</strong>
+        実際には従いません。半導体銘柄は、正規分布が許すよりずっと高い頻度で8%下げます。
+        したがってこの数字は<strong>悪い日の下限であって上限ではありません</strong>。
+        右端に各銘柄が実際に記録した最悪日を並べているのは、その補正のためです。
+        たいてい95%のVaRより大きくなります。
+        相関が測れていない組は<strong>連動する（相関1）として扱います</strong>。
+        独立と仮定すると、コーパスが一番よく知らない組のリスクを黙って小さく見せることになり、
+        間違える方向として悪いためです。銘柄は同じ業界サイクルの中にあります。
+      </p>
+    </section>
+
     <p class="page-note" id="pending-note" hidden></p>
     <p class="page-note" id="screen-note" hidden></p>
 

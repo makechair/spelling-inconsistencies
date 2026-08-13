@@ -1123,3 +1123,17 @@ body {
   color: inherit;
   font: inherit;
 }
+
+.risk-panel { margin: 1.5rem 0; }
+.risk-panel h2 { font-size: 1.05rem; margin: 0 0 0.25rem; }
+.holding-input {
+  width: 4.5rem;
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid var(--panel-2);
+  border-radius: 3px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+.holding-input:disabled { opacity: 0.35; }
