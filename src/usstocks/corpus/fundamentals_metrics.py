@@ -68,6 +68,64 @@ def discover_inputs(local_root: Path) -> tuple[list[Path], list[Path]]:
     return facts, sectors
 
 
+# How far back the range sits behind today, in sessions. The names are the
+# ones the page shows; the counts are trading days, not calendar days, because
+# that is what the corpus stores.
+RANGE_LOOKBACKS = {"3m": 63, "1y": 252, "3y": 756, "5y": 1260}
+
+
+def _range_aggregates() -> str:
+    """The per-window extremes and rank, one SQL fragment per lookback.
+
+    Generated rather than written out four times so a horizon cannot drift
+    away from the others -- the bug that would follow is a column that says
+    "5y" and means something else.
+    """
+    return ",\n".join(
+        f"""
+            max(history.close) FILTER (WHERE history.position > latest.sessions - {count})
+                AS high_{label},
+            min(history.close) FILTER (WHERE history.position > latest.sessions - {count})
+                AS low_{label},
+            count(*) FILTER (
+                WHERE history.position > latest.sessions - {count}
+                  AND history.close < latest.close
+            ) AS below_{label}"""
+        for label, count in RANGE_LOOKBACKS.items()
+    )
+
+
+def _range_columns() -> str:
+    """Where today's close sits in each window, two ways.
+
+    ``range_position`` is the stochastic %K over a long lookback: nought at the
+    window's low, a hundred at its high. It is defined by exactly two days, so
+    one crash prints a low that flatters every day after it.
+
+    ``price_percentile`` is the share of the other sessions in the window that
+    closed lower, which uses the whole distribution instead of its two ends. A
+    stock can sit at 60 of the range and above only 20% of its own history --
+    that gap is the point of carrying both.
+
+    Both are withheld unless the window is full. A five-year range measured
+    over two years is a two-year range wearing the wrong label, and it hides a
+    high rather than showing one: the further back the true extreme sits, the
+    more a short window understates how far the price has come.
+    """
+    return ",\n".join(
+        f"""
+            CASE WHEN sessions >= {count} AND high_{label} > low_{label}
+                 THEN 100 * (close - low_{label}) / (high_{label} - low_{label})
+            END AS range_position_{label},
+            CASE WHEN sessions >= {count}
+                 THEN 100.0 * below_{label} / {count - 1}
+            END AS price_percentile_{label},
+            CASE WHEN sessions >= {count} THEN high_{label} END AS range_high_{label},
+            CASE WHEN sessions >= {count} THEN low_{label} END AS range_low_{label}"""
+        for label, count in RANGE_LOOKBACKS.items()
+    )
+
+
 def price_state(local_root: Path) -> dict[str, Any]:
     """The latest close and the technical state that goes with it.
 
@@ -89,7 +147,7 @@ def price_state(local_root: Path) -> dict[str, Any]:
         connection.execute("SET threads = 1")
         connection.execute("SET memory_limit = '256MB'")
         rows = connection.execute(
-            """
+            f"""
             WITH base AS (
                 SELECT
                     symbol,
@@ -133,12 +191,28 @@ def price_state(local_root: Path) -> dict[str, Any]:
                         ROWS BETWEEN 60 PRECEDING AND 1 PRECEDING
                     ),
                     fortnight AS (PARTITION BY symbol ORDER BY date ROWS 13 PRECEDING)
+            ),
+            latest AS (
+                SELECT symbol, close, sessions FROM base WHERE position = sessions
+            ),
+            -- The ranges are aggregated against the last row rather than
+            -- carried in a window frame: only the last row is ever returned,
+            -- and a 1260-session frame evaluated on every row would compute
+            -- five years of history once per day of it.
+            ranges AS (
+                SELECT
+                    history.symbol,
+                    {_range_aggregates()}
+                FROM base AS history
+                JOIN latest USING (symbol)
+                GROUP BY history.symbol
             )
             SELECT
                 symbol,
                 date,
                 close,
                 sessions,
+                {_range_columns()},
                 CASE WHEN sessions >= 50 AND sma_50 > 0
                      THEN close / sma_50 - 1 END AS sma_50_gap,
                 CASE WHEN sessions >= 200 AND sma_200 > 0
@@ -160,6 +234,7 @@ def price_state(local_root: Path) -> dict[str, Any]:
                 CASE WHEN close_3m > 0 THEN close / close_3m - 1 END AS return_3m,
                 CASE WHEN close_12m > 0 THEN close / close_12m - 1 END AS return_12m
             FROM indicators
+            JOIN ranges USING (symbol)
             WHERE position = sessions
             """,
             {"paths": [str(path) for path in paths]},
@@ -359,6 +434,12 @@ def valuation(row: dict[str, Any], price: dict[str, Any] | None) -> dict[str, An
     }
 
 
+RANGE_FIELDS = tuple(
+    f"{name}_{label}"
+    for label in RANGE_LOOKBACKS
+    for name in ("range_position", "price_percentile", "range_high", "range_low")
+)
+
 TECHNICAL_FIELDS = (
     "sma_50_gap",
     "sma_200_gap",
@@ -369,6 +450,7 @@ TECHNICAL_FIELDS = (
     "return_1m",
     "return_3m",
     "return_12m",
+    *RANGE_FIELDS,
 )
 
 

@@ -33,6 +33,14 @@
       <label>業種
         <select id="subsector-filter"><option value="">すべて</option></select>
       </label>
+      <label>レンジ期間
+        <select id="range-window">
+          <option value="3m">3ヶ月</option>
+          <option value="1y" selected>1年</option>
+          <option value="3y">3年</option>
+          <option value="5y">5年</option>
+        </select>
+      </label>
       <label class="toggle">
         <input type="checkbox" id="hide-incomplete">
         指標が揃う銘柄のみ
@@ -108,6 +116,7 @@
             <th data-sort="sma_50_gap" title="株価÷50日移動平均−1" class="sortable numeric">50日乖離</th>
             <th data-sort="sma_200_gap" title="株価÷200日移動平均−1。日足が200本未満の銘柄は空欄" class="sortable numeric">200日乖離</th>
             <th data-sort="drawdown_from_52w_high" title="52週高値からの下落率。日足が252本未満の銘柄は空欄" class="sortable numeric">52週高値から</th>
+            <th id="range-header" data-sort="range_position_1y" title="ストキャスティクス%K。期間内の最安値を0%、最高値を100%として現在の終値がどこにあるか。下段は同じ期間の終値を並べたときの順位（上位◯%）。セルにカーソルを当てるとレンジの実額が出る。期間分の日足が揃わない銘柄は空欄" class="sortable numeric">レンジ内位置(1年)</th>
             <th data-sort="return_3m" title="63営業日前からのリターン" class="sortable numeric">3ヶ月</th>
             <th data-sort="improving" title="改善した指標の数／測定できた指標の数。増収率・粗利率・営業利益率・在庫日数の4つを等重みで数えただけで、スコアではない" class="sortable numeric" id="improving-header">改善数</th>
           </tr>
@@ -172,6 +181,19 @@
       重み付けしていない。空欄は提出者がその項目を報告していないことを意味し、
       0ではない。通貨は換算していないので、売上の絶対額は同じ通貨どうしでのみ
       比較できる。
+    </p>
+    <p class="page-note">
+      <strong>レンジ内位置</strong>は<strong>ストキャスティクス%K</strong>を長い期間で取ったもので、
+      指定期間の終値の最安値を0%、最高値を100%として、現在の終値がその何%の位置にあるかを示す
+      （<strong>ウィリアムズ%R</strong>は同じものを0から−100で表したもので、100から引けば一致する）。
+      下段の<strong>上位◯%</strong>は同じ期間の終値を並べたときの順位で、
+      現在の株価より安く終えた日が期間の何%あったかを裏返した数字。
+      <strong>この2つは意図的に並べている</strong>：レンジ内位置は最高値と最安値の
+      <strong>たった2日</strong>で決まるため、暴落が1日あるとその安値が分母を広げ、
+      以降のすべての日が高い位置に見える。順位は期間中のすべての日を使うので、その歪みを受けない。
+      2つが大きく食い違う銘柄は、レンジの端が外れ値でできている。
+      期間分の日足が揃っていない銘柄は空欄にする（3年分に満たない履歴で測った「3年レンジ」は
+      短いレンジに別の名前を付けたもので、<strong>高値圏を安く見せる</strong>方向に間違える）。
     </p>
     <p class="page-note">
       <strong>株価指標が空欄の銘柄について</strong>：
