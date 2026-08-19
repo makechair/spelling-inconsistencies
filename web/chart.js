@@ -11,7 +11,7 @@
  */
 
 import { formatDate, formatDateWithYear, formatTime, onChange } from './timezone.js';
-import { sma } from './indicators.js';
+import { rangeAt, rangeSeries, rangeWindowsFor, sma } from './indicators.js';
 import { save, view } from './viewstate.js';
 
 function row(label, value) {
@@ -45,6 +45,9 @@ export class PriceChart {
   constructor(container, { persistView = true, showYear = false } = {}) {
     this.container = container;
     this.persistView = persistView;
+    // A grid pane is a quarter of the width an expanded one has. The legend
+    // wraps, so three more items there would push it down over the candles.
+    this.expanded = persistView;
     this.showYear = showYear;
     this.chart = LightweightCharts.createChart(container, this.#options());
     this.candles = this.chart.addCandlestickSeries({
@@ -102,6 +105,10 @@ export class PriceChart {
       priceLineVisible: false,
       lastValueVisible: false,
     });
+    // Range readouts are derived per pane and drawn nowhere -- the legend
+    // carries them. Each entry is { window, points } where points is keyed by
+    // bar time, so the crosshair reads them the way it reads a series.
+    this.ranges = [];
     this.periodWindow = null;
     this.periodSeconds = null;
     this.oldestLoadedTime = null;
@@ -159,6 +166,8 @@ export class PriceChart {
    */
   setExpanded(expanded) {
     this.persistView = expanded;
+    this.expanded = expanded;
+    this.#renderLegend(null);
     if (this.periodWindow) {
       this.#applyPeriodWindow();
       return;
@@ -266,6 +275,27 @@ export class PriceChart {
           return item;
         })
       : [];
+    // Where this bar's close sits in the range behind it, one item per horizon
+    // the pane can answer. Nothing is fetched and nothing is stored: the bars
+    // already on screen are the whole input.
+    // Compact panes show the longest horizon only; the whole ladder is worth
+    // the width once a pane is expanded.
+    const shownRanges = this.expanded ? this.ranges : this.ranges.slice(0, 1);
+    const rangeRows = shownRanges.map(({ window, points }) => {
+      const point = time == null ? null : points.get(time);
+      const item = row(
+        `レンジ${window.label}`,
+        point ? `${point.value.toFixed(1)}%` : '—',
+      );
+      item.className += ' legend-range';
+      item.title = point
+        ? `過去${window.label}の高安 ${price(point.low)} 〜 ${price(point.high)}` +
+          (point.percentile == null
+            ? ''
+            : `\nこの期間の足の ${point.percentile.toFixed(1)}% より高い`)
+        : `過去${window.label}分の足がまだ揃っていない`;
+      return item;
+    });
     this.legend.replaceChildren(
       row('始', price(candle.open)),
       row('高', price(candle.high)),
@@ -273,6 +303,7 @@ export class PriceChart {
       row('終', price(candle.close)),
       row('出来高', volume?.value == null ? '—' : volume.value.toLocaleString()),
       ...maRows,
+      ...rangeRows,
       row('', time ? `${formatDate(time)} ${formatTime(time)}` : ''),
     );
   }
@@ -319,6 +350,13 @@ export class PriceChart {
     for (const ma of this.maSeries) {
       ma.series.setData(sma(candles, ma.period));
     }
+    // Recomputed from the bars in hand rather than fetched, and recomputed
+    // here rather than per crosshair move: scrubbing must not rescan the pane
+    // once per pixel.
+    this.ranges = rangeWindowsFor(candles).map((window) => ({
+      window,
+      points: rangeSeries(candles, window.seconds),
+    }));
     this.lastCandle = candles.length ? candles[candles.length - 1] : null;
     this.lastVolume = volumes.length ? volumes[volumes.length - 1] : null;
     this.#renderLegend(null);
@@ -415,6 +453,13 @@ export class PriceChart {
           });
         }
       }
+      // Only the newest bar moved, so only its point is recomputed. Rebuilding
+      // every point on each tick would rescan the pane once a second.
+      const newest = this.candleData.length - 1;
+      for (const range of this.ranges) {
+        const point = rangeAt(this.candleData, newest, range.window.seconds);
+        if (point) range.points.set(point.time, point);
+      }
     }
     this.#renderLegend(null);
     this.lastTime = bar.time;
@@ -425,6 +470,7 @@ export class PriceChart {
     this.volume.setData([]);
     this.candleData = [];
     for (const ma of this.maSeries) ma.series.setData([]);
+    this.ranges = [];
     this.lastCandle = null;
     this.lastVolume = null;
     this.legend.textContent = '';

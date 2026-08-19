@@ -321,6 +321,12 @@ body {
 .chart-legend .legend-key { margin-right: 3px; opacity: .75; }
 .chart-legend .legend-value { color: var(--text, inherit); font-variant-numeric: tabular-nums; }
 
+/* The range readouts are a level, not a price, and they are not plotted. Held
+   apart from the OHLC figures and the coloured averages so the eye does not
+   read them off the same scale as the numbers beside them. */
+.chart-legend .legend-range { color: var(--muted); }
+.chart-legend .legend-range .legend-value { color: inherit; }
+
 .chart-note { color: var(--muted); font-size: 11px; margin: 6px 2px 0; min-height: 1em; }
 
 /* ---------------------------------------------------------------- footer */

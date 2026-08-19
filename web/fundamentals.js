@@ -46,13 +46,6 @@ let activeList = ALL_LISTS;
 let editing = false;
 let sortKey = "revenue";
 let sortDescending = true;
-// Which lookback the range column is measured over. One column that changes
-// horizon rather than four columns, because the question is "where is it in
-// its range" and the horizon is the argument, not a different question.
-let rangeWindow = "1y";
-
-const RANGE_WINDOWS = { "3m": "3ヶ月", "1y": "1年", "3y": "3年", "5y": "5年" };
-const rangeField = (name) => `${name}_${rangeWindow}`;
 
 function money(value, currency) {
   if (value == null) return "";
@@ -95,37 +88,6 @@ function cell(main, change, key) {
 
 function percent(value) {
   return value == null ? "" : PERCENT.format(value);
-}
-
-// The range cell. The position is the headline and the percentile sits under
-// it, uncoloured -- neither is an improvement or a deterioration, so the
-// green-and-red the delta rows use would be reading a direction into a level.
-function rangeCell(row) {
-  const td = document.createElement("td");
-  td.className = "numeric";
-  const position = row[rangeField("range_position")];
-  const primary = document.createElement("div");
-  primary.textContent = position == null ? "" : `${MULTIPLE.format(position)}%`;
-  td.append(primary);
-  const rank = row[rangeField("price_percentile")];
-  if (rank != null) {
-    const secondary = document.createElement("div");
-    secondary.className = "fundamentals-delta";
-    secondary.textContent = `上位${MULTIPLE.format(100 - rank)}%`;
-    td.append(secondary);
-  }
-  const low = row[rangeField("range_low")];
-  const high = row[rangeField("range_high")];
-  if (low != null && high != null) {
-    const span = `${MULTIPLE.format(low)} 〜 ${MULTIPLE.format(high)}`;
-    td.title =
-      `過去${RANGE_WINDOWS[rangeWindow]}の終値レンジ ${span}` +
-      (row.price == null ? "" : `／現在 ${MULTIPLE.format(row.price)}`) +
-      (rank == null ? "" : `\nこの期間の${MULTIPLE.format(rank)}%の日より高い`);
-  } else if (position == null) {
-    td.title = `過去${RANGE_WINDOWS[rangeWindow]}分の日足が揃っていない`;
-  }
-  return td;
 }
 
 const MULTIPLE = new Intl.NumberFormat("ja-JP", {
@@ -175,13 +137,6 @@ function inList(row) {
 // The screen. Each row is a field, a direction and the unit the value is
 // entered in -- percentages are typed as percentages and stored as fractions,
 // because nobody screens for "0.15".
-// Screening on the range uses whichever horizon the table is showing, so the
-// two never disagree about what "1年" meant. Rebuilt when the horizon changes.
-const rangeScreenFields = () => [
-  [rangeField("range_position"), `レンジ内位置(${RANGE_WINDOWS[rangeWindow]})`, "raw", ["min", "max"]],
-  [rangeField("price_percentile"), `順位(${RANGE_WINDOWS[rangeWindow]})`, "raw", ["min", "max"]],
-];
-
 const SCREEN_FIELDS = [
   ["revenue_yoy", "増収率", "percent", ["min", "max"]],
   ["gross_margin", "粗利率", "percent", ["min", "max"]],
@@ -198,8 +153,6 @@ const SCREEN_FIELDS = [
   ["drawdown_from_52w_high", "52週高値から", "percent", ["min", "max"]],
   ["return_3m", "3ヶ月リターン", "percent", ["min", "max"]],
 ];
-
-const screenFields = () => [...SCREEN_FIELDS, ...rangeScreenFields()];
 
 const screen = new Map();
 
@@ -348,7 +301,6 @@ function render() {
     tr.append(cell(percent(row.sma_50_gap)));
     tr.append(cell(percent(row.sma_200_gap)));
     tr.append(cell(percent(row.drawdown_from_52w_high)));
-    tr.append(rangeCell(row));
     tr.append(cell(percent(row.return_3m)));
     tr.append(
       cell(row.improving_measured ? `${row.improving}/${row.improving_measured}` : ""),
@@ -374,7 +326,7 @@ function render() {
 function buildScreen() {
   const grid = document.getElementById("screen-grid");
   grid.replaceChildren();
-  for (const [field, label, unit, bounds] of screenFields()) {
+  for (const [field, label, unit, bounds] of SCREEN_FIELDS) {
     const wrap = document.createElement("div");
     wrap.className = "screen-field";
     const name = document.createElement("span");
@@ -387,11 +339,6 @@ function buildScreen() {
       input.placeholder = bound === "min" ? "以上" : "以下";
       input.dataset.key = `${field}:${bound}`;
       input.dataset.unit = unit;
-      // Redrawn when the range horizon changes, so a condition already typed
-      // has to survive the rebuild rather than disappear from a grid that
-      // still filters by it.
-      const held = screen.get(input.dataset.key);
-      if (held !== undefined) input.value = unit === "percent" ? held * 100 : held;
       input.addEventListener("input", () => {
         const raw = Number.parseFloat(input.value);
         const value = unit === "percent" ? raw / 100 : raw;
@@ -403,26 +350,11 @@ function buildScreen() {
     }
     grid.append(wrap);
   }
-}
-
-// Moving the horizon moves the conditions with it: "in the bottom fifth of its
-// range" is the same question over three years as over one. Leaving them on
-// the old field would keep filtering by a column the table no longer shows.
-function syncRangeHeader() {
-  const header = document.getElementById("range-header");
-  header.dataset.sort = rangeField("range_position");
-  header.textContent = `レンジ内位置(${RANGE_WINDOWS[rangeWindow]})`;
-}
-
-function moveRangeConditions(previous) {
-  for (const name of ["range_position", "price_percentile"]) {
-    for (const bound of ["min", "max"]) {
-      const from = `${name}_${previous}:${bound}`;
-      if (!screen.has(from)) continue;
-      screen.set(`${name}_${rangeWindow}:${bound}`, screen.get(from));
-      screen.delete(from);
-    }
-  }
+  document.getElementById("screen-reset").addEventListener("click", () => {
+    screen.clear();
+    for (const input of grid.querySelectorAll("input")) input.value = "";
+    render();
+  });
 }
 
 // A symbol can be in a list before anything has been fetched for it. Saying
@@ -1097,23 +1029,6 @@ async function load() {
   fillSubsectors();
   wireCompanySearch();
   buildScreen();
-  document.getElementById("screen-reset").addEventListener("click", () => {
-    screen.clear();
-    for (const input of document.querySelectorAll("#screen-grid input")) input.value = "";
-    render();
-  });
-  syncRangeHeader();
-  document.getElementById("range-window").addEventListener("change", (event) => {
-    const previous = rangeWindow;
-    rangeWindow = event.target.value;
-    moveRangeConditions(previous);
-    // The header carries the sort key, so it has to follow the horizon or a
-    // click would sort by the window that is no longer displayed.
-    if (sortKey === `range_position_${previous}`) sortKey = rangeField("range_position");
-    syncRangeHeader();
-    buildScreen();
-    render();
-  });
   for (const id of ["risk-horizon", "risk-confidence"]) {
     document.getElementById(id).addEventListener("change", loadRisk);
   }

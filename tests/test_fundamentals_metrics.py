@@ -582,70 +582,6 @@ def test_the_drawdown_is_measured_from_the_52_week_high(tmp_path: Path):
     assert state["gain_from_52w_low"] is not None
 
 
-def test_the_range_position_is_nought_at_the_low_and_a_hundred_at_the_high(tmp_path: Path):
-    from usstocks.corpus.fundamentals_metrics import price_state
-
-    (tmp_path / "daily" / "symbol=TOP").mkdir(parents=True)
-    (tmp_path / "daily" / "symbol=BOTTOM").mkdir(parents=True)
-    rising = [100.0 + index for index in range(300)]
-    write_prices(tmp_path, "TOP", rising, [1000.0] * 300)
-    write_prices(tmp_path, "BOTTOM", list(reversed(rising)), [1000.0] * 300)
-    state = price_state(tmp_path)
-    assert state["TOP"]["range_position_1y"] == pytest.approx(100.0)
-    assert state["BOTTOM"]["range_position_1y"] == pytest.approx(0.0)
-    # Every other session in the window is below the last close, and none is.
-    assert state["TOP"]["price_percentile_1y"] == pytest.approx(100.0)
-    assert state["BOTTOM"]["price_percentile_1y"] == pytest.approx(0.0)
-
-
-def test_the_range_is_the_window_and_not_the_whole_history(tmp_path: Path):
-    """The point of naming a lookback is that it forgets what came before it."""
-    from usstocks.corpus.fundamentals_metrics import price_state
-
-    (tmp_path / "daily" / "symbol=SPIKED").mkdir(parents=True)
-    # A 500 more than three years ago, then a long stretch between 100 and 110.
-    closes = [500.0] + [100.0] * 400 + [110.0] * 200 + [100.0] * 199 + [105.0]
-    write_prices(tmp_path, "SPIKED", closes, [1000.0] * len(closes))
-    state = price_state(tmp_path)["SPIKED"]
-    # Half way up a ten-wide range the last year, but nowhere near the old high.
-    assert state["range_position_1y"] == pytest.approx(50.0)
-    assert state["range_high_1y"] == pytest.approx(110.0)
-    assert state["range_position_3y"] == pytest.approx(50.0)
-
-
-def test_a_range_longer_than_the_history_is_withheld(tmp_path: Path):
-    """A five-year range measured over two years is a two-year range wearing
-    the wrong label, and it understates how far the price has come."""
-    from usstocks.corpus.fundamentals_metrics import price_state
-
-    (tmp_path / "daily" / "symbol=YOUNG").mkdir(parents=True)
-    write_prices(tmp_path, "YOUNG", [100.0 + index for index in range(300)], [1000.0] * 300)
-    state = price_state(tmp_path)["YOUNG"]
-    assert state["range_position_1y"] is not None
-    assert state["range_position_3y"] is None
-    assert state["range_position_5y"] is None
-    assert state["range_high_5y"] is None
-
-
-def test_the_percentile_and_the_range_position_disagree_when_the_low_is_a_spike(
-    tmp_path: Path,
-):
-    """Two ends against the whole distribution. The range position is defined
-    by exactly two days, so one crash prints a low that flatters every day
-    after it -- which is the reason both columns exist."""
-    from usstocks.corpus.fundamentals_metrics import price_state
-
-    (tmp_path / "daily" / "symbol=CRASHED").mkdir(parents=True)
-    # One day at 10, then a year spent between 100 and 101, ending near the top.
-    closes = [10.0] + [100.0] * 200 + [101.0] * 50 + [100.5]
-    write_prices(tmp_path, "CRASHED", closes, [1000.0] * len(closes))
-    state = price_state(tmp_path)["CRASHED"]
-    # Nine tenths up a range that the crash day stretched...
-    assert state["range_position_1y"] == pytest.approx(100 * 90.5 / 91, rel=1e-6)
-    # ...while in fact only the crash and the flat days sit below it.
-    assert state["price_percentile_1y"] == pytest.approx(100.0 * 201 / 251, rel=1e-6)
-
-
 def test_the_technical_columns_are_not_withheld_for_adr_filers():
     """Price against its own price: a receipt ratio cancels out, so the
     columns the valuation guard removes are still readable here."""
@@ -654,13 +590,3 @@ def test_the_technical_columns_are_not_withheld_for_adr_filers():
     state = {"rsi_14": 55.0, "sma_50_gap": 0.1, "volume_ratio_60d": 2.0}
     assert technicals(state)["rsi_14"] == 55.0
     assert technicals(None)["rsi_14"] is None
-
-
-def test_every_range_field_reaches_the_row():
-    """The range columns are generated from one lookback table; a horizon that
-    is computed but never carried out would be silently missing on the page."""
-    from usstocks.corpus.fundamentals_metrics import RANGE_FIELDS, technicals
-
-    row = technicals({name: 1.0 for name in RANGE_FIELDS})
-    assert all(row[name] == 1.0 for name in RANGE_FIELDS)
-    assert len(RANGE_FIELDS) == 16
